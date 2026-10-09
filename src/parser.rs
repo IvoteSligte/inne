@@ -68,7 +68,7 @@ pub fn parser<'tokens, 'src: 'tokens, I>()
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {
-    let ident = select! { Token::Ident(ident) => ident}.map_with(|ident, e| (ident, e.span()));
+    let ident = select! { Token::Ident(ident) => ident }.map_with(|ident, e| (ident, e.span()));
     let r#type = select! {
         Token::Ident(ident) => match ident {
             "int" => Type::Int,

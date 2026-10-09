@@ -30,6 +30,32 @@ pub enum Token<'a> {
     Dollar,
 }
 
+impl<'a> std::fmt::Display for Token<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Func => f.write_str("func"),
+            Var => f.write_str("var"),
+            Ident(ident) => f.write_str(ident),
+            Int(int) => f.write_str(int),
+            String(string) => write!(f, "\"{string}\""),
+            Op(op) => f.write_str(op),
+            LBrace => f.write_str("("),
+            RBrace => f.write_str("]"),
+            LParen => f.write_str("("),
+            RParen => f.write_str(")"),
+            LBracket => f.write_str("{"),
+            RBracket => f.write_str("}"),
+            Dot => f.write_str("."),
+            Comma => f.write_str(","),
+            Arrow => f.write_str("->"),
+            Semi => f.write_str(";"),
+            At => f.write_str("@"),
+            Hashtag => f.write_str("#"),
+            Dollar => f.write_str("$"),
+        }
+    }
+}
+
 use Token::*;
 
 pub fn lexer<'a>()
