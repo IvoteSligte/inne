@@ -4,15 +4,17 @@ pub use crate::parser::{AssignOp, BinaryOp, UnaryOp};
 
 pub type Ast<'a> = Vec<Stmt<'a>>;
 
+#[derive(Clone)]
 pub enum Stmt<'a> {
     Func(Func<'a>),
     VarDecl(VarDecl<'a>),
-    Expr(Expr<'a>),
+    Expr(Spanned<Expr<'a>>),
     Assign(Assign<'a>),
 }
 
 pub type Block<'a> = Spanned<Vec<Spanned<Stmt<'a>>>>;
 
+#[derive(Clone)]
 pub struct Func<'a> {
     pub name: Spanned<&'a str>,
     pub params: Vec<Param<'a>>,
@@ -20,22 +22,40 @@ pub struct Func<'a> {
     pub body: Block<'a>,
 }
 
+#[derive(Clone)]
 pub struct Param<'a> {
     pub name: Spanned<&'a str>,
     pub r#type: Spanned<Type<'a>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Type<'a> {
+    Nothing,
     Int,
+    Bool,
     String,
     Named(&'a str),
 }
 
+impl std::fmt::Display for Type<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Type::Nothing => "nothing",
+            Type::Int => "int",
+            Type::Bool => "bool",
+            Type::String => "string",
+            Type::Named(name) => name,
+        })
+    }
+}
+
+#[derive(Clone)]
 pub struct VarDecl<'a> {
     pub name: Spanned<&'a str>,
     pub value: Spanned<Expr<'a>>,
 }
 
+#[derive(Clone)]
 pub enum Expr<'a> {
     Binary(Binary<'a>),
     Unary(Unary<'a>),
@@ -45,24 +65,28 @@ pub enum Expr<'a> {
     String(&'a str),
 }
 
+#[derive(Clone)]
 pub struct Binary<'a> {
-    pub op: BinaryOp,
+    pub op: Spanned<BinaryOp>,
     pub left: Box<Spanned<Expr<'a>>>,
     pub right: Box<Spanned<Expr<'a>>>,
 }
 
+#[derive(Clone)]
 pub struct Unary<'a> {
-    pub op: UnaryOp,
+    pub op: Spanned<UnaryOp>,
     pub expr: Box<Spanned<Expr<'a>>>,
 }
 
+#[derive(Clone)]
 pub struct Call<'a> {
-    pub func: Box<Spanned<Expr<'a>>>,
+    pub name: Spanned<&'a str>,
     pub args: Vec<Spanned<Expr<'a>>>,
 }
 
+#[derive(Clone)]
 pub struct Assign<'a> {
-    pub op: AssignOp,
+    pub op: Spanned<AssignOp>,
     pub target: Spanned<Expr<'a>>,
     pub value: Spanned<Expr<'a>>,
 }
@@ -75,6 +99,7 @@ fn map_spanned_type<'a>(r#type: &Spanned<parser::Type<'a>>) -> Spanned<Type<'a>>
     (
         match r#type.0 {
             parser::Type::Int => Type::Int,
+            parser::Type::Bool => Type::Bool,            
             parser::Type::String => Type::String,
             parser::Type::Named(name) => Type::Named(name),
         },
@@ -93,8 +118,8 @@ fn map_expr<'a>(expr: &parser::Expr<'a>) -> Expr<'a> {
             op: *op,
             expr: Box::new(map_spanned_expr(expr)),
         }),
-        parser::Expr::Call(func, (args, _)) => Expr::Call(Call {
-            func: Box::new(map_spanned_expr(func)),
+        parser::Expr::Call(name, (args, _)) => Expr::Call(Call {
+            name: *name,
             args: map_to_vec(args, map_spanned_expr),
         }),
         parser::Expr::Var(name) => Expr::Var(name),
@@ -122,7 +147,7 @@ fn map_stmt<'a>(stmt: &parser::Stmt<'a>) -> Stmt<'a> {
             name: *name,
             value: map_spanned_expr(value),
         }),
-        parser::Stmt::Expr(expr) => Stmt::Expr(map_expr(expr)),
+        parser::Stmt::Expr(expr) => Stmt::Expr(map_spanned_expr(expr)),
         parser::Stmt::Assign(target, op, value) => Stmt::Assign(Assign {
             target: map_spanned_expr(target),
             op: *op,
