@@ -18,6 +18,7 @@ fn print_errors<T, E>(
     result: Result<T, Vec<Rich<'_, E>>>,
     filename: &'static str,
     source: &str,
+    stage: &'static str,
 ) -> Option<T>
 where
     E: std::fmt::Display,
@@ -27,25 +28,22 @@ where
         Err(errors) => errors,
     };
     for err in errors {
-        Report::build(
-            ReportKind::Error,
-            (filename.clone(), err.span().into_range()),
-        )
-        .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
-        .with_message(err.to_string())
-        .with_label(
-            Label::new((filename.clone(), err.span().into_range()))
-                .with_message(err.reason().to_string())
-                .with_color(Color::Red),
-        )
-        .with_labels(err.contexts().map(|(label, span)| {
-            Label::new((filename.clone(), span.into_range()))
-                .with_message(format!("while parsing this {label}"))
-                .with_color(Color::Yellow)
-        }))
-        .finish()
-        .print(sources([(filename.clone(), source.clone())]))
-        .unwrap()
+        Report::build(ReportKind::Error, (filename, err.span().into_range()))
+            .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
+            .with_message(format!("during {stage}, {}", err))
+            .with_label(
+                Label::new((filename, err.span().into_range()))
+                    .with_message(err.reason())
+                    .with_color(Color::Red),
+            )
+            .with_labels(err.contexts().map(|(label, span)| {
+                Label::new((filename, span.into_range()))
+                    .with_message(format!("while parsing this {label}"))
+                    .with_color(Color::Yellow)
+            }))
+            .finish()
+            .print(sources([(filename, source)]))
+            .unwrap()
     }
     None
 }
@@ -59,7 +57,12 @@ func hello_world() {
 }
 ";
     let filename = "filename.inne";
-    let Some(tokens) = print_errors(lexer().parse(source).into_result(), filename, source) else {
+    let Some(tokens) = print_errors(
+        lexer().parse(source).into_result(),
+        filename,
+        source,
+        "lexing",
+    ) else {
         return;
     };
     let Some(parse_tree) = print_errors(
@@ -72,6 +75,7 @@ func hello_world() {
             .into_result(),
         filename,
         source,
+        "parsing",
     ) else {
         return;
     };

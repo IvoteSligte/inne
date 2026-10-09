@@ -6,6 +6,7 @@ pub type Ast<'a> = Vec<Stmt<'a>>;
 
 pub enum Stmt<'a> {
     Func(Func<'a>),
+    VarDecl(VarDecl<'a>),
     Expr(Expr<'a>),
     Assign(Assign<'a>),
 }
@@ -28,6 +29,11 @@ pub enum Type<'a> {
     Int,
     String,
     Named(&'a str),
+}
+
+pub struct VarDecl<'a> {
+    pub name: Spanned<&'a str>,
+    pub value: Spanned<Expr<'a>>,
 }
 
 pub enum Expr<'a> {
@@ -111,6 +117,10 @@ fn map_stmt<'a>(stmt: &parser::Stmt<'a>) -> Stmt<'a> {
             }),
             return_type: return_type.as_ref().map(map_spanned_type),
             body: map_block(body),
+        }),
+        parser::Stmt::VarDecl(name, value) => Stmt::VarDecl(VarDecl {
+            name: *name,
+            value: map_spanned_expr(value),
         }),
         parser::Stmt::Expr(expr) => Stmt::Expr(map_expr(expr)),
         parser::Stmt::Assign(target, op, value) => Stmt::Assign(Assign {

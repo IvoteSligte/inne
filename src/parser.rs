@@ -22,6 +22,7 @@ pub enum Stmt<'a> {
         Option<Spanned<Type<'a>>>,
         Block<'a>,
     ),
+    VarDecl(Spanned<&'a str>, Spanned<Expr<'a>>),
     Expr(Expr<'a>),
     Assign(Spanned<Expr<'a>>, AssignOp, Spanned<Expr<'a>>),
 }
@@ -164,6 +165,12 @@ where
                 .map_with(|unary, e| (unary, e.span()));
             choice((binary, unary, call, var, int, string))
         });
+        let var_decl = just(Token::Var)
+            .ignore_then(ident)
+            .then_ignore(just(Token::Op("=")))
+            .then(expr.clone())
+            .map(|(name, value)| Stmt::VarDecl(name, value))
+            .map_with(|var_decl, e| (var_decl, e.span()));
         let assign = expr
             .clone()
             .then(choice((
@@ -178,8 +185,9 @@ where
             .map_with(|assign, e| (assign, e.span()));
         choice((
             func,
-            expr.map(|(expr, span)| (Stmt::Expr(expr), span)),
+            var_decl,
             assign,
+            expr.map(|(expr, span)| (Stmt::Expr(expr), span)),
         ))
         .then_ignore(just(Token::Semi).or_not())
     });
