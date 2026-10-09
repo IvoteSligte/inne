@@ -1,9 +1,10 @@
 use chumsky::{input::ValueInput, prelude::*};
 
-pub mod ast;
 mod diagnosis;
 
 use crate::{Span, Spanned};
+
+pub type ParseTree<'a> = Vec<Spanned<Stmt<'a>>>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum AssignOp {
@@ -27,7 +28,7 @@ pub enum Stmt<'a> {
 
 pub type Block<'a> = Spanned<Vec<Spanned<Stmt<'a>>>>;
 
-pub struct Param<'a>(Spanned<&'a str>, Spanned<Type<'a>>);
+pub struct Param<'a>(pub Spanned<&'a str>, pub Spanned<Type<'a>>);
 
 pub enum Type<'a> {
     Int,
@@ -36,7 +37,7 @@ pub enum Type<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum BinaryOp {
+pub enum BinaryOp {
     Add,
     Sub,
     Mul,
@@ -46,7 +47,7 @@ enum BinaryOp {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum UnaryOp {
+pub enum UnaryOp {
     Neg,
     Not,
 }
@@ -63,8 +64,7 @@ pub enum Expr<'a> {
 use crate::Token;
 
 pub fn parser<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, Vec<Spanned<Stmt<'src>>>, extra::Err<Rich<'tokens, Token<'src>, Span>>>
-+ Clone
+-> impl Parser<'tokens, I, ParseTree<'src>, extra::Err<Rich<'tokens, Token<'src>, Span>>> + Clone
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {
