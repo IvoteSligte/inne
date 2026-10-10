@@ -4,7 +4,7 @@ mod diagnosis;
 
 use crate::{Span, Spanned};
 
-pub type ParseTree<'a> = Vec<Spanned<Stmt<'a>>>;
+pub type ParseTree<'a> = Vec<Stmt<'a>>;
 
 #[derive(Debug, Clone, Copy)]
 pub enum AssignOp {
@@ -27,7 +27,7 @@ pub enum Stmt<'a> {
     Assign(Spanned<Expr<'a>>, Spanned<AssignOp>, Spanned<Expr<'a>>),
 }
 
-pub type Block<'a> = Spanned<Vec<Spanned<Stmt<'a>>>>;
+pub type Block<'a> = Vec<Stmt<'a>>;
 
 pub struct Param<'a>(pub Spanned<&'a str>, pub Spanned<Type<'a>>);
 
@@ -93,8 +93,7 @@ where
         let block = stmt
             .repeated()
             .collect::<Vec<_>>()
-            .delimited_by(just(Token::LBrace), just(Token::RBrace))
-            .map_with(with_span);
+            .delimited_by(just(Token::LBrace), just(Token::RBrace));
         let func = just(Token::Func)
             .ignore_then(ident)
             .then(
@@ -108,8 +107,7 @@ where
             .then(block)
             .map(|(((name, params), return_type), body)| {
                 Stmt::Func(name, params, return_type, body)
-            })
-            .map_with(with_span);
+            });
 
         let var = select! { Token::Ident(ident) => Expr::Var(ident) }.map_with(with_span);
         let int = select! { Token::Int(int) => Expr::Int(int) }.map_with(with_span);
@@ -183,8 +181,7 @@ where
             .ignore_then(ident)
             .then_ignore(just(Token::Op("=")))
             .then(expr.clone())
-            .map(|(name, value)| Stmt::VarDecl(name, value))
-            .map_with(with_span);
+            .map(|(name, value)| Stmt::VarDecl(name, value));
         let assign = expr
             .clone()
             .then(
@@ -198,15 +195,9 @@ where
                 .map_with(with_span),
             )
             .then(expr.clone())
-            .map(|((target, op), value)| Stmt::Assign(target, op, value))
-            .map_with(with_span);
-        choice((
-            func,
-            var_decl,
-            assign,
-            expr.map(|(expr, span)| (Stmt::Expr((expr, span)), span)),
-        ))
-        .then_ignore(just(Token::Semi).or_not())
+            .map(|((target, op), value)| Stmt::Assign(target, op, value));
+        choice((func, var_decl, assign, expr.map(Stmt::Expr)))
+            .then_ignore(just(Token::Semi).or_not())
     });
     stmt.repeated().collect()
 }

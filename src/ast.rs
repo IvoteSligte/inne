@@ -12,7 +12,7 @@ pub enum Stmt<'a> {
     Assign(Assign<'a>),
 }
 
-pub type Block<'a> = Spanned<Vec<Spanned<Stmt<'a>>>>;
+pub type Block<'a> = Vec<Stmt<'a>>;
 
 #[derive(Clone)]
 pub struct Func<'a> {
@@ -95,11 +95,11 @@ fn map_to_vec<T, U>(slice: &[T], f: impl Fn(&T) -> U) -> Vec<U> {
     slice.iter().map(f).collect()
 }
 
-fn map_spanned_type<'a>(r#type: &Spanned<parser::Type<'a>>) -> Spanned<Type<'a>> {
+fn map_type<'a>(r#type: &Spanned<parser::Type<'a>>) -> Spanned<Type<'a>> {
     (
         match r#type.0 {
             parser::Type::Int => Type::Int,
-            parser::Type::Bool => Type::Bool,            
+            parser::Type::Bool => Type::Bool,
             parser::Type::String => Type::String,
             parser::Type::Named(name) => Type::Named(name),
         },
@@ -107,29 +107,28 @@ fn map_spanned_type<'a>(r#type: &Spanned<parser::Type<'a>>) -> Spanned<Type<'a>>
     )
 }
 
-fn map_expr<'a>(expr: &parser::Expr<'a>) -> Expr<'a> {
-    match expr {
-        parser::Expr::Binary(left, op, right) => Expr::Binary(Binary {
-            op: *op,
-            left: Box::new(map_spanned_expr(left)),
-            right: Box::new(map_spanned_expr(right)),
-        }),
-        parser::Expr::Unary(op, expr) => Expr::Unary(Unary {
-            op: *op,
-            expr: Box::new(map_spanned_expr(expr)),
-        }),
-        parser::Expr::Call(name, (args, _)) => Expr::Call(Call {
-            name: *name,
-            args: map_to_vec(args, map_spanned_expr),
-        }),
-        parser::Expr::Var(name) => Expr::Var(name),
-        parser::Expr::Int(int) => Expr::Int(int),
-        parser::Expr::String(string) => Expr::String(string),
-    }
-}
-
-fn map_spanned_expr<'a>((expr, span): &Spanned<parser::Expr<'a>>) -> Spanned<Expr<'a>> {
-    (map_expr(expr), *span)
+fn map_expr<'a>((expr, span): &Spanned<parser::Expr<'a>>) -> Spanned<Expr<'a>> {
+    (
+        match expr {
+            parser::Expr::Binary(left, op, right) => Expr::Binary(Binary {
+                op: *op,
+                left: Box::new(map_expr(left)),
+                right: Box::new(map_expr(right)),
+            }),
+            parser::Expr::Unary(op, expr) => Expr::Unary(Unary {
+                op: *op,
+                expr: Box::new(map_expr(expr)),
+            }),
+            parser::Expr::Call(name, (args, _)) => Expr::Call(Call {
+                name: *name,
+                args: map_to_vec(args, map_expr),
+            }),
+            parser::Expr::Var(name) => Expr::Var(name),
+            parser::Expr::Int(int) => Expr::Int(int),
+            parser::Expr::String(string) => Expr::String(string),
+        },
+        *span,
+    )
 }
 
 fn map_stmt<'a>(stmt: &parser::Stmt<'a>) -> Stmt<'a> {
@@ -138,32 +137,24 @@ fn map_stmt<'a>(stmt: &parser::Stmt<'a>) -> Stmt<'a> {
             name: *name,
             params: map_to_vec(params, |parser::Param(name, r#type)| Param {
                 name: *name,
-                r#type: map_spanned_type(r#type),
+                r#type: map_type(r#type),
             }),
-            return_type: return_type.as_ref().map(map_spanned_type),
-            body: map_block(body),
+            return_type: return_type.as_ref().map(map_type),
+            body: map_to_vec(body, map_stmt),
         }),
         parser::Stmt::VarDecl(name, value) => Stmt::VarDecl(VarDecl {
             name: *name,
-            value: map_spanned_expr(value),
+            value: map_expr(value),
         }),
-        parser::Stmt::Expr(expr) => Stmt::Expr(map_spanned_expr(expr)),
+        parser::Stmt::Expr(expr) => Stmt::Expr(map_expr(expr)),
         parser::Stmt::Assign(target, op, value) => Stmt::Assign(Assign {
-            target: map_spanned_expr(target),
+            target: map_expr(target),
             op: *op,
-            value: map_spanned_expr(value),
+            value: map_expr(value),
         }),
     }
 }
 
-fn map_spanned_stmt<'a>((stmt, span): &Spanned<parser::Stmt<'a>>) -> Spanned<Stmt<'a>> {
-    (map_stmt(stmt), *span)
-}
-
-fn map_block<'a>((block, span): &parser::Block<'a>) -> Block<'a> {
-    (map_to_vec(block, map_spanned_stmt), *span)
-}
-
 pub fn parse_tree_to_ast<'a>(parse_tree: &ParseTree<'a>) -> Ast<'a> {
-    parse_tree.iter().map(|(stmt, _)| map_stmt(stmt)).collect()
+    map_to_vec(parse_tree, map_stmt)
 }

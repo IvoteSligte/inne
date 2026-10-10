@@ -150,7 +150,7 @@ impl<'a> Analyzer<'a> {
                     if let Some(r#type) = return_type {
                         s.analyze_type(r#type);
                     }
-                    for (stmt, _) in &body.0 {
+                    for stmt in body {
                         s.analyze_stmt(stmt);
                     }
                 });

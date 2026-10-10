@@ -4,14 +4,16 @@ pub mod analyzer;
 pub mod ast;
 mod lexer;
 mod parser;
+pub mod typed_ast;
 
 use ariadne::{Color, Label, Report, ReportKind, sources};
 use chumsky::{Parser as _, error::Rich, input::Input};
+use clap::Parser;
 
 use ast::parse_tree_to_ast;
 
 pub use analyzer::analyze;
-use clap::Parser;
+pub use ast::Ast;
 pub use lexer::{Span, Spanned, Token, lexer};
 pub use parser::{ParseTree, parser};
 
