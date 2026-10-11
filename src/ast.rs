@@ -28,7 +28,7 @@ pub struct Param<'a> {
     pub r#type: Spanned<Type<'a>>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub enum Type<'a> {
     Nothing,
     Int,
@@ -155,6 +155,6 @@ fn map_stmt<'a>(stmt: &parser::Stmt<'a>) -> Stmt<'a> {
     }
 }
 
-pub fn parse_tree_to_ast<'a>(parse_tree: &ParseTree<'a>) -> Ast<'a> {
+pub fn ast_from_parse_tree<'a>(parse_tree: &ParseTree<'a>) -> Ast<'a> {
     map_to_vec(parse_tree, map_stmt)
 }

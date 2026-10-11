@@ -1,21 +1,20 @@
 use std::{ffi::OsStr, io, path::PathBuf};
 
-pub mod analyzer;
 pub mod ast;
-mod lexer;
-mod parser;
-pub mod typed_ast;
+pub mod hir;
+pub mod lexer;
+pub mod parser;
+pub mod typed_hir;
 
 use ariadne::{Color, Label, Report, ReportKind, sources};
 use chumsky::{Parser as _, error::Rich, input::Input};
 use clap::Parser;
 
-use ast::parse_tree_to_ast;
-
-pub use analyzer::analyze;
-pub use ast::Ast;
+pub use ast::{Ast, ast_from_parse_tree};
+pub use hir::{Hir, hir_from_ast};
 pub use lexer::{Span, Spanned, Token, lexer};
 pub use parser::{ParseTree, parser};
+pub use typed_hir::{TypedHir, typed_hir_from_hir};
 
 #[derive(clap::Parser)]
 #[command(name = "Inne")]
@@ -55,47 +54,52 @@ fn main() {
         );
     }
     let filename = "filename.inne";
-    let Some(tokens) = print_parse_errors(
-        lexer().parse(&source).into_result(),
-        filename,
-        &source,
-        "lexing",
-    ) else {
-        return;
+    let tokens = match lexer().parse(&source).into_result() {
+        Ok(tokens) => tokens,
+        Err(errors) => {
+            print_parse_errors(errors, filename, &source, "lexing");
+            return;
+        }
     };
-    let Some(parse_tree) = print_parse_errors(
-        parser()
-            .parse(
-                tokens
-                    .as_slice()
-                    .map((source.len()..source.len()).into(), |(t, s)| (t, s)),
-            )
-            .into_result(),
-        filename,
-        &source,
-        "parsing",
-    ) else {
-        return;
+    let parse_tree = match parser()
+        .parse(
+            tokens
+                .as_slice()
+                .map((source.len()..source.len()).into(), |(t, s)| (t, s)),
+        )
+        .into_result()
+    {
+        Ok(parse_tree) => parse_tree,
+        Err(errors) => {
+            print_parse_errors(errors, filename, &source, "parsing");
+            return;
+        }
     };
-    let ast = parse_tree_to_ast(&parse_tree);
-    let errors = analyze(&ast, filename);
-
-    print_analyze_errors(&source, filename, errors);
+    let ast = ast_from_parse_tree(&parse_tree);
+    let hir = match hir_from_ast(&ast, filename) {
+        Ok(hir) => hir,
+        Err(errors) => {
+            print_hir_errors(errors, &source, filename, "symbol resolution");
+            return;
+        }
+    };
+    let typed_hir = match typed_hir_from_hir(hir, filename) {
+        Ok(typed_hir) => typed_hir,
+        Err(errors) => {
+            print_hir_errors(errors, &source, filename, "type checking");
+            return;
+        }
+    };
 }
 
-fn print_parse_errors<T, E>(
-    result: Result<T, Vec<Rich<'_, E>>>,
+fn print_parse_errors<E>(
+    errors: Vec<Rich<'_, E>>,
     filename: &'static str,
     source: &str,
     stage: &'static str,
-) -> Option<T>
-where
+) where
     E: std::fmt::Display,
 {
-    let errors = match result {
-        Ok(ok) => return Some(ok),
-        Err(errors) => errors,
-    };
     for err in errors {
         Report::build(ReportKind::Error, (filename, err.span().into_range()))
             .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
@@ -114,12 +118,15 @@ where
             .eprint(sources([(filename, source)]))
             .unwrap()
     }
-    None
 }
 
-fn print_analyze_errors(source: &str, filename: &'static str, errors: Vec<analyzer::Error<'_>>) {
+fn print_hir_errors(
+    errors: Vec<hir::Error<'_>>,
+    source: &str,
+    filename: &'static str,
+    stage: &str,
+) {
     for err in &errors {
-        let stage = "analysis";
         Report::build(ReportKind::Error, (filename, err.span.into_range()))
             .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
             .with_message(format!("during {stage}, {}", err.message))
@@ -128,6 +135,11 @@ fn print_analyze_errors(source: &str, filename: &'static str, errors: Vec<analyz
                     .with_message(&err.message)
                     .with_color(Color::Red),
             )
+            .with_labels(err.contexts.iter().map(|(message, span)| {
+                Label::new((filename, span.into_range()))
+                    .with_message(message)
+                    .with_color(Color::Yellow)
+            }))
             .finish()
             .eprint(sources([(filename, &source)]))
             .unwrap()
