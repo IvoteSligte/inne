@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 pub use crate::typed_hir::{AssignOp, BinaryOp, DefId, Int, UnaryOp};
 use crate::{TypedHir, typed_hir as thir};
 
@@ -6,7 +8,27 @@ pub struct Mir<'a> {
     pub blocks: Vec<Block<'a>>,
 }
 
-pub type BlockId = usize;
+/// ID of a basic block.
+#[derive(Debug, Clone, Copy)]
+pub struct BlockId(usize);
+
+impl BlockId {
+    pub fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// ID of a local variable (including parameters and return value).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalId(usize);
+
+impl LocalId {
+    pub const RETURN_VALUE: Self = Self(0);
+
+    pub fn get(self) -> usize {
+        self.0
+    }
+}
 
 pub struct Func<'a> {
     pub def_id: DefId,
@@ -15,94 +37,179 @@ pub struct Func<'a> {
     pub blocks: Vec<Block<'a>>,
 }
 
-/// Basic block
+/// A basic block.
 pub struct Block<'a> {
     pub stmts: Vec<Stmt<'a>>,
-    pub branch: Branch<'a>,
+    pub branch: Branch,
 }
 
-pub enum Branch<'a> {
+pub enum Branch {
     Jump { target: BlockId },
-    Cond { cond: Expr<'a>, target: BlockId },
-    Return(Option<Expr<'a>>),
+    Cond { cond: LocalId, target: BlockId },
+    Return(Option<LocalId>),
 }
 
-pub enum Stmt<'a> {
-    Expr(Expr<'a>),
-    VarDecl {
-        def_id: DefId,
-        value: Expr<'a>,
-    },
-    /// Emitted when a variable goes out-of-scope.
-    VarDrop(DefId),
-    Assign {
-        target: DefId,
-        value: Expr<'a>,
-    },
+pub enum Op {
+    Assign,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    NotEq,
+    Neg,
+    Not,
+    Int,
+    String,
+    Call,
 }
 
-pub enum Expr<'a> {
-    Binary {
-        op: BinaryOp,
-        left: Box<Expr<'a>>,
-        right: Box<Expr<'a>>,
-    },
-    Unary {
-        op: UnaryOp,
-        expr: Box<Expr<'a>>,
-    },
-    Call {
-        def_id: DefId,
-        args: Vec<Expr<'a>>,
-    },
-    Var(DefId),
-    Int(Int),
-    String(&'a str),
-}
+pub struct Stmt<'a> {
+    pub op: Op,
+    pub args: Vec<LocalId>,
 
-pub struct Var<'a> {
-    pub name: &'a str,
-    pub def_id: DefId,
+    // Constants (mutually exclusive and optional)
+    pub func_id: DefId,
+    pub int: Int,
+    pub string: &'a str,
 }
 
 pub fn mir_from_typed_hir<'a>(typed_hir: &'a TypedHir<'a>) -> Mir<'a> {
     Constructor::map_thir(typed_hir)
 }
 
+struct FuncBuilder<'a> {
+    def_id: DefId,
+    /// Total number of statements in the function.
+    num_stmts: usize,
+    locals: HashMap<DefId, LocalId>,
+    blocks: Vec<Block<'a>>,
+    /// Statements for the current block.
+    stmts: Vec<Stmt<'a>>,
+}
+
+impl<'a> FuncBuilder<'a> {
+    pub fn new(def_id: DefId) -> Self {
+        Self {
+            def_id,
+            locals: HashMap::new(),
+            num_stmts: 0,
+            blocks: Vec::new(),
+            stmts: Vec::new(),
+        }
+    }
+
+    pub fn declare(&mut self, def_id: DefId, local_id: LocalId) {
+        self.locals.insert(def_id, local_id);
+    }
+
+    pub fn get_local(&self, def_id: DefId) -> LocalId {
+        *self.locals.get(&def_id).unwrap()
+    }
+
+    pub fn push_stmt(&mut self, op: Op, args: Vec<LocalId>) -> LocalId {
+        self.stmts.push(Stmt {
+            op,
+            args,
+            int: 0,
+            string: "",
+            func_id: 0,
+        });
+        // Equal to 1 + current_stmt because the return slot is LocalId(0)
+        // NOTE: does this need to take params into account?
+        LocalId(self.num_stmts)
+    }
+
+    pub fn push_int(&mut self, int: Int) -> LocalId {
+        self.stmts.push(Stmt {
+            op: Op::Int,
+            args: Vec::new(),
+            int,
+            string: "",
+            func_id: 0,
+        });
+        // Equal to 1 + current_stmt because the return slot is LocalId(0)
+        // NOTE: does this need to take params into account?
+        LocalId(self.num_stmts)
+    }
+
+    pub fn push_string(&mut self, string: &'a str) -> LocalId {
+        self.stmts.push(Stmt {
+            op: Op::String,
+            args: Vec::new(),
+            int: 0,
+            string,
+            func_id: 0,
+        });
+        // Equal to 1 + current_stmt because the return slot is LocalId(0)
+        // NOTE: does this need to take params into account?
+        LocalId(self.num_stmts)
+    }
+
+    pub fn push_call(&mut self, func_id: DefId, args: Vec<LocalId>) -> LocalId {
+        self.stmts.push(Stmt {
+            op: Op::Call,
+            args,
+            int: 0,
+            string: "",
+            func_id,
+        });
+        // Equal to 1 + current_stmt because the return slot is LocalId(0)
+        // NOTE: does this need to take params into account?
+        LocalId(self.num_stmts)
+    }
+
+    pub fn block_is_empty(&self) -> bool {
+        self.stmts.is_empty()
+    }
+
+    pub fn finish_block(&mut self, branch: Branch) {
+        self.blocks.push(Block {
+            stmts: std::mem::take(&mut self.stmts),
+            branch,
+        });
+    }
+
+    pub fn build(self) -> Func<'a> {
+        debug_assert!(self.stmts.is_empty());
+        Func {
+            def_id: self.def_id,
+            blocks: self.blocks,
+        }
+    }
+}
+
 struct Constructor {}
 
 impl Constructor {
-    fn map_thir<'a>(typed_hir: &'a TypedHir<'a>) -> Mir<'a> {
+    pub fn map_thir<'a>(typed_hir: &'a TypedHir<'a>) -> Mir<'a> {
         let mut _self = Self {};
         let funcs = typed_hir
             .funcs
             .iter()
             .map(|func| _self.map_func(func))
             .collect();
-        let mut blocks = Vec::new();
-        _self.map_scope(&typed_hir.stmts, Branch::Return(None), &mut blocks);
+        let blocks = {
+            let mut builder = FuncBuilder::new(DefId::MAX);
+            _self.map_scope(&typed_hir.stmts, Branch::Return(None), &mut builder);
+            builder.build().blocks
+        };
         Mir { funcs, blocks }
     }
 
     fn map_func<'a>(&mut self, func: &'a thir::Func<'a>) -> Func<'a> {
-        let mut blocks = Vec::new();
+        let mut builder = FuncBuilder::new(func.def_id);
         // TODO: allocate params? or is that handled by the caller?
-        self.map_scope(&func.body, Branch::Return(None), &mut blocks);
-        Func {
-            def_id: func.def_id,
-            blocks,
-        }
+        self.map_scope(&func.body, Branch::Return(None), &mut builder);
+        builder.build()
     }
 
     fn map_scope<'a>(
         &mut self,
         stmts: &'a [thir::Stmt<'a>],
-        end_branch: Branch<'a>,
-        dst: &mut Vec<Block<'a>>,
+        end_branch: Branch,
+        builder: &mut FuncBuilder<'a>,
     ) {
-        let mut block_stmts = Vec::new();
-        let mut declared_vars = Vec::new();
-
         for stmt in stmts {
             match stmt {
                 thir::Stmt::VarDecl(thir::VarDecl {
@@ -110,79 +217,79 @@ impl Constructor {
                     name: _,
                     value,
                 }) => {
-                    block_stmts.push(Stmt::VarDecl {
-                        def_id: *def_id,
-                        value: self.map_expr(&value.0),
-                    });
-                    declared_vars.push(*def_id);
+                    let value_id = self.map_expr(&value.0, builder);
+                    builder.declare(*def_id, value_id);
                 }
                 thir::Stmt::Expr(expr) => {
-                    block_stmts.push(Stmt::Expr(self.map_expr(&expr.0)));
+                    self.map_expr(&expr.0, builder);
                 }
                 thir::Stmt::Assign(thir::Assign { op, target, value }) => {
-                    let target = match target.0 {
-                        thir::Expr::Var(def_id) => def_id,
+                    let target_id = match target.0 {
+                        thir::Expr::Var(def_id) => builder.get_local(def_id),
                         _ => unreachable!(),
                     };
+                    let mut value_id = self.map_expr(&value.0, builder);
+
                     use AssignOp::*;
-                    let mut value = self.map_expr(&value.0);
                     if op.0 != Assign {
                         // Rewrite statements such as `x += 1` to `x = x + 1`
-                        value = Expr::Binary {
-                            op: match op.0 {
-                                Add => BinaryOp::Add,
-                                Sub => BinaryOp::Sub,
-                                Mul => BinaryOp::Mul,
-                                Div => BinaryOp::Div,
-                                Assign => unreachable!(),
-                            },
-                            // NOTE: currently the only target is a Var,
-                            //       but in the future care will need to be taken to prevent
-                            //       the target from being evaluated twice.
-                            left: Box::new(Expr::Var(target)),
-                            right: Box::new(value),
+                        let op = match op.0 {
+                            Add => Op::Add,
+                            Sub => Op::Sub,
+                            Mul => Op::Mul,
+                            Div => Op::Div,
+                            Assign => unreachable!(),
                         };
+                        value_id = builder.push_stmt(op, vec![target_id, value_id]);
                     }
-                    block_stmts.push(Stmt::Assign { target, value });
+                    builder.push_stmt(Op::Assign, vec![target_id, value_id]);
                 }
             }
         }
-        for var in declared_vars {
-            // TODO: drop var as soon as it is no longer used instead of at end-of-scope
-            block_stmts.push(Stmt::VarDrop(var));
-        }
-        if !block_stmts.is_empty() {
-            dst.push(Block {
-                stmts: block_stmts,
-                branch: end_branch,
-            });
+        // TODO: drop declared variables that hold pointers
+
+        if !builder.block_is_empty() {
+            builder.finish_block(end_branch);
         }
     }
 
-    fn map_expr<'a>(&mut self, expr: &'a thir::Expr<'a>) -> Expr<'a> {
+    fn map_expr<'a>(&mut self, expr: &'a thir::Expr<'a>, builder: &mut FuncBuilder<'a>) -> LocalId {
         match expr {
-            thir::Expr::Binary(thir::Binary { op, left, right }) => Expr::Binary {
-                op: op.0,
-                left: Box::new(self.map_expr(&left.0)),
-                right: Box::new(self.map_expr(&right.0)),
-            },
-            thir::Expr::Unary(thir::Unary { op, expr }) => Expr::Unary {
-                op: op.0,
-                expr: Box::new(self.map_expr(&expr.0)),
-            },
+            thir::Expr::Binary(thir::Binary { op, left, right }) => {
+                let left_id = self.map_expr(&left.0, builder);
+                let right_id = self.map_expr(&right.0, builder);
+                let op = match op.0 {
+                    BinaryOp::Add => Op::Add,
+                    BinaryOp::Sub => Op::Sub,
+                    BinaryOp::Mul => Op::Mul,
+                    BinaryOp::Div => Op::Div,
+                    BinaryOp::Eq => Op::Eq,
+                    BinaryOp::NotEq => Op::NotEq,
+                };
+                builder.push_stmt(op, vec![left_id, right_id])
+            }
+            thir::Expr::Unary(thir::Unary { op, expr }) => {
+                let expr_id = self.map_expr(&expr.0, builder);
+                let op = match op.0 {
+                    UnaryOp::Neg => Op::Neg,
+                    UnaryOp::Not => Op::Not,
+                };
+                builder.push_stmt(op, vec![expr_id])
+            }
             thir::Expr::Call(thir::Call {
                 name: _,
                 def_id,
                 args,
-            }) => Expr::Call {
-                def_id: *def_id,
-                args: args.iter().map(|arg| self.map_expr(&arg.0)).collect(),
-            },
-            // TODO: make sure to add AddDependency statements to keep objects alive
-            //       that are referenced by variables in the expression
-            thir::Expr::Var(def_id) => Expr::Var(*def_id),
-            thir::Expr::Int(int) => Expr::Int(int.parse().unwrap()),
-            thir::Expr::String(string) => Expr::String(string),
+            }) => {
+                let arg_ids = args
+                    .iter()
+                    .map(|arg| self.map_expr(&arg.0, builder))
+                    .collect();
+                builder.push_call(*def_id, arg_ids)
+            }
+            thir::Expr::Var(def_id) => builder.get_local(*def_id),
+            thir::Expr::Int(int) => builder.push_int(int.parse().unwrap()),
+            thir::Expr::String(string) => builder.push_string(string),
         }
     }
 }

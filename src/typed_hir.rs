@@ -87,12 +87,9 @@ impl<'a> TypeChecker<'a> {
                         "The 'main' function may not have any parameters.",
                         func.name.1,
                     );
-                } else
-                if func.return_type.is_some() {
-                    self.errors.add(
-                        "The 'main' function may not return anything.",
-                        func.name.1,
-                    );
+                } else if func.return_type.is_some() {
+                    self.errors
+                        .add("The 'main' function may not return anything.", func.name.1);
                 }
             }
         }

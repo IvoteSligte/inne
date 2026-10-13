@@ -2,10 +2,11 @@ use std::{ffi::OsStr, io, path::PathBuf};
 
 pub mod ast;
 pub mod hir;
+pub mod interpreter;
 pub mod lexer;
+pub mod mir;
 pub mod parser;
 pub mod typed_hir;
-pub mod mir;
 
 use ariadne::{Color, Label, Report, ReportKind, sources};
 use chumsky::{Parser as _, error::Rich, input::Input};
@@ -13,7 +14,9 @@ use clap::Parser;
 
 pub use ast::{Ast, ast_from_parse_tree};
 pub use hir::{Hir, hir_from_ast};
+pub use interpreter::Interpreter;
 pub use lexer::{Span, Spanned, Token, lexer};
+pub use mir::{Mir, mir_from_typed_hir};
 pub use parser::{ParseTree, parser};
 pub use typed_hir::{TypedHir, typed_hir_from_hir};
 
@@ -91,14 +94,9 @@ fn main() {
             return;
         }
     };
-    // let mut interpreter = Interpreter::new();
-    // match interpreter.run(&typed_hir) {
-    //     Ok(()) => (),
-    //     Err(error) => {
-    //         print_hir_errors(&[error], &source, filename, "running");
-    //         return;
-    //     }
-    // }
+    let mir = mir_from_typed_hir(&typed_hir);
+    let mut interpreter = Interpreter::new();
+    interpreter.run(&mir);
 }
 
 fn print_parse_errors<E>(
