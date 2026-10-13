@@ -15,6 +15,7 @@ use crate::{
 /// Type-checked high-level intermediate representation.
 /// Contains type annotations for all function and variable definitions.
 pub struct TypedHir<'a> {
+    pub filename: &'a str,
     /// Essentially `HashMap<DefId, DefInfo>`, but all [DefId]`s are consecutive.
     pub defs: Vec<DefInfo>,
     pub funcs: Vec<Func<'a>>,
@@ -26,10 +27,7 @@ pub struct DefInfo {
     pub r#type: Type,
 }
 
-pub fn typed_hir_from_hir<'a>(
-    hir: Hir<'a>,
-    filename: &'a str,
-) -> Result<TypedHir<'a>, Vec<Error<'a>>> {
+pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error<'a>>> {
     let defs = hir
         .defs
         .into_iter()
@@ -42,7 +40,7 @@ pub fn typed_hir_from_hir<'a>(
         .collect();
 
     let mut type_checker = TypeChecker {
-        errors: Errors::new(filename),
+        errors: Errors::new(hir.filename),
         defs,
     };
     type_checker.check_funcs(&hir.funcs);
@@ -53,6 +51,7 @@ pub fn typed_hir_from_hir<'a>(
         true => {
             debug_assert!(type_checker.defs.iter().all(|def| def.r#type.is_known()));
             Ok(TypedHir {
+                filename: hir.filename,
                 defs: type_checker.defs,
                 funcs: hir.funcs,
                 stmts: hir.stmts,
@@ -81,6 +80,20 @@ impl<'a> TypeChecker<'a> {
             }
             if let Some(r#type) = func.return_type.as_ref() {
                 self.check_type(r#type);
+            }
+            if func.name.0 == "main" {
+                if !func.params.is_empty() {
+                    self.errors.add(
+                        "The 'main' function may not have any parameters.",
+                        func.name.1,
+                    );
+                } else
+                if func.return_type.is_some() {
+                    self.errors.add(
+                        "The 'main' function may not return anything.",
+                        func.name.1,
+                    );
+                }
             }
         }
     }
@@ -230,7 +243,7 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .find(|func| func.def_id == call.def_id)
             .unwrap();
-        
+
         let params = &func.params;
         let args = &call.args;
         if params.len() > args.len() {

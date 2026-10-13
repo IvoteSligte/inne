@@ -2,7 +2,10 @@ use crate::{ParseTree, Spanned, parser};
 
 pub use crate::parser::{AssignOp, BinaryOp, UnaryOp};
 
-pub type Ast<'a> = Vec<Stmt<'a>>;
+pub struct Ast<'a> {
+    pub filename: &'a str,
+    pub stmts: Vec<Stmt<'a>>,
+}
 
 #[derive(Clone)]
 pub enum Stmt<'a> {
@@ -156,5 +159,8 @@ fn map_stmt<'a>(stmt: &parser::Stmt<'a>) -> Stmt<'a> {
 }
 
 pub fn ast_from_parse_tree<'a>(parse_tree: &ParseTree<'a>) -> Ast<'a> {
-    map_to_vec(parse_tree, map_stmt)
+    Ast {
+        filename: parse_tree.filename,
+        stmts: map_to_vec(&parse_tree.stmts, map_stmt),
+    }
 }

@@ -4,9 +4,12 @@ mod diagnosis;
 
 use crate::{Span, Spanned};
 
-pub type ParseTree<'a> = Vec<Stmt<'a>>;
+pub struct ParseTree<'a> {
+    pub filename: &'a str,
+    pub stmts: Vec<Stmt<'a>>,
+}
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssignOp {
     Assign,
     Add,
@@ -73,8 +76,9 @@ where
     (o, e.span())
 }
 
-pub fn parser<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, ParseTree<'src>, extra::Err<Rich<'tokens, Token<'src>, Span>>> + Clone
+pub fn parser<'tokens, 'src: 'tokens, I>(
+    filename: &'src str,
+) -> impl Parser<'tokens, I, ParseTree<'src>, extra::Err<Rich<'tokens, Token<'src>, Span>>> + Clone
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {
@@ -199,5 +203,7 @@ where
         choice((func, var_decl, assign, expr.map(Stmt::Expr)))
             .then_ignore(just(Token::Semi).or_not())
     });
-    stmt.repeated().collect()
+    stmt.repeated()
+        .collect()
+        .map(|stmts| ParseTree { filename, stmts })
 }

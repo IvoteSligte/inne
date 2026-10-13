@@ -5,6 +5,7 @@ pub mod hir;
 pub mod lexer;
 pub mod parser;
 pub mod typed_hir;
+pub mod mir;
 
 use ariadne::{Color, Label, Report, ReportKind, sources};
 use chumsky::{Parser as _, error::Rich, input::Input};
@@ -61,7 +62,7 @@ fn main() {
             return;
         }
     };
-    let parse_tree = match parser()
+    let parse_tree = match parser(filename)
         .parse(
             tokens
                 .as_slice()
@@ -76,20 +77,28 @@ fn main() {
         }
     };
     let ast = ast_from_parse_tree(&parse_tree);
-    let hir = match hir_from_ast(&ast, filename) {
+    let hir = match hir_from_ast(&ast) {
         Ok(hir) => hir,
         Err(errors) => {
-            print_hir_errors(errors, &source, filename, "symbol resolution");
+            print_hir_errors(&errors, &source, filename, "symbol resolution");
             return;
         }
     };
-    let typed_hir = match typed_hir_from_hir(hir, filename) {
+    let typed_hir = match typed_hir_from_hir(hir) {
         Ok(typed_hir) => typed_hir,
         Err(errors) => {
-            print_hir_errors(errors, &source, filename, "type checking");
+            print_hir_errors(&errors, &source, filename, "type checking");
             return;
         }
     };
+    // let mut interpreter = Interpreter::new();
+    // match interpreter.run(&typed_hir) {
+    //     Ok(()) => (),
+    //     Err(error) => {
+    //         print_hir_errors(&[error], &source, filename, "running");
+    //         return;
+    //     }
+    // }
 }
 
 fn print_parse_errors<E>(
@@ -120,13 +129,13 @@ fn print_parse_errors<E>(
     }
 }
 
-fn print_hir_errors(
-    errors: Vec<hir::Error<'_>>,
+fn print_hir_errors<'a>(
+    errors: impl IntoIterator<Item = &'a hir::Error<'a>>,
     source: &str,
     filename: &'static str,
     stage: &str,
 ) {
-    for err in &errors {
+    for err in errors {
         Report::build(ReportKind::Error, (filename, err.span.into_range()))
             .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
             .with_message(format!("during {stage}, {}", err.message))

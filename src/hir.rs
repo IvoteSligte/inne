@@ -4,6 +4,10 @@ use crate::{Span, Spanned, ast};
 
 pub use crate::ast::{AssignOp, BinaryOp, UnaryOp};
 
+// TODO: warn if expression used as statement does not have any side-effects
+// TODO: warn for unused expression return value
+// TODO: info for variable accessed from a different scope
+
 pub type DefId = usize;
 
 pub const UNKNOWN_DEF_ID: DefId = DefId::MAX;
@@ -14,6 +18,7 @@ pub struct DefInfo {
 }
 
 pub struct Hir<'a> {
+    pub(crate) filename: &'a str,
     /// Essentially `HashMap<DefId, DefInfo>`, but all [DefId]`s are consecutive.
     pub(crate) defs: Vec<DefInfo>,
     pub(crate) funcs: Vec<Func<'a>>,
@@ -140,12 +145,8 @@ pub struct Error<'a> {
     pub contexts: Vec<(String, Span)>,
 }
 
-pub fn hir_from_ast<'a>(
-    ast: &'a ast::Ast<'a>,
-    filename: &'a str,
-) -> Result<Hir<'a>, Vec<Error<'a>>> {
-    let constructor = Constructor::new(filename);
-    constructor.map_ast(ast)
+pub fn hir_from_ast<'a>(ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error<'a>>> {
+    Constructor::map_ast(ast)
 }
 
 /// Helper type for managing error messages.
@@ -216,25 +217,23 @@ struct Constructor<'a> {
 }
 
 impl<'a> Constructor<'a> {
-    pub fn new(filename: &'a str) -> Self {
-        Self {
+    pub fn map_ast(ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error<'a>>> {
+        let mut _self = Self {
             defs: ConstructorDefs(Vec::new()),
             funcs: Vec::new(),
             func_to_def_id: HashMap::new(),
             scopes: Vec::new(),
-            errors: Errors::new(filename),
-        }
-    }
-
-    pub fn map_ast(mut self, ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error<'a>>> {
-        let stmts = self.map_scope(ast);
-        match self.errors.is_empty() {
+            errors: Errors::new(ast.filename),
+        };
+        let stmts = _self.map_scope(&ast.stmts);
+        match _self.errors.is_empty() {
             true => Ok(Hir {
-                defs: self.defs.0,
-                funcs: self.funcs,
+                filename: ast.filename,
+                defs: _self.defs.0,
+                funcs: _self.funcs,
                 stmts,
             }),
-            false => Err(self.errors.into_inner()),
+            false => Err(_self.errors.into_inner()),
         }
     }
 
