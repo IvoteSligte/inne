@@ -43,6 +43,7 @@ enum Ir {
 }
 
 // TODO: display general diagnostics through ariadne as well
+// TODO: do not immediately return from main() when any errors are encountered
 
 fn main() {
     let args = Args::parse();

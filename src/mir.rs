@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 
-pub use crate::typed_hir::{AssignOp, BinaryOp, DefId, Int, UnaryOp};
+pub use crate::typed_hir::{DefId, Int};
 use crate::{TypedHir, hir::PRINT_DEF_ID, typed_hir as thir};
+
+// TODO: reachability analysis
+//       - check that non-void functions always return
+//       - warn for unused code
+//       - check for tautological conditions
 
 pub struct Mir<'a> {
     pub funcs: Vec<Func<'a>>,
@@ -11,7 +16,7 @@ pub struct Mir<'a> {
 
 macro_rules! usize_newtype {
     ($name:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $name(usize);
 
         impl $name {
@@ -49,7 +54,7 @@ pub struct Block<'a> {
 }
 
 pub enum Branch {
-    Jump { target: BlockId },
+    Jump(BlockId),
     Cond { cond: LocalId, target: BlockId },
     Return(Option<LocalId>),
 }
@@ -66,6 +71,7 @@ pub enum Op {
     Neg,
     Not,
     Int,
+    Bool,
     String,
     Call,
     Print,
@@ -78,6 +84,7 @@ pub struct Stmt<'a> {
 
     // Constants (mutually exclusive and optional)
     pub func_id: FuncId,
+    /// Also stores bool as [0, 1].
     pub int: Int,
     pub string: &'a str,
 }
@@ -95,9 +102,11 @@ struct FuncBuilder<'a> {
     num_params: usize,
     /// Counter for the number of locals in this function.
     num_locals: usize,
-    blocks: Vec<Block<'a>>,
-    /// Statements for the current block.
-    stmts: Vec<Stmt<'a>>,
+    /// Total number of blocks, including partial ones.
+    num_blocks: usize,
+    current_block: (BlockId, Vec<Stmt<'a>>),
+    queued_blocks: HashMap<BlockId, Vec<Stmt<'a>>>,
+    finished_blocks: Vec<(BlockId, Block<'a>)>,
 }
 
 impl<'a> FuncBuilder<'a> {
@@ -107,8 +116,10 @@ impl<'a> FuncBuilder<'a> {
             def_to_local: HashMap::new(),
             num_params,
             num_locals: 0,
-            blocks: Vec::new(),
-            stmts: Vec::new(),
+            num_blocks: 1, // Only the current block exists at the start.
+            current_block: (BlockId(0), Vec::new()),
+            queued_blocks: HashMap::new(),
+            finished_blocks: Vec::new(),
         }
     }
 
@@ -136,7 +147,7 @@ impl<'a> FuncBuilder<'a> {
         func_id: FuncId,
     ) -> LocalId {
         let local_id = self.new_local();
-        self.stmts.push(Stmt {
+        self.current_block.1.push(Stmt {
             local_id,
             op,
             args,
@@ -163,24 +174,64 @@ impl<'a> FuncBuilder<'a> {
         self.push_stmt(Op::Call, args, 0, "", func_id)
     }
 
+    /// Returns `true` if the current block is empty.
     pub fn block_is_empty(&self) -> bool {
-        self.stmts.is_empty()
+        self.current_block.1.is_empty()
+    }
+
+    fn create_block_id(&mut self) -> BlockId {
+        let id = BlockId(self.num_blocks);
+        self.num_blocks += 1;
+        id
+    }
+
+    /// Creates a new block and returns its ID, but does not enter it.
+    pub fn create_block(&mut self) -> BlockId {
+        let id = self.create_block_id();
+        self.queued_blocks.insert(id, Vec::new());
+        id
+    }
+
+    /// Sets the block currently being processed to `next_block_id`.
+    /// This is assumed to be an empty block.
+    pub fn set_current_block(&mut self, id: BlockId) {
+        let block = self.queued_blocks.remove(&id).unwrap();
+        let (old_id, old_block) = std::mem::replace(&mut self.current_block, (id, block));
+        self.queued_blocks.insert(old_id, old_block);
     }
 
     pub fn finish_block(&mut self, branch: Branch) {
-        self.blocks.push(Block {
-            stmts: std::mem::take(&mut self.stmts),
-            branch,
-        });
+        let new_id = self.create_block_id();
+        let (id, stmts) = std::mem::replace(&mut self.current_block, (new_id, Vec::new()));
+        self.finished_blocks.push((id, Block { stmts, branch }));
     }
 
     pub fn build(self) -> Func<'a> {
-        debug_assert!(self.stmts.is_empty());
+        debug_assert!(self.current_block.1.is_empty());
+        debug_assert!(self.queued_blocks.is_empty());
+
+        // Replace placeholder block IDs with new ones now that their final positions are known.
+        let mut blocks = Vec::with_capacity(self.finished_blocks.len());
+        let mut id_map = Vec::from_iter(std::iter::repeat_n(
+            BlockId(usize::MAX),
+            self.finished_blocks.len(),
+        ));
+        for (new_id, (old_id, _)) in self.finished_blocks.iter().enumerate() {
+            id_map[old_id.get()] = BlockId(new_id);
+        }
+        for (old_id, mut block) in self.finished_blocks {
+            match &mut block.branch {
+                Branch::Jump(target) => *target = id_map[target.get()],
+                Branch::Cond { cond: _, target } => *target = id_map[target.get()],
+                Branch::Return(_) => {}
+            }
+            blocks[id_map[old_id.get()].get()] = block;
+        }
         Func {
             name: self.name,
             // Return value + number of params + number of locals
             stack_space: 1 + self.num_params + self.num_locals,
-            blocks: self.blocks,
+            blocks,
         }
     }
 }
@@ -248,7 +299,7 @@ impl Constructor {
                     };
                     let mut value_id = self.map_expr(&value.0, builder);
 
-                    use AssignOp::*;
+                    use thir::AssignOp::*;
                     if op.0 != Assign {
                         // Rewrite statements such as `x += 1` to `x = x + 1`
                         let op = match op.0 {
@@ -262,6 +313,51 @@ impl Constructor {
                     }
                     builder.push_op(Op::Assign, vec![target_id, value_id]);
                 }
+                thir::Stmt::If(thir::If { choices, r#else }) => {
+                    let end_block_id = builder.create_block();
+                    for (i, thir::Choice { cond, then }) in choices.iter().enumerate() {
+                        let cond_id = self.map_expr(&cond.0, builder);
+                        let next_block_id = if i + 1 == choices.len() {
+                            end_block_id
+                        } else {
+                            builder.create_block()
+                        };
+                        let not_cond_id = builder.push_op(Op::Not, vec![cond_id]);
+                        // If the condition is false, skip its 'then' block.
+                        builder.finish_block(Branch::Cond {
+                            cond: not_cond_id,
+                            target: next_block_id,
+                        });
+                        self.map_scope(then, Branch::Jump(end_block_id), builder);
+                        builder.set_current_block(next_block_id);
+                    }
+                    if let Some(r#else) = r#else {
+                        self.map_scope(r#else, Branch::Jump(end_block_id), builder);
+                    }
+                    builder.set_current_block(end_block_id);
+                }
+                thir::Stmt::For(thir::For {
+                    def_id,
+                    var: _,
+                    iter,
+                    body,
+                }) => {
+                    let end_block_id = builder.create_block();
+                    let iter_id = self.map_expr(&iter.0, builder);
+
+                    // blocks:
+                    // - init -> next
+                    // - next -> body,end
+                    // - body -> next
+                    todo!();
+
+                    builder.set_current_block(end_block_id);
+                }
+                thir::Stmt::While(thir::While { cond, body }) => todo!(),
+                thir::Stmt::Loop(thir::Loop { body }) => todo!(),
+                thir::Stmt::Break => todo!(),
+                thir::Stmt::Continue => todo!(),
+                thir::Stmt::Return(value) => todo!(),
             }
         }
         // TODO: drop declared variables that hold pointers
@@ -276,21 +372,23 @@ impl Constructor {
             thir::Expr::Binary(thir::Binary { op, left, right }) => {
                 let left_id = self.map_expr(&left.0, builder);
                 let right_id = self.map_expr(&right.0, builder);
+                use thir::BinaryOp::*;
                 let op = match op.0 {
-                    BinaryOp::Add => Op::Add,
-                    BinaryOp::Sub => Op::Sub,
-                    BinaryOp::Mul => Op::Mul,
-                    BinaryOp::Div => Op::Div,
-                    BinaryOp::Eq => Op::Eq,
-                    BinaryOp::NotEq => Op::NotEq,
+                    Add => Op::Add,
+                    Sub => Op::Sub,
+                    Mul => Op::Mul,
+                    Div => Op::Div,
+                    Eq => Op::Eq,
+                    NotEq => Op::NotEq,
                 };
                 builder.push_op(op, vec![left_id, right_id])
             }
             thir::Expr::Unary(thir::Unary { op, expr }) => {
                 let expr_id = self.map_expr(&expr.0, builder);
+                use thir::UnaryOp::*;
                 let op = match op.0 {
-                    UnaryOp::Neg => Op::Neg,
-                    UnaryOp::Not => Op::Not,
+                    Neg => Op::Neg,
+                    Not => Op::Not,
                 };
                 builder.push_op(op, vec![expr_id])
             }
@@ -312,6 +410,7 @@ impl Constructor {
             }
             thir::Expr::Var(def_id) => builder.get_local(*def_id),
             thir::Expr::Int(int) => builder.push_int(int.parse().unwrap()),
+            thir::Expr::Bool(bool) => builder.push_int(*bool as _),
             thir::Expr::String(string) => builder.push_string(string),
         }
     }
@@ -395,7 +494,7 @@ impl std::fmt::Display for Stmt<'_> {
 impl std::fmt::Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Branch::Jump { target } => write!(f, "Jump(block {})", target.get()),
+            Branch::Jump(target) => write!(f, "Jump(block {})", target.get()),
             Branch::Cond { cond, target } => {
                 write!(f, "Cond({}, block {})", cond.get(), target.get())
             }

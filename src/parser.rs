@@ -2,6 +2,8 @@ use chumsky::{input::ValueInput, prelude::*};
 
 mod diagnosis;
 
+// TODO: error recovery
+
 use crate::{Span, Spanned};
 
 pub struct ParseTree<'a> {
@@ -28,6 +30,18 @@ pub enum Stmt<'a> {
     VarDecl(Spanned<&'a str>, Spanned<Expr<'a>>),
     Expr(Spanned<Expr<'a>>),
     Assign(Spanned<Expr<'a>>, Spanned<AssignOp>, Spanned<Expr<'a>>),
+    If(
+        Spanned<Expr<'a>>,
+        Block<'a>,
+        Vec<(Spanned<Expr<'a>>, Block<'a>)>,
+        Option<Block<'a>>,
+    ),
+    For(Spanned<&'a str>, Spanned<Expr<'a>>, Block<'a>),
+    While(Spanned<Expr<'a>>, Block<'a>),
+    Loop(Block<'a>),
+    Break,
+    Continue,
+    Return(Option<Spanned<Expr<'a>>>),
 }
 
 pub type Block<'a> = Vec<Stmt<'a>>;
@@ -63,6 +77,7 @@ pub enum Expr<'a> {
     Call(Spanned<&'a str>, Spanned<Vec<Spanned<Self>>>),
     Var(&'a str),
     Int(&'a str),
+    Bool(bool),
     String(&'a str),
 }
 
@@ -108,27 +123,24 @@ where
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
             .then(just(Token::Arrow).ignore_then(r#type).or_not())
-            .then(block)
+            .then(block.clone())
             .map(|(((name, params), return_type), body)| {
                 Stmt::Func(name, params, return_type, body)
             });
 
         let var = select! { Token::Ident(ident) => Expr::Var(ident) }.map_with(with_span);
         let int = select! { Token::Int(int) => Expr::Int(int) }.map_with(with_span);
+        let bool = select! { Token::Bool(bool) => Expr::Bool(bool) }.map_with(with_span);
         let string = select! { Token::String(string) => Expr::String(string) }.map_with(with_span);
 
         let expr = recursive(|expr| {
-            // A list of expressions
-            let items = expr
-                .clone()
-                .separated_by(just(Token::Comma))
-                .allow_trailing()
-                .collect::<Vec<_>>();
-
             // Function calls have very high precedence so we prioritise them
             let call = ident
                 .then(
-                    items
+                    expr.clone()
+                        .separated_by(just(Token::Comma))
+                        .allow_trailing()
+                        .collect::<Vec<_>>()
                         .delimited_by(just(Token::LParen), just(Token::RParen))
                         .map_with(with_span),
                 )
@@ -136,7 +148,7 @@ where
                 .map_with(with_span);
 
             // Unambiguous expressions
-            let atom = call.or(var).or(int).or(string);
+            let atom = choice((call, var, int, bool, string));
 
             // Product ops (multiply and divide) have equal precedence
             let op = just(Token::Op("*"))
@@ -200,8 +212,48 @@ where
             )
             .then(expr.clone())
             .map(|((target, op), value)| Stmt::Assign(target, op, value));
-        choice((func, var_decl, assign, expr.map(Stmt::Expr)))
-            .then_ignore(just(Token::Semi).or_not())
+        let if_head = just(Token::If)
+            .ignore_then(expr.clone())
+            .then(block.clone());
+        let if_stmt = if_head
+            .clone() // if
+            .then(
+                just(Token::Else)
+                    .ignore_then(if_head)
+                    .repeated()
+                    .collect::<Vec<_>>(),
+            ) // else if
+            .then(just(Token::Else).ignore_then(block.clone()).or_not()) // else
+            .map(|(((cond, then_block), else_if_blocks), else_block)| {
+                Stmt::If(cond, then_block, else_if_blocks, else_block)
+            });
+        let for_stmt = just(Token::For)
+            .ignore_then(ident)
+            .then_ignore(just(Token::In))
+            .then(expr.clone())
+            .then(block.clone())
+            .map(|((var, iter), block)| Stmt::For(var, iter, block));
+        let while_stmt = just(Token::While)
+            .ignore_then(expr.clone())
+            .then(block.clone())
+            .map(|(cond, block)| Stmt::While(cond, block));
+        let loop_stmt = just(Token::Loop).ignore_then(block).map(Stmt::Loop);
+        choice((
+            func,
+            var_decl,
+            assign,
+            if_stmt,
+            for_stmt,
+            while_stmt,
+            loop_stmt,
+            just(Token::Break).map(|_| Stmt::Break),
+            just(Token::Continue).map(|_| Stmt::Continue),
+            just(Token::Return)
+                .ignore_then(expr.clone().or_not())
+                .map(|expr| Stmt::Return(expr)),
+            expr.map(Stmt::Expr),
+        ))
+        .then_ignore(just(Token::Semi).or_not())
     });
     stmt.repeated()
         .collect()

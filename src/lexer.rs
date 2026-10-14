@@ -8,9 +8,20 @@ pub enum Token<'a> {
     // Keywords
     Func,
     Var,
+    If,
+    Else,
+    For,
+    While,
+    Loop,
+    Break,
+    Continue,
+    Return,
+    In,
+    Import,
     // Tokens with stored data
     Ident(&'a str),
     Int(&'a str),
+    Bool(bool),
     String(&'a str),
     Op(&'a str),
     // Delimiters
@@ -35,9 +46,20 @@ impl<'a> std::fmt::Display for Token<'a> {
         match self {
             Func => f.write_str("func"),
             Var => f.write_str("var"),
+            If => f.write_str("if"),
+            Else => f.write_str("else"),
+            For => f.write_str("for"),
+            While => f.write_str("while"),
+            Loop => f.write_str("loop"),
+            Break => f.write_str("break"),
+            Continue => f.write_str("continue"),
+            Return => f.write_str("return"),
+            In => f.write_str("in"),
+            Import => f.write_str("import"),
             Ident(ident) => f.write_str(ident),
+            Bool(bool) => write!(f, "{bool}"),
             Int(int) => f.write_str(int),
-            String(string) => write!(f, "\"{string}\""),
+            String(string) => write!(f, "{string:?}"),
             Op(op) => f.write_str(op),
             LBrace => f.write_str("("),
             RBrace => f.write_str("]"),
@@ -110,14 +132,23 @@ pub fn lexer<'a>()
         just(">"),
     ))
     .map(Op);
-
-    choice((
-        text::ascii::keyword("func").map(|_| Func),
-        text::ascii::keyword("var").map(|_| Var),
-        text::ident().map(Ident),
-        text::int(10).map(Int),
-        string.map(String),
-        operator,
+    let keyword = choice((
+        text::ascii::keyword("func").to(Func),
+        text::ascii::keyword("var").to(Var),
+        text::ascii::keyword("if").to(If),
+        text::ascii::keyword("else").to(Else),
+        text::ascii::keyword("for").to(For),
+        text::ascii::keyword("while").to(While),
+        text::ascii::keyword("loop").to(Loop),
+        text::ascii::keyword("break").to(Break),
+        text::ascii::keyword("continue").to(Continue),
+        text::ascii::keyword("return").to(Return),
+        text::ascii::keyword("in").to(In),
+        text::ascii::keyword("import").to(Import),
+        text::ascii::keyword("true").to(Bool(true)),
+        text::ascii::keyword("false").to(Bool(false)),
+    ));
+    let symbol = choice((
         just('{').to(LBrace),
         just('}').to(RBrace),
         just('(').to(LParen),
@@ -131,6 +162,14 @@ pub fn lexer<'a>()
         just('@').to(At),
         just('#').to(Hashtag),
         just('$').to(Dollar),
+    ));
+    choice((
+        keyword,
+        text::ident().map(Ident),
+        text::int(10).map(Int),
+        string.map(String),
+        operator,
+        symbol,
     ))
     .map_with(|token, e| (token, e.span()))
     .padded()

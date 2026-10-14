@@ -107,6 +107,7 @@ impl<'a> Interpreter<'a> {
                 _ => unreachable!(),
             },
             Op::Int => Value::Int(stmt.int),
+            Op::Bool => Value::Bool(stmt.int > 0),
             Op::String => Value::String(stmt.string.chars().collect()),
             Op::Call => {
                 // Push stack frame.
@@ -154,7 +155,7 @@ impl<'a> Interpreter<'a> {
 
     fn run_branch(&mut self, branch: &Branch, block_index: &mut usize) -> ControlFlow<()> {
         match branch {
-            Branch::Jump { target } => {
+            Branch::Jump(target) => {
                 *block_index = target.get();
             }
             Branch::Cond { cond, target } => {

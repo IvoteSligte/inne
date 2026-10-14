@@ -37,6 +37,13 @@ pub enum Stmt<'a> {
     VarDecl(VarDecl<'a>),
     Expr(Spanned<Expr<'a>>),
     Assign(Assign<'a>),
+    If(If<'a>),
+    For(For<'a>),
+    While(While<'a>),
+    Loop(Loop<'a>),
+    Break,
+    Continue,
+    Return(Option<Spanned<Expr<'a>>>),
 }
 
 pub type Block<'a> = Vec<Stmt<'a>>;
@@ -107,6 +114,7 @@ pub enum Expr<'a> {
     Call(Call<'a>),
     Var(DefId),
     Int(&'a str),
+    Bool(bool),
     String(&'a str),
 }
 
@@ -127,15 +135,39 @@ pub struct Call<'a> {
     pub args: Vec<Spanned<Expr<'a>>>,
 }
 
-pub struct Var<'a> {
-    pub name: &'a str,
-    pub def_id: DefId,
-}
-
 pub struct Assign<'a> {
     pub op: Spanned<AssignOp>,
     pub target: Spanned<Expr<'a>>,
     pub value: Spanned<Expr<'a>>,
+}
+
+pub struct If<'a> {
+    /// Conditions and associated blocks to be evaluated in order.
+    /// Originally an if-else chain.
+    pub choices: Vec<Choice<'a>>,
+    pub r#else: Option<Block<'a>>,
+}
+
+pub struct Choice<'a> {
+    pub cond: Spanned<Expr<'a>>,
+    pub then: Block<'a>,
+}
+
+pub struct For<'a> {
+    /// ID of the for-loop iteration variable.
+    pub def_id: DefId,
+    pub var: Spanned<&'a str>,
+    pub iter: Spanned<Expr<'a>>,
+    pub body: Block<'a>,
+}
+
+pub struct While<'a> {
+    pub cond: Spanned<Expr<'a>>,
+    pub body: Block<'a>,
+}
+
+pub struct Loop<'a> {
+    pub body: Block<'a>,
 }
 
 pub struct Error<'a> {
@@ -273,56 +305,96 @@ impl<'a> Constructor<'a> {
         let mut out_stmts = Vec::with_capacity(stmts.len());
         for stmt in stmts {
             match stmt {
-                ast::Stmt::Func(func) => {
+                ast::Stmt::Func(ast::Func {
+                    name,
+                    params,
+                    return_type,
+                    body,
+                }) => {
                     if !is_top_level {
                         // TODO: add outer function as context
                         self.errors.add(
                             "Functions cannot not be defined inside other functions.",
-                            func.name.1,
+                            name.1,
                         );
                         continue;
                     }
-                    let def_id = *self.func_to_def_id.get(func.name.0).unwrap();
-                    let params = func
-                        .params
-                        .iter()
-                        .map(|param| self.map_param(param))
-                        .collect();
-                    let return_type = func.return_type.map(|r#type| self.map_type(&r#type));
-                    let body = self.map_scope(&func.body);
+                    let def_id = *self.func_to_def_id.get(name.0).unwrap();
+                    let params = params.iter().map(|param| self.map_param(param)).collect(); // FIXME: wrong scope
+                    let return_type = return_type.map(|r#type| self.map_type(&r#type));
+                    let body = self.map_scope(&body);
                     self.funcs.push(Func {
                         def_id,
-                        name: func.name,
+                        name: *name,
                         params,
                         return_type,
                         body,
                     });
                 }
-                ast::Stmt::VarDecl(var_decl) => {
-                    let value = self.map_expr(&var_decl.value);
+                ast::Stmt::VarDecl(ast::VarDecl { name, value }) => {
+                    let value = self.map_expr(value);
                     // The declaration should be added *after* the value is analyzed,
                     // to prevent cyclic variable definitions.
-                    let def_id = self.defs.add(var_decl.name.1);
-                    self.scopes
-                        .last_mut()
-                        .unwrap()
-                        .insert(var_decl.name.0, def_id);
+                    let def_id = self.defs.add(name.1);
+                    self.scopes.last_mut().unwrap().insert(name.0, def_id);
                     out_stmts.push(Stmt::VarDecl(VarDecl {
                         def_id,
-                        name: var_decl.name,
+                        name: *name,
                         value,
                     }));
                 }
                 ast::Stmt::Expr(expr) => {
                     out_stmts.push(Stmt::Expr(self.map_expr(expr)));
                 }
-                ast::Stmt::Assign(assign) => {
+                ast::Stmt::Assign(ast::Assign { op, target, value }) => {
                     out_stmts.push(Stmt::Assign(Assign {
-                        op: assign.op,
-                        target: self.map_expr(&assign.target),
-                        value: self.map_expr(&assign.value),
+                        op: *op,
+                        target: self.map_expr(target),
+                        value: self.map_expr(value),
                     }));
                 }
+                ast::Stmt::If(ast::If {
+                    cond,
+                    then,
+                    else_ifs,
+                    r#else,
+                }) => {
+                    let mut choices = vec![Choice {
+                        cond: self.map_expr(cond),
+                        then: self.map_scope(then),
+                    }];
+                    choices.extend(else_ifs.iter().map(|(cond, then)| Choice {
+                        cond: self.map_expr(cond),
+                        then: self.map_scope(then),
+                    }));
+                    out_stmts.push(Stmt::If(If {
+                        choices,
+                        r#else: r#else.as_ref().map(|r#else| self.map_scope(r#else)),
+                    }))
+                }
+                ast::Stmt::For(ast::For { var, iter, body }) => {
+                    let def_id = self.defs.add(var.1);
+                    self.scopes.last_mut().unwrap().insert(var.0, def_id); // FIXME: wrong scope
+                    out_stmts.push(Stmt::For(For {
+                        def_id,
+                        var: *var,
+                        iter: self.map_expr(iter),
+                        body: self.map_scope(body),
+                    }))
+                }
+                ast::Stmt::While(ast::While { cond, body }) => out_stmts.push(Stmt::While(While {
+                    cond: self.map_expr(cond),
+                    body: self.map_scope(body),
+                })),
+                ast::Stmt::Loop(ast::Loop { body }) => out_stmts.push(Stmt::Loop(Loop {
+                    body: self.map_scope(body),
+                })),
+                ast::Stmt::Break => out_stmts.push(Stmt::Break),
+                ast::Stmt::Continue => out_stmts.push(Stmt::Continue),
+                ast::Stmt::Return(Some(value)) => {
+                    out_stmts.push(Stmt::Return(Some(self.map_expr(value))))
+                }
+                ast::Stmt::Return(None) => out_stmts.push(Stmt::Return(None)),
             }
         }
         self.scopes.pop();
@@ -402,6 +474,7 @@ impl<'a> Constructor<'a> {
                     }
                 }
                 ast::Expr::Int(int) => Expr::Int(int),
+                ast::Expr::Bool(bool) => Expr::Bool(*bool),
                 ast::Expr::String(string) => Expr::String(string),
             },
             *span,
