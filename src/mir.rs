@@ -316,3 +316,96 @@ impl Constructor {
         }
     }
 }
+
+use indentify::*;
+
+impl std::fmt::Display for Mir<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // NOTE: Not sure why it doesn't work without the dyn conversion.
+        let f: &mut dyn std::fmt::Write = &mut IndentWriter::new("    ", f);
+        writeln!(f, "MIR:")?;
+        for func in &self.funcs {
+            writeln!(f, "{func}")?;
+        }
+        for (i, block) in self.blocks.iter().enumerate() {
+            writeln!(f, "block {i}: {block}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for Func<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            name,
+            stack_space,
+            blocks,
+        } = self;
+        writeln!(f, "func {name}({} locals) {{{INDENT}", stack_space - 1)?;
+        for (i, block) in blocks.iter().enumerate() {
+            writeln!(f, "block {i}: {block}")?;
+        }
+        write!(f, "{DEDENT}}}")?;
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for Block<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self { stmts, branch } = self;
+        writeln!(f, "{{{INDENT}")?;
+        for stmt in stmts {
+            writeln!(f, "{stmt}")?;
+        }
+        writeln!(f, "{branch}")?;
+        write!(f, "{DEDENT}}}")?;
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for Stmt<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            local_id,
+            op,
+            args,
+            func_id,
+            int,
+            string,
+        } = self;
+        write!(f, "var _{} = {op:?}", local_id.get() - 1)?;
+        match op {
+            Op::Int => write!(f, "<{}>", int)?,
+            Op::String => write!(f, "<{:?}>", string)?,
+            Op::Call => write!(f, "<{:?}>", func_id.get())?,
+            _ => {}
+        }
+        write!(f, "(",)?;
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "_{}", arg.get() - 1)?;
+        }
+        write!(f, ")")?;
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for Branch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Branch::Jump { target } => write!(f, "Jump(block {})", target.get()),
+            Branch::Cond { cond, target } => {
+                write!(f, "Cond({}, block {})", cond.get(), target.get())
+            }
+            Branch::Return(local_id) => {
+                write!(f, "Return")?;
+                match local_id {
+                    Some(local_id) => write!(f, "(_{})", local_id.get() - 1),
+                    None => Ok(()),
+                }
+            }
+        }
+    }
+}

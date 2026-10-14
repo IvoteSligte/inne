@@ -26,8 +26,20 @@ pub use typed_hir::{TypedHir, typed_hir_from_hir};
 #[command(about = "Compiler for the Inne programming language", long_about = None)]
 struct Args {
     /// The name of the Inne file to run.
-    #[arg(help = "The name of the Inne file to run.")]
     file: PathBuf,
+    /// The IR to emit for compiler debugging purposes.
+    #[arg(long)]
+    emit: Option<Ir>,
+}
+
+#[derive(clap::ValueEnum, Clone, PartialEq, Eq)]
+enum Ir {
+    Tokens,
+    ParseTree,
+    Ast,
+    Hir,
+    TypedHir,
+    Mir,
 }
 
 // TODO: display general diagnostics through ariadne as well
@@ -65,6 +77,9 @@ fn main() {
             return;
         }
     };
+    if args.emit == Some(Ir::Tokens) {
+        todo!();
+    }
     let parse_tree = match parser(filename)
         .parse(
             tokens
@@ -79,7 +94,13 @@ fn main() {
             return;
         }
     };
+    if args.emit == Some(Ir::ParseTree) {
+        todo!();
+    }
     let ast = ast_from_parse_tree(&parse_tree);
+    if args.emit == Some(Ir::Ast) {
+        todo!();
+    }
     let hir = match hir_from_ast(&ast) {
         Ok(hir) => hir,
         Err(errors) => {
@@ -87,6 +108,9 @@ fn main() {
             return;
         }
     };
+    if args.emit == Some(Ir::Hir) {
+        todo!();
+    }
     let typed_hir = match typed_hir_from_hir(hir) {
         Ok(typed_hir) => typed_hir,
         Err(errors) => {
@@ -94,7 +118,14 @@ fn main() {
             return;
         }
     };
+    if args.emit == Some(Ir::TypedHir) {
+        todo!();
+    }
     let mir = mir_from_typed_hir(&typed_hir);
+    if args.emit == Some(Ir::Mir) {
+        println!("{}", mir);
+        return;
+    }
     Interpreter::run(&mir);
 }
 

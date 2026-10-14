@@ -198,12 +198,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "indentify"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2dc93ea7ae8d8df4c2ea0ffe6a8aaa28b8a746becb49b607171388de4b170c5d"
+
+[[package]]
 name = "inne"
 version = "0.1.0"
 dependencies = [
  "ariadne",
  "chumsky",
  "clap",
+ "indentify",
 ]
 
 [[package]]

@@ -5,3 +5,5 @@ x += 1;
 func hello_world() {
     print("Hello, World!");
 }
+
+hello_world()
