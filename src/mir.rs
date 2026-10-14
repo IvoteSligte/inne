@@ -1,37 +1,42 @@
 use std::collections::HashMap;
 
 pub use crate::typed_hir::{AssignOp, BinaryOp, DefId, Int, UnaryOp};
-use crate::{TypedHir, typed_hir as thir};
+use crate::{TypedHir, hir::PRINT_DEF_ID, typed_hir as thir};
 
 pub struct Mir<'a> {
     pub funcs: Vec<Func<'a>>,
+    pub stack_space: usize,
     pub blocks: Vec<Block<'a>>,
 }
 
-/// ID of a basic block.
-#[derive(Debug, Clone, Copy)]
-pub struct BlockId(usize);
+macro_rules! usize_newtype {
+    ($name:ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct $name(usize);
 
-impl BlockId {
-    pub fn get(self) -> usize {
-        self.0
-    }
+        impl $name {
+            pub fn get(self) -> usize {
+                self.0
+            }
+        }
+    };
 }
 
-/// ID of a local variable (including parameters and return value).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LocalId(usize);
+usize_newtype!(FuncId);
+usize_newtype!(BlockId);
+usize_newtype!(LocalId);
+
+impl FuncId {
+    pub const DEFAULT: Self = Self(usize::MAX);
+}
 
 impl LocalId {
     pub const RETURN_VALUE: Self = Self(0);
-
-    pub fn get(self) -> usize {
-        self.0
-    }
 }
 
 pub struct Func<'a> {
-    pub def_id: DefId,
+    pub name: &'a str,
+    pub stack_space: usize,
     /// The basic blocks of the function.
     /// This is always at least 1 because the function has a return block.
     pub blocks: Vec<Block<'a>>,
@@ -49,6 +54,7 @@ pub enum Branch {
     Return(Option<LocalId>),
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum Op {
     Assign,
     Add,
@@ -62,14 +68,16 @@ pub enum Op {
     Int,
     String,
     Call,
+    Print,
 }
 
 pub struct Stmt<'a> {
+    pub local_id: LocalId,
     pub op: Op,
     pub args: Vec<LocalId>,
 
     // Constants (mutually exclusive and optional)
-    pub func_id: DefId,
+    pub func_id: FuncId,
     pub int: Int,
     pub string: &'a str,
 }
@@ -79,84 +87,80 @@ pub fn mir_from_typed_hir<'a>(typed_hir: &'a TypedHir<'a>) -> Mir<'a> {
 }
 
 struct FuncBuilder<'a> {
-    def_id: DefId,
-    /// Total number of statements in the function.
-    num_stmts: usize,
-    locals: HashMap<DefId, LocalId>,
+    /// Function name.
+    name: &'a str,
+    /// Maps [DefId]s for variable declarations to their [LocalId].
+    def_to_local: HashMap<DefId, LocalId>,
+    /// The number of parameters this function has.
+    num_params: usize,
+    /// Counter for the number of locals in this function.
+    num_locals: usize,
     blocks: Vec<Block<'a>>,
     /// Statements for the current block.
     stmts: Vec<Stmt<'a>>,
 }
 
 impl<'a> FuncBuilder<'a> {
-    pub fn new(def_id: DefId) -> Self {
+    pub fn new(name: &'a str, num_params: usize) -> Self {
         Self {
-            def_id,
-            locals: HashMap::new(),
-            num_stmts: 0,
+            name,
+            def_to_local: HashMap::new(),
+            num_params,
+            num_locals: 0,
             blocks: Vec::new(),
             stmts: Vec::new(),
         }
     }
 
     pub fn declare(&mut self, def_id: DefId, local_id: LocalId) {
-        self.locals.insert(def_id, local_id);
+        self.def_to_local.insert(def_id, local_id);
     }
 
     pub fn get_local(&self, def_id: DefId) -> LocalId {
-        *self.locals.get(&def_id).unwrap()
+        *self.def_to_local.get(&def_id).unwrap()
     }
 
-    pub fn push_stmt(&mut self, op: Op, args: Vec<LocalId>) -> LocalId {
+    fn new_local(&mut self) -> LocalId {
+        self.num_locals += 1;
+        // Equal to 1 + num_params + num_locals_before_this_function
+        // because the return value has Localid(0).
+        LocalId(self.num_params + self.num_locals)
+    }
+
+    fn push_stmt(
+        &mut self,
+        op: Op,
+        args: Vec<LocalId>,
+        int: Int,
+        string: &'a str,
+        func_id: FuncId,
+    ) -> LocalId {
+        let local_id = self.new_local();
         self.stmts.push(Stmt {
+            local_id,
             op,
             args,
-            int: 0,
-            string: "",
-            func_id: 0,
+            func_id,
+            int,
+            string,
         });
-        // Equal to 1 + current_stmt because the return slot is LocalId(0)
-        // NOTE: does this need to take params into account?
-        LocalId(self.num_stmts)
+        local_id
+    }
+
+    pub fn push_op(&mut self, op: Op, args: Vec<LocalId>) -> LocalId {
+        self.push_stmt(op, args, 0, "", FuncId::DEFAULT)
     }
 
     pub fn push_int(&mut self, int: Int) -> LocalId {
-        self.stmts.push(Stmt {
-            op: Op::Int,
-            args: Vec::new(),
-            int,
-            string: "",
-            func_id: 0,
-        });
-        // Equal to 1 + current_stmt because the return slot is LocalId(0)
-        // NOTE: does this need to take params into account?
-        LocalId(self.num_stmts)
+        self.push_stmt(Op::Int, Vec::new(), int, "", FuncId::DEFAULT)
     }
 
     pub fn push_string(&mut self, string: &'a str) -> LocalId {
-        self.stmts.push(Stmt {
-            op: Op::String,
-            args: Vec::new(),
-            int: 0,
-            string,
-            func_id: 0,
-        });
-        // Equal to 1 + current_stmt because the return slot is LocalId(0)
-        // NOTE: does this need to take params into account?
-        LocalId(self.num_stmts)
+        self.push_stmt(Op::String, Vec::new(), 0, string, FuncId::DEFAULT)
     }
 
-    pub fn push_call(&mut self, func_id: DefId, args: Vec<LocalId>) -> LocalId {
-        self.stmts.push(Stmt {
-            op: Op::Call,
-            args,
-            int: 0,
-            string: "",
-            func_id,
-        });
-        // Equal to 1 + current_stmt because the return slot is LocalId(0)
-        // NOTE: does this need to take params into account?
-        LocalId(self.num_stmts)
+    pub fn push_call(&mut self, func_id: FuncId, args: Vec<LocalId>) -> LocalId {
+        self.push_stmt(Op::Call, args, 0, "", func_id)
     }
 
     pub fn block_is_empty(&self) -> bool {
@@ -173,32 +177,46 @@ impl<'a> FuncBuilder<'a> {
     pub fn build(self) -> Func<'a> {
         debug_assert!(self.stmts.is_empty());
         Func {
-            def_id: self.def_id,
+            name: self.name,
+            // Return value + number of params + number of locals
+            stack_space: 1 + self.num_params + self.num_locals,
             blocks: self.blocks,
         }
     }
 }
 
-struct Constructor {}
+struct Constructor {
+    def_to_func: HashMap<DefId, FuncId>,
+}
 
 impl Constructor {
     pub fn map_thir<'a>(typed_hir: &'a TypedHir<'a>) -> Mir<'a> {
-        let mut _self = Self {};
+        let mut _self = Self {
+            def_to_func: typed_hir
+                .funcs
+                .iter()
+                .enumerate()
+                .map(|(i, func)| (func.def_id, FuncId(i)))
+                .collect(),
+        };
         let funcs = typed_hir
             .funcs
             .iter()
             .map(|func| _self.map_func(func))
             .collect();
-        let blocks = {
-            let mut builder = FuncBuilder::new(DefId::MAX);
-            _self.map_scope(&typed_hir.stmts, Branch::Return(None), &mut builder);
-            builder.build().blocks
-        };
-        Mir { funcs, blocks }
+        let mut builder = FuncBuilder::new("%main", 0);
+        _self.map_scope(&typed_hir.stmts, Branch::Return(None), &mut builder);
+        let main_func = builder.build();
+
+        Mir {
+            funcs,
+            stack_space: main_func.stack_space,
+            blocks: main_func.blocks,
+        }
     }
 
     fn map_func<'a>(&mut self, func: &'a thir::Func<'a>) -> Func<'a> {
-        let mut builder = FuncBuilder::new(func.def_id);
+        let mut builder = FuncBuilder::new(func.name.0, func.params.len());
         // TODO: allocate params? or is that handled by the caller?
         self.map_scope(&func.body, Branch::Return(None), &mut builder);
         builder.build()
@@ -240,9 +258,9 @@ impl Constructor {
                             Div => Op::Div,
                             Assign => unreachable!(),
                         };
-                        value_id = builder.push_stmt(op, vec![target_id, value_id]);
+                        value_id = builder.push_op(op, vec![target_id, value_id]);
                     }
-                    builder.push_stmt(Op::Assign, vec![target_id, value_id]);
+                    builder.push_op(Op::Assign, vec![target_id, value_id]);
                 }
             }
         }
@@ -266,7 +284,7 @@ impl Constructor {
                     BinaryOp::Eq => Op::Eq,
                     BinaryOp::NotEq => Op::NotEq,
                 };
-                builder.push_stmt(op, vec![left_id, right_id])
+                builder.push_op(op, vec![left_id, right_id])
             }
             thir::Expr::Unary(thir::Unary { op, expr }) => {
                 let expr_id = self.map_expr(&expr.0, builder);
@@ -274,7 +292,7 @@ impl Constructor {
                     UnaryOp::Neg => Op::Neg,
                     UnaryOp::Not => Op::Not,
                 };
-                builder.push_stmt(op, vec![expr_id])
+                builder.push_op(op, vec![expr_id])
             }
             thir::Expr::Call(thir::Call {
                 name: _,
@@ -285,7 +303,12 @@ impl Constructor {
                     .iter()
                     .map(|arg| self.map_expr(&arg.0, builder))
                     .collect();
-                builder.push_call(*def_id, arg_ids)
+                if *def_id == PRINT_DEF_ID {
+                    builder.push_op(Op::Print, arg_ids)
+                } else {
+                    let func_id = *self.def_to_func.get(def_id).unwrap();
+                    builder.push_call(func_id, arg_ids)
+                }
             }
             thir::Expr::Var(def_id) => builder.get_local(*def_id),
             thir::Expr::Int(int) => builder.push_int(int.parse().unwrap()),

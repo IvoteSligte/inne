@@ -95,8 +95,7 @@ fn main() {
         }
     };
     let mir = mir_from_typed_hir(&typed_hir);
-    let mut interpreter = Interpreter::new();
-    interpreter.run(&mir);
+    Interpreter::run(&mir);
 }
 
 fn print_parse_errors<E>(
