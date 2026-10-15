@@ -349,7 +349,12 @@ impl<'a> Constructor<'a> {
                     }
                     builder.set_current_block(end_block_id);
                 }
-                thir::Stmt::For(thir::For { iter, body, .. }) => {
+                thir::Stmt::For(thir::For {
+                    iter,
+                    body,
+                    def_id,
+                    var: _,
+                }) => {
                     // blocks:
                     // - init -> next
                     // - next -> body/end
@@ -363,6 +368,7 @@ impl<'a> Constructor<'a> {
                     // Next block
                     builder.set_current_block(next_block_id);
                     let var_id = builder.push_constant(Value::Nothing);
+                    builder.declare(*def_id, var_id);
                     let cond_id = builder.push_op(Op::Next, vec![iter_id, var_id]);
                     let not_cond_id = builder.push_op(Op::Not, vec![cond_id]);
                     builder.finish_block(Branch::Cond {
