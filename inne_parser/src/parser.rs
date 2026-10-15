@@ -1,7 +1,5 @@
 use chumsky::{input::ValueInput, prelude::*};
 
-mod diagnosis;
-
 // TODO: error recovery
 
 use crate::{Span, Spanned};
@@ -94,13 +92,24 @@ where
     (o, e.span())
 }
 
-pub fn parser<'tokens, 'src: 'tokens, I>(
+pub fn create_parser<'tokens, 'src: 'tokens, I>(
     filename: &'src str,
 ) -> impl Parser<'tokens, I, ParseTree<'src>, extra::Err<Rich<'tokens, Token<'src>, Span>>> + Clone
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {
-    let ident = select! { Token::Ident(ident) => ident }.map_with(with_span);
+    let stmt = stmt_parser();
+    stmt.repeated()
+        .collect()
+        .map(|stmts| ParseTree { filename, stmts })
+}
+
+fn stmt_parser<'tokens, 'src: 'tokens, I>()
+-> impl Parser<'tokens, I, Stmt<'src>, extra::Err<Rich<'tokens, Token<'src>, Span>>> + Clone
+where
+    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
+{
+    let ident = ident_parser();
     let r#type = select! {
         Token::Ident(ident) => match ident {
             "int" => Type::Int,
@@ -111,7 +120,7 @@ where
     }
     .map_with(with_span);
     let param = ident.then(r#type).map(|(name, r#type)| Param(name, r#type));
-    let stmt = recursive(|stmt| {
+    recursive(|stmt| {
         let block = stmt
             .repeated()
             .collect::<Vec<_>>()
@@ -130,86 +139,7 @@ where
             .map(|(((name, params), return_type), body)| {
                 Stmt::Func(name, params, return_type, body)
             });
-
-        let var = select! { Token::Ident(ident) => Expr::Var(ident) }.map_with(with_span);
-        let int = select! { Token::Int(int) => Expr::Int(int) }.map_with(with_span);
-        let bool = select! { Token::Bool(bool) => Expr::Bool(bool) }.map_with(with_span);
-        let string = select! { Token::String(string) => Expr::String(string) }.map_with(with_span);
-
-        let expr = recursive(|expr| {
-            // Function calls have very high precedence so we prioritise them
-            let call = ident
-                .then(
-                    expr.clone()
-                        .separated_by(just(Token::Comma))
-                        .allow_trailing()
-                        .collect::<Vec<_>>()
-                        .delimited_by(just(Token::LParen), just(Token::RParen))
-                        .map_with(with_span),
-                )
-                .map(|(name, args)| Expr::Call(name, args))
-                .map_with(with_span);
-
-            // Unambiguous expressions
-            let atom = choice((call, var, int, bool, string));
-
-            // Product ops (multiply and divide) have equal precedence
-            let op = just(Token::Op("*"))
-                .to(BinaryOp::Mul)
-                .or(just(Token::Op("/")).to(BinaryOp::Div))
-                .map_with(with_span);
-            let product = atom
-                .clone()
-                .foldl_with(op.then(atom.clone()).repeated(), |a, (op, b), e| {
-                    (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
-                });
-
-            // Sum ops (add and subtract) have equal precedence
-            let op = just(Token::Op("+"))
-                .to(BinaryOp::Add)
-                .or(just(Token::Op("-")).to(BinaryOp::Sub))
-                .map_with(with_span);
-            let sum = product
-                .clone()
-                .foldl_with(op.then(product).repeated(), |a, (op, b), e| {
-                    (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
-                });
-
-            // Comparison ops (equal, not-equal) have equal precedence
-            let op = just(Token::Op("=="))
-                .to(BinaryOp::Eq)
-                .or(just(Token::Op("!=")).to(BinaryOp::NotEq))
-                .map_with(with_span);
-            let equal = sum
-                .clone()
-                .foldl_with(op.then(sum).repeated(), |a, (op, b), e| {
-                    (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
-                });
-
-            let op = just(Token::Op("and")).to(BinaryOp::And).map_with(with_span);
-            let and = equal
-                .clone()
-                .foldl_with(op.then(equal).repeated(), |a, (op, b), e| {
-                    (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
-                });
-
-            let op = just(Token::Op("or")).to(BinaryOp::Or).map_with(with_span);
-            let or = and
-                .clone()
-                .foldl_with(op.then(and).repeated(), |a, (op, b), e| {
-                    (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
-                });
-
-            let binary = or;
-            let unary = just(Token::Op("-"))
-                .to(UnaryOp::Neg)
-                .or(just(Token::Op("not")).to(UnaryOp::Not))
-                .map_with(with_span)
-                .then(atom.clone())
-                .map(|(op, expr)| Expr::Unary(op, Box::new(expr)))
-                .map_with(with_span);
-            choice((binary, unary, atom))
-        });
+        let expr = expr_parser();
         let var_decl = just(Token::Var)
             .ignore_then(ident)
             .then_ignore(just(Token::Op("=")))
@@ -279,8 +209,140 @@ where
             expr.map(Stmt::Expr),
         ))
         .then_ignore(just(Token::Semi).or_not())
-    });
-    stmt.repeated()
-        .collect()
-        .map(|stmts| ParseTree { filename, stmts })
+    })
+}
+
+fn ident_parser<'tokens, 'src: 'tokens, I>()
+-> impl Parser<'tokens, I, Spanned<&'src str>, extra::Err<Rich<'tokens, Token<'src>, Span>>> + Copy
+where
+    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
+{
+    select! { Token::Ident(ident) => ident }.map_with(with_span)
+}
+
+fn expr_parser<'tokens, 'src: 'tokens, I>()
+-> impl Parser<'tokens, I, Spanned<Expr<'src>>, extra::Err<Rich<'tokens, Token<'src>, Span>>> + Clone
+where
+    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
+{
+    let ident = ident_parser();
+    let var = select! { Token::Ident(ident) => Expr::Var(ident) }.map_with(with_span);
+    let int = select! { Token::Int(int) => Expr::Int(int) }.map_with(with_span);
+    let bool = select! { Token::Bool(bool) => Expr::Bool(bool) }.map_with(with_span);
+    let string = select! { Token::String(string) => Expr::String(string) }.map_with(with_span);
+
+    recursive(|expr| {
+        // Function calls have very high precedence so we prioritise them
+        let call = ident
+            .then(
+                expr.clone()
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .map_with(with_span),
+            )
+            .map(|(name, args)| Expr::Call(name, args))
+            .map_with(with_span)
+            .boxed();
+
+        // Unambiguous expressions
+        let atom = choice((call, var, int, bool, string)).boxed();
+
+        // Product ops (multiply and divide) have equal precedence
+        let op = just(Token::Op("*"))
+            .to(BinaryOp::Mul)
+            .or(just(Token::Op("/")).to(BinaryOp::Div))
+            .map_with(with_span);
+        let product = atom
+            .clone()
+            .foldl_with(op.then(atom.clone()).repeated(), |a, (op, b), e| {
+                (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+            });
+
+        // Sum ops (add and subtract) have equal precedence
+        let op = just(Token::Op("+"))
+            .to(BinaryOp::Add)
+            .or(just(Token::Op("-")).to(BinaryOp::Sub))
+            .map_with(with_span);
+        let sum = product
+            .clone()
+            .foldl_with(op.then(product).repeated(), |a, (op, b), e| {
+                (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+            })
+            .boxed();
+
+        // Comparison ops (equal, not-equal) have equal precedence
+        let op = just(Token::Op("=="))
+            .to(BinaryOp::Eq)
+            .or(just(Token::Op("!=")).to(BinaryOp::NotEq))
+            .map_with(with_span);
+        let equal = sum
+            .clone()
+            .foldl_with(op.then(sum).repeated(), |a, (op, b), e| {
+                (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+            });
+
+        let op = just(Token::Op("and")).to(BinaryOp::And).map_with(with_span);
+        let and = equal
+            .clone()
+            .foldl_with(op.then(equal).repeated(), |a, (op, b), e| {
+                (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+            })
+            .boxed();
+
+        let op = just(Token::Op("or")).to(BinaryOp::Or).map_with(with_span);
+        let or = and
+            .clone()
+            .foldl_with(op.then(and).repeated(), |a, (op, b), e| {
+                (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+            });
+
+        let binary = or;
+        let unary = just(Token::Op("-"))
+            .to(UnaryOp::Neg)
+            .or(just(Token::Op("not")).to(UnaryOp::Not))
+            .map_with(with_span)
+            .then(atom.clone())
+            .map(|(op, expr)| Expr::Unary(op, Box::new(expr)))
+            .map_with(with_span);
+        choice((binary, unary, atom))
+    })
+    .boxed()
+}
+
+impl std::fmt::Display for AssignOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            AssignOp::Assign => "=",
+            AssignOp::Add => "+=",
+            AssignOp::Sub => "-=",
+            AssignOp::Mul => "*=",
+            AssignOp::Div => "/=",
+        })
+    }
+}
+
+impl std::fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Eq => "==",
+            BinaryOp::NotEq => "!=",
+            BinaryOp::And => "and",
+            BinaryOp::Or => "or",
+        })
+    }
+}
+
+impl std::fmt::Display for UnaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            UnaryOp::Neg => "-",
+            UnaryOp::Not => "not",
+        })
+    }
 }

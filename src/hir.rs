@@ -536,10 +536,10 @@ impl std::fmt::Display for Hir<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // NOTE: Not sure why it doesn't work without the dyn conversion.
         let f: &mut dyn std::fmt::Write = &mut IndentWriter::new("    ", f);
-        writeln!(f, "HIR ('{}')", self.filename)?;
+        writeln!(f, "HIR '{}'", self.filename)?;
         writeln!(f, "defs: {{{INDENT}")?;
-        for DefInfo { name, span } in &self.defs {
-            writeln!(f, "var {name} at {span}")?;
+        for (i, DefInfo { name, span }) in self.defs.iter().enumerate() {
+            writeln!(f, "_{i}: var {name} at {span};")?;
         }
         writeln!(f, "{DEDENT}}}")?;
 
@@ -551,57 +551,27 @@ impl std::fmt::Display for Hir<'_> {
             body,
         } in &self.funcs
         {
-            write!(f, "func '{} {name}(", def_id.get())?;
+            write!(f, "_{} func {name}(", def_id)?;
+            for (i, param) in params.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(", ")?;
+                }
+                write!(f, "{}: {}", param.name.0, param.r#type.0)?;
+            }
             write!(f, ") ")?;
             if let Some((return_type, _)) = return_type {
                 write!(f, "-> {return_type} ")?;
             }
             writeln!(f, "{{{INDENT}")?;
             for stmt in body {
-                stmt.display(f)?;
+                writeln!(f, "{stmt}")?;
             }
             writeln!(f, "{DEDENT}}}")?;
         }
         for stmt in &self.stmts {
-            stmt.display(f)?;
+            write!(f, "{stmt}")?;
         }
         Ok(())
-    }
-}
-
-impl std::fmt::Display for AssignOp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            AssignOp::Assign => "=",
-            AssignOp::Add => "+=",
-            AssignOp::Sub => "-=",
-            AssignOp::Mul => "*=",
-            AssignOp::Div => "/=",
-        })
-    }
-}
-
-impl std::fmt::Display for BinaryOp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            BinaryOp::Add => "+",
-            BinaryOp::Sub => "-",
-            BinaryOp::Mul => "*",
-            BinaryOp::Div => "/",
-            BinaryOp::Eq => "==",
-            BinaryOp::NotEq => "!=",
-            BinaryOp::And => "and",
-            BinaryOp::Or => "or",
-        })
-    }
-}
-
-impl std::fmt::Display for UnaryOp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            UnaryOp::Neg => "-",
-            UnaryOp::Not => "not",
-        })
     }
 }
 
@@ -613,9 +583,9 @@ impl<'a> std::fmt::Display for Stmt<'a> {
                 name: (name, _),
                 value: (value, _),
             }) => {
-                write!(f, "var '{def_id} {name} = {value};")?;
+                write!(f, "_{def_id} var {name} = {value};")?;
             }
-            Stmt::Expr((expr, _)) => expr.fmt(f)?,
+            Stmt::Expr((expr, _)) => write!(f, "{expr};")?,
             Stmt::Assign(Assign {
                 op: (op, _),
                 target: (target, _),
@@ -645,14 +615,14 @@ impl<'a> std::fmt::Display for Stmt<'a> {
                 }
             }
             Stmt::For(For {
-                def_id,
+                def_id: _,
                 var: (var, _),
                 iter: (iter, _),
                 body,
             }) => {
-                write!(f, "for {var} in {iter} {{{INDENT}")?;
+                writeln!(f, "for {var} in {iter} {{{INDENT}")?;
                 for stmt in body {
-                    write!(f, "{stmt}")?;
+                    writeln!(f, "{stmt}")?;
                 }
                 write!(f, "{DEDENT}}}")?;
             }
@@ -662,25 +632,25 @@ impl<'a> std::fmt::Display for Stmt<'a> {
             }) => {
                 writeln!(f, "while {cond} {{{INDENT}")?;
                 for stmt in body {
-                    write!(f, "{stmt}")?;
+                    writeln!(f, "{stmt}")?;
                 }
                 write!(f, "{DEDENT}}}")?;
             }
             Stmt::Loop(Loop { body }) => {
                 writeln!(f, "loop {{{INDENT}")?;
                 for stmt in body {
-                    write!(f, "{stmt}")?;
+                    writeln!(f, "{stmt}")?;
                 }
                 write!(f, "{DEDENT}}}")?;
             }
             Stmt::Break(_) => write!(f, "break;")?,
             Stmt::Continue(_) => write!(f, "continue;")?,
             Stmt::Return((value, _)) => {
-                write!(f, "return")?;
+                f.write_str("return")?;
                 if let Some((value, _)) = value {
                     write!(f, " {value}")?;
                 }
-                write!(f, ";")?;
+                f.write_str(";")?;
             }
         }
         Ok(())
@@ -698,20 +668,20 @@ impl<'a> std::fmt::Display for Expr<'a> {
             Expr::Unary(Unary { op: (op, _), expr }) => write!(f, "({op}{})", expr.0)?,
             Expr::Call(Call {
                 name: (name, _),
-                def_id,
+                def_id: _,
                 args,
             }) => {
                 write!(f, "{name}(")?;
                 for (i, (arg, _)) in args.iter().enumerate() {
                     if i > 0 {
-                        write!(f, ", ")?;
+                        f.write_str(", ")?;
                     }
                     write!(f, "{arg}")?;
                 }
-                write!(f, ")")?;
+                f.write_str(")")?;
             }
             Expr::Range(Range { start, end }) => write!(f, "{}..{}", start.0, end.0)?,
-            Expr::Var(def_id) => write!(f, "'{def_id}")?,
+            Expr::Var(def_id) => write!(f, "_{def_id}")?,
             Expr::Int(int) => write!(f, "{int}")?,
             Expr::Bool(bool) => write!(f, "{bool}")?,
             Expr::String(string) => write!(f, "{string:?}")?,

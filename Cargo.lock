@@ -208,9 +208,16 @@ name = "inne"
 version = "0.1.0"
 dependencies = [
  "ariadne",
- "chumsky",
  "clap",
  "indentify",
+ "inne_parser",
+]
+
+[[package]]
+name = "inne_parser"
+version = "0.1.0"
+dependencies = [
+ "chumsky",
 ]
 
 [[package]]

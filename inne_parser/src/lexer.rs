@@ -60,6 +60,9 @@ impl<'a> std::fmt::Display for Token<'a> {
             Return => f.write_str("return"),
             In => f.write_str("in"),
             Import => f.write_str("import"),
+            Not => f.write_str("not"),
+            And => f.write_str("and"),
+            Or => f.write_str("or"),
             Ident(ident) => f.write_str(ident),
             Bool(bool) => write!(f, "{bool}"),
             Int(int) => f.write_str(int),
@@ -85,7 +88,7 @@ impl<'a> std::fmt::Display for Token<'a> {
 
 use Token::*;
 
-pub fn lexer<'a>()
+pub fn create_lexer<'a>()
 -> impl Parser<'a, &'a str, Vec<Spanned<Token<'a>>>, extra::Err<Rich<'a, char, Span>>> {
     let escape = just('\\')
         .then(choice((
@@ -181,4 +184,5 @@ pub fn lexer<'a>()
     .padded()
     .repeated()
     .collect()
+    .boxed()
 }

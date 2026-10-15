@@ -3,21 +3,20 @@ use std::{ffi::OsStr, io, path::PathBuf};
 pub mod ast;
 pub mod hir;
 pub mod interpreter;
-pub mod lexer;
 pub mod mir;
-pub mod parser;
 pub mod typed_hir;
 
 use ariadne::{Color, Label, Report, ReportKind, sources};
-use chumsky::{Parser as _, error::Rich, input::Input};
 use clap::Parser;
 
 pub use ast::{Ast, ast_from_parse_tree};
 pub use hir::{Hir, hir_from_ast};
+pub use inne_parser as parser;
 pub use interpreter::Interpreter;
-pub use lexer::{Span, Spanned, Token, lexer};
 pub use mir::{Mir, mir_from_typed_hir};
-pub use parser::{ParseTree, parser};
+pub use parser::{
+    Input as _, ParseTree, Parser as _, Rich, Span, Spanned, Token, create_lexer, create_parser,
+};
 pub use typed_hir::{TypedHir, typed_hir_from_hir};
 
 #[derive(clap::Parser)]
@@ -71,7 +70,7 @@ fn main() {
         );
     }
     let filename = "filename.inne";
-    let tokens = match lexer().parse(&source).into_result() {
+    let tokens = match create_lexer().parse(&source).into_result() {
         Ok(tokens) => tokens,
         Err(errors) => {
             print_parse_errors(errors, filename, &source, "lexing");
@@ -81,7 +80,7 @@ fn main() {
     if args.emit == Some(Ir::Tokens) {
         todo!();
     }
-    let parse_tree = match parser(filename)
+    let parse_tree = match create_parser(filename)
         .parse(
             tokens
                 .as_slice()
