@@ -90,6 +90,14 @@ impl<'a> Interpreter<'a> {
                 debug_assert_eq!(discriminant(left), discriminant(right));
                 Value::Bool(left != right)
             }
+            Op::And => match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
+                (&Value::Bool(left), &Value::Bool(right)) => Value::Bool(left && right),
+                _ => unreachable!(),
+            },
+            Op::Or => match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
+                (&Value::Bool(left), &Value::Bool(right)) => Value::Bool(left || right),
+                _ => unreachable!(),
+            },
             Op::Neg => match self.get_local(stmt.args[0]) {
                 Value::Int(int) => Value::Int(-int),
                 _ => unreachable!(),

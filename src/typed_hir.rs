@@ -281,6 +281,18 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
                 }
                 or_type
             }
+            And | Or => {
+                if or_type.is_known() && or_type != Type::Bool {
+                    self.errors.add(
+                        format!(
+                            "Cannot apply boolean operator to values of type '{}'",
+                            or_type
+                        ),
+                        binary.op.1,
+                    );
+                }
+                or_type
+            }
             Eq | NotEq => Type::Bool,
         }
     }

@@ -110,7 +110,8 @@ fn main() {
         }
     };
     if args.emit == Some(Ir::Hir) {
-        todo!();
+        println!("{}", hir);
+        return;
     }
     let typed_hir = match typed_hir_from_hir(hir) {
         Ok(typed_hir) => typed_hir,

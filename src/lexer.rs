@@ -18,6 +18,9 @@ pub enum Token<'a> {
     Return,
     In,
     Import,
+    Not,
+    And,
+    Or,
     // Tokens with stored data
     Ident(&'a str),
     Int(&'a str),
@@ -113,8 +116,9 @@ pub fn lexer<'a>()
         .delimited_by(just('"'), just('"'));
 
     let operator = choice((
-        just("&&"),
-        just("||"),
+        just("and"),
+        just("or"),
+        just("not"),
         just("=="),
         just("!="),
         just("<="),

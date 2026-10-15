@@ -81,6 +81,8 @@ pub enum Op {
     Div,
     Eq,
     NotEq,
+    And,
+    Or,
     Neg,
     Not,
     Constant,
@@ -141,6 +143,11 @@ impl<'a> FuncBuilder<'a> {
     }
 
     pub fn get_local(&self, def_id: DefId) -> LocalId {
+        debug_assert!(
+            self.def_to_local.contains_key(&def_id),
+            "def_to_local does not contain def_id {def_id}; def_to_local: {:?}",
+            self.def_to_local
+        );
         *self.def_to_local.get(&def_id).unwrap()
     }
 
@@ -452,6 +459,8 @@ impl<'a> Constructor<'a> {
                     Div => Op::Div,
                     Eq => Op::Eq,
                     NotEq => Op::NotEq,
+                    And => Op::And,
+                    Or => Op::Or,
                 };
                 builder.push_op(op, vec![left_id, right_id])
             }

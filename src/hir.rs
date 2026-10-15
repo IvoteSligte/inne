@@ -13,20 +13,21 @@ pub type DefId = usize;
 pub const UNKNOWN_DEF_ID: DefId = DefId::MAX;
 pub const PRINT_DEF_ID: DefId = DefId::MAX - 1;
 
-pub struct DefInfo {
+pub struct DefInfo<'a> {
+    pub name: &'a str,
     pub span: Span,
 }
 
 pub struct Hir<'a> {
     pub(crate) filename: &'a str,
     /// Essentially `HashMap<DefId, DefInfo>`, but all [DefId]`s are consecutive.
-    pub(crate) defs: Vec<DefInfo>,
+    pub(crate) defs: Vec<DefInfo<'a>>,
     pub(crate) funcs: Vec<Func<'a>>,
     pub(crate) stmts: Vec<Stmt<'a>>,
 }
 
 impl<'a> Hir<'a> {
-    pub fn get_def_info(&self, def_id: DefId) -> &DefInfo {
+    pub fn get_def_info(&self, def_id: DefId) -> &DefInfo<'a> {
         debug_assert_ne!(def_id, UNKNOWN_DEF_ID);
         debug_assert_ne!(def_id, PRINT_DEF_ID);
         &self.defs[def_id]
@@ -236,16 +237,16 @@ impl<'a> Errors<'a> {
 
 /// Using a separate type instead of having the fields and methods directly on [Constructor]
 /// to prevent lifetime issues.
-struct ConstructorDefs(Vec<DefInfo>);
+struct ConstructorDefs<'a>(Vec<DefInfo<'a>>);
 
-impl ConstructorDefs {
-    pub fn add(&mut self, span: Span) -> DefId {
+impl<'a> ConstructorDefs<'a> {
+    pub fn add(&mut self, (name, span): Spanned<&'a str>) -> DefId {
         let id = self.0.len();
-        self.0.push(DefInfo { span });
+        self.0.push(DefInfo { name, span });
         id
     }
 
-    fn get(&self, def_id: DefId) -> &DefInfo {
+    fn get(&self, def_id: DefId) -> &DefInfo<'a> {
         debug_assert_ne!(def_id, UNKNOWN_DEF_ID);
         debug_assert_ne!(def_id, PRINT_DEF_ID);
         &self.0[def_id]
@@ -253,7 +254,7 @@ impl ConstructorDefs {
 }
 
 struct Constructor<'a> {
-    defs: ConstructorDefs,
+    defs: ConstructorDefs<'a>,
     funcs: Vec<Func<'a>>,
     // TODO: separate VarId and FuncId
     func_to_def_id: HashMap<&'a str, DefId>,
@@ -289,7 +290,7 @@ impl<'a> Constructor<'a> {
             } else {
                 _self
                     .func_to_def_id
-                    .insert(func.name.0, _self.defs.add(func.name.1));
+                    .insert(func.name.0, _self.defs.add(func.name));
             }
         }
         let stmts = _self.map_scope(&ast.stmts);
@@ -357,7 +358,7 @@ impl<'a> Constructor<'a> {
                     let value = self.map_expr(value);
                     // The declaration should be added *after* the value is analyzed,
                     // to prevent cyclic variable definitions.
-                    let def_id = self.defs.add(name.1);
+                    let def_id = self.defs.add(*name);
                     self.scopes.last_mut().unwrap().insert(name.0, def_id);
                     out_stmts.push(Stmt::VarDecl(VarDecl {
                         def_id,
@@ -395,7 +396,7 @@ impl<'a> Constructor<'a> {
                     }))
                 }
                 ast::Stmt::For(ast::For { var, iter, body }) => {
-                    let def_id = self.defs.add(var.1);
+                    let def_id = self.defs.add(*var);
                     let iter = self.map_expr(iter);
                     self.in_scope(|_self| {
                         _self.scopes.last_mut().unwrap().insert(var.0, def_id);
@@ -432,7 +433,7 @@ impl<'a> Constructor<'a> {
     where
         'b: 'a,
     {
-        let def_id = self.defs.add(param.name.1);
+        let def_id = self.defs.add(param.name);
         if let Some(prev_param_def_id) =
             self.scopes.last_mut().unwrap().insert(param.name.0, def_id)
         {
@@ -526,5 +527,195 @@ impl<'a> Constructor<'a> {
             },
             *span,
         )
+    }
+}
+
+use indentify::*;
+
+impl std::fmt::Display for Hir<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // NOTE: Not sure why it doesn't work without the dyn conversion.
+        let f: &mut dyn std::fmt::Write = &mut IndentWriter::new("    ", f);
+        writeln!(f, "HIR ('{}')", self.filename)?;
+        writeln!(f, "defs: {{{INDENT}")?;
+        for DefInfo { name, span } in &self.defs {
+            writeln!(f, "var {name} at {span}")?;
+        }
+        writeln!(f, "{DEDENT}}}")?;
+
+        for Func {
+            def_id,
+            name: (name, _),
+            params,
+            return_type,
+            body,
+        } in &self.funcs
+        {
+            write!(f, "func '{} {name}(", def_id.get())?;
+            write!(f, ") ")?;
+            if let Some((return_type, _)) = return_type {
+                write!(f, "-> {return_type} ")?;
+            }
+            writeln!(f, "{{{INDENT}")?;
+            for stmt in body {
+                stmt.display(f)?;
+            }
+            writeln!(f, "{DEDENT}}}")?;
+        }
+        for stmt in &self.stmts {
+            stmt.display(f)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for AssignOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            AssignOp::Assign => "=",
+            AssignOp::Add => "+=",
+            AssignOp::Sub => "-=",
+            AssignOp::Mul => "*=",
+            AssignOp::Div => "/=",
+        })
+    }
+}
+
+impl std::fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Eq => "==",
+            BinaryOp::NotEq => "!=",
+            BinaryOp::And => "and",
+            BinaryOp::Or => "or",
+        })
+    }
+}
+
+impl std::fmt::Display for UnaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            UnaryOp::Neg => "-",
+            UnaryOp::Not => "not",
+        })
+    }
+}
+
+impl<'a> std::fmt::Display for Stmt<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Stmt::VarDecl(VarDecl {
+                def_id,
+                name: (name, _),
+                value: (value, _),
+            }) => {
+                write!(f, "var '{def_id} {name} = {value};")?;
+            }
+            Stmt::Expr((expr, _)) => expr.fmt(f)?,
+            Stmt::Assign(Assign {
+                op: (op, _),
+                target: (target, _),
+                value: (value, _),
+            }) => {
+                write!(f, "{target} {op} {value};")?;
+            }
+            Stmt::If(If { choices, r#else }) => {
+                writeln!(f, "if {} {{{INDENT}", choices[0].cond.0)?;
+                for stmt in &choices[0].then {
+                    writeln!(f, "{stmt}")?;
+                }
+                write!(f, "{DEDENT}}}")?;
+                for choice in &choices[1..] {
+                    writeln!(f, " else if {} {{{INDENT}", choice.cond.0)?;
+                    for stmt in &choice.then {
+                        writeln!(f, "{stmt}")?;
+                    }
+                    write!(f, "{DEDENT}}}")?;
+                }
+                if let Some(r#else) = r#else {
+                    writeln!(f, " else {{{INDENT}")?;
+                    for stmt in r#else {
+                        writeln!(f, "{stmt}")?;
+                    }
+                    write!(f, "{DEDENT}}}")?;
+                }
+            }
+            Stmt::For(For {
+                def_id,
+                var: (var, _),
+                iter: (iter, _),
+                body,
+            }) => {
+                write!(f, "for {var} in {iter} {{{INDENT}")?;
+                for stmt in body {
+                    write!(f, "{stmt}")?;
+                }
+                write!(f, "{DEDENT}}}")?;
+            }
+            Stmt::While(While {
+                cond: (cond, _),
+                body,
+            }) => {
+                writeln!(f, "while {cond} {{{INDENT}")?;
+                for stmt in body {
+                    write!(f, "{stmt}")?;
+                }
+                write!(f, "{DEDENT}}}")?;
+            }
+            Stmt::Loop(Loop { body }) => {
+                writeln!(f, "loop {{{INDENT}")?;
+                for stmt in body {
+                    write!(f, "{stmt}")?;
+                }
+                write!(f, "{DEDENT}}}")?;
+            }
+            Stmt::Break(_) => write!(f, "break;")?,
+            Stmt::Continue(_) => write!(f, "continue;")?,
+            Stmt::Return((value, _)) => {
+                write!(f, "return")?;
+                if let Some((value, _)) = value {
+                    write!(f, " {value}")?;
+                }
+                write!(f, ";")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'a> std::fmt::Display for Expr<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expr::Binary(Binary {
+                op: (op, _),
+                left,
+                right,
+            }) => write!(f, "({} {op} {})", left.0, right.0)?,
+            Expr::Unary(Unary { op: (op, _), expr }) => write!(f, "({op}{})", expr.0)?,
+            Expr::Call(Call {
+                name: (name, _),
+                def_id,
+                args,
+            }) => {
+                write!(f, "{name}(")?;
+                for (i, (arg, _)) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{arg}")?;
+                }
+                write!(f, ")")?;
+            }
+            Expr::Range(Range { start, end }) => write!(f, "{}..{}", start.0, end.0)?,
+            Expr::Var(def_id) => write!(f, "'{def_id}")?,
+            Expr::Int(int) => write!(f, "{int}")?,
+            Expr::Bool(bool) => write!(f, "{bool}")?,
+            Expr::String(string) => write!(f, "{string:?}")?,
+        }
+        Ok(())
     }
 }

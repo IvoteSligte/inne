@@ -63,6 +63,8 @@ pub enum BinaryOp {
     Div,
     Eq,
     NotEq,
+    And,
+    Or,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -178,13 +180,27 @@ where
                 .to(BinaryOp::Eq)
                 .or(just(Token::Op("!=")).to(BinaryOp::NotEq))
                 .map_with(with_span);
-            let compare = sum
+            let equal = sum
                 .clone()
                 .foldl_with(op.then(sum).repeated(), |a, (op, b), e| {
                     (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
                 });
 
-            let binary = compare;
+            let op = just(Token::Op("and")).to(BinaryOp::And).map_with(with_span);
+            let and = equal
+                .clone()
+                .foldl_with(op.then(equal).repeated(), |a, (op, b), e| {
+                    (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+                });
+
+            let op = just(Token::Op("or")).to(BinaryOp::Or).map_with(with_span);
+            let or = and
+                .clone()
+                .foldl_with(op.then(and).repeated(), |a, (op, b), e| {
+                    (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+                });
+
+            let binary = or;
             let unary = just(Token::Op("-"))
                 .to(UnaryOp::Neg)
                 .or(just(Token::Op("not")).to(UnaryOp::Not))
