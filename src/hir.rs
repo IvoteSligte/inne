@@ -270,51 +270,58 @@ impl<'a> Constructor<'a> {
             scopes: Vec::new(),
             errors: Errors::new(ast.filename),
         };
-        let stmts = _self.map_scope(&ast.stmts);
-        match _self.errors.is_empty() {
-            true => Ok(Hir {
-                filename: ast.filename,
-                defs: _self.defs.0,
-                funcs: _self.funcs,
-                stmts,
-            }),
-            false => Err(_self.errors.into_inner()),
+        for stmt in &ast.stmts {
+            let ast::Stmt::Func(func) = stmt else {
+                continue;
+            };
+            if let Some(&prev_func_def_id) = _self.func_to_def_id.get(func.name.0) {
+                _self.errors.add_with_contexts(
+                    format!(
+                        "Function '{}' was already defined. Functions must have unique names.",
+                        func.name.0
+                    ),
+                    func.name.1,
+                    vec![(
+                        format!("Previously defined here:"),
+                        _self.defs.get(prev_func_def_id).span,
+                    )],
+                );
+            } else {
+                _self
+                    .func_to_def_id
+                    .insert(func.name.0, _self.defs.add(func.name.1));
+            }
         }
+        let stmts = _self.map_scope(&ast.stmts);
+        if !_self.errors.is_empty() {
+            return Err(_self.errors.into_inner());
+        }
+        Ok(Hir {
+            filename: ast.filename,
+            defs: _self.defs.0,
+            funcs: _self.funcs,
+            stmts,
+        })
+    }
+
+    fn in_scope<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.scopes.push(HashMap::new());
+        let value = f(self);
+        self.scopes.pop();
+        value
     }
 
     fn map_scope<'b>(&mut self, stmts: &[ast::Stmt<'b>]) -> Vec<Stmt<'b>>
     where
         'b: 'a,
     {
-        let is_top_level = self.scopes.is_empty();
-        if is_top_level {
-            for stmt in stmts {
-                let ast::Stmt::Func(func) = stmt else {
-                    continue;
-                };
-                if let Some(&prev_func_def_id) = self.func_to_def_id.get(func.name.0) {
-                    self.errors.add_with_contexts(
-                        format!(
-                            "Function '{}' was already defined. Functions must have unique names.",
-                            func.name.0
-                        ),
-                        func.name.1,
-                        vec![(
-                            format!("Previously defined here:"),
-                            self.defs.get(prev_func_def_id).span,
-                        )],
-                    );
-                } else {
-                    self.func_to_def_id
-                        .insert(func.name.0, self.defs.add(func.name.1));
-                }
-            }
-        }
+        self.in_scope(|_self| _self.map_stmts(stmts))
+    }
 
-        // NOTE: The scope always needs to be pushed at the end of this function,
-        //       so do not use `return`.
-        self.scopes.push(HashMap::new());
-
+    fn map_stmts<'b>(&mut self, stmts: &[ast::Stmt<'b>]) -> Vec<Stmt<'b>>
+    where
+        'b: 'a,
+    {
         let mut out_stmts = Vec::with_capacity(stmts.len());
         for stmt in stmts {
             match stmt {
@@ -324,7 +331,7 @@ impl<'a> Constructor<'a> {
                     return_type,
                     body,
                 }) => {
-                    if !is_top_level {
+                    if self.scopes.len() > 1 {
                         // TODO: add outer function as context
                         self.errors.add(
                             "Functions cannot not be defined inside other functions.",
@@ -333,15 +340,17 @@ impl<'a> Constructor<'a> {
                         continue;
                     }
                     let def_id = *self.func_to_def_id.get(name.0).unwrap();
-                    let params = params.iter().map(|param| self.map_param(param)).collect(); // FIXME: wrong scope
-                    let return_type = return_type.map(|r#type| self.map_type(&r#type));
-                    let body = self.map_scope(&body);
-                    self.funcs.push(Func {
-                        def_id,
-                        name: *name,
-                        params,
-                        return_type,
-                        body,
+                    self.in_scope(|_self| {
+                        let params = params.iter().map(|param| _self.map_param(param)).collect();
+                        let return_type = return_type.map(|r#type| _self.map_type(&r#type));
+                        let body = _self.map_stmts(&body);
+                        _self.funcs.push(Func {
+                            def_id,
+                            name: *name,
+                            params,
+                            return_type,
+                            body,
+                        });
                     });
                 }
                 ast::Stmt::VarDecl(ast::VarDecl { name, value }) => {
@@ -387,13 +396,17 @@ impl<'a> Constructor<'a> {
                 }
                 ast::Stmt::For(ast::For { var, iter, body }) => {
                     let def_id = self.defs.add(var.1);
-                    self.scopes.last_mut().unwrap().insert(var.0, def_id); // FIXME: wrong scope
-                    out_stmts.push(Stmt::For(For {
-                        def_id,
-                        var: *var,
-                        iter: self.map_expr(iter),
-                        body: self.map_scope(body),
-                    }))
+                    let iter = self.map_expr(iter);
+                    self.in_scope(|_self| {
+                        _self.scopes.last_mut().unwrap().insert(var.0, def_id);
+                        let body = _self.map_stmts(body);
+                        out_stmts.push(Stmt::For(For {
+                            def_id,
+                            var: *var,
+                            iter,
+                            body,
+                        }));
+                    });
                 }
                 ast::Stmt::While(ast::While { cond, body }) => out_stmts.push(Stmt::While(While {
                     cond: self.map_expr(cond),
@@ -412,7 +425,6 @@ impl<'a> Constructor<'a> {
                 }
             }
         }
-        self.scopes.pop();
         out_stmts
     }
 
