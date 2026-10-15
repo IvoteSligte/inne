@@ -202,32 +202,36 @@ impl<'a> FuncBuilder<'a> {
         self.finished_blocks.push((id, Block { stmts, branch }));
     }
 
-    pub fn build(self) -> Func<'a> {
+    pub fn build(mut self) -> Func<'a> {
         debug_assert!(self.current_block.1.is_empty());
         debug_assert!(self.queued_blocks.is_empty());
 
         // Replace placeholder block IDs with new ones now that their final positions are known.
-        let mut blocks = Vec::with_capacity(self.finished_blocks.len());
-        let mut id_map = Vec::from_iter(std::iter::repeat_n(
-            BlockId(usize::MAX),
-            self.finished_blocks.len(),
-        ));
-        for (new_id, (old_id, _)) in self.finished_blocks.iter().enumerate() {
-            id_map[old_id.get()] = BlockId(new_id);
-        }
-        for (old_id, mut block) in self.finished_blocks {
-            match &mut block.branch {
-                Branch::Jump(target) => *target = id_map[target.get()],
-                Branch::Cond { cond: _, target } => *target = id_map[target.get()],
-                Branch::Return => {}
+        {
+            let mut id_map = Vec::from_iter(std::iter::repeat_n(
+                BlockId(usize::MAX),
+                self.finished_blocks.len(),
+            ));
+            for (new_id, (old_id, _)) in self.finished_blocks.iter().enumerate() {
+                id_map[old_id.get()] = BlockId(new_id);
             }
-            blocks[id_map[old_id.get()].get()] = block;
+            for (_, block) in &mut self.finished_blocks {
+                match &mut block.branch {
+                    Branch::Jump(target) => *target = id_map[target.get()],
+                    Branch::Cond { cond: _, target } => *target = id_map[target.get()],
+                    Branch::Return => {}
+                }
+            }
         }
         Func {
             name: self.name,
             // Return value + number of params + number of locals
             stack_space: 1 + self.num_params + self.num_locals,
-            blocks,
+            blocks: self
+                .finished_blocks
+                .into_iter()
+                .map(|(_, block)| block)
+                .collect(),
         }
     }
 }
