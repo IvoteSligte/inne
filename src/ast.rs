@@ -1,4 +1,4 @@
-use crate::{ParseTree, Spanned, parser};
+use crate::{ParseTree, Span, Spanned, parser};
 
 pub use crate::parser::{AssignOp, BinaryOp, UnaryOp};
 
@@ -16,9 +16,9 @@ pub enum Stmt<'a> {
     For(For<'a>),
     While(While<'a>),
     Loop(Loop<'a>),
-    Break,
-    Continue,
-    Return(Option<Spanned<Expr<'a>>>),
+    Break(Span),
+    Continue(Span),
+    Return(Spanned<Option<Spanned<Expr<'a>>>>),
 }
 
 pub type Block<'a> = Vec<Stmt<'a>>;
@@ -65,6 +65,7 @@ pub enum Expr<'a> {
     Binary(Binary<'a>),
     Unary(Unary<'a>),
     Call(Call<'a>),
+    Range(Range<'a>),
     Var(&'a str),
     Int(&'a str),
     Bool(bool),
@@ -85,6 +86,11 @@ pub struct Unary<'a> {
 pub struct Call<'a> {
     pub name: Spanned<&'a str>,
     pub args: Vec<Spanned<Expr<'a>>>,
+}
+
+pub struct Range<'a> {
+    pub start: Box<Spanned<Expr<'a>>>,
+    pub end: Box<Spanned<Expr<'a>>>,
 }
 
 pub struct Assign<'a> {
@@ -155,6 +161,10 @@ fn map_expr<'a>((expr, span): &Spanned<parser::Expr<'a>>) -> Spanned<Expr<'a>> {
             parser::Expr::Int(int) => Expr::Int(int),
             parser::Expr::Bool(bool) => Expr::Bool(*bool),
             parser::Expr::String(string) => Expr::String(string),
+            parser::Expr::Range(start, end) => Expr::Range(Range {
+                start: Box::new(map_expr(start)),
+                end: Box::new(map_expr(end)),
+            }),
         },
         *span,
     )
@@ -199,9 +209,9 @@ fn map_stmt<'a>(stmt: &parser::Stmt<'a>) -> Stmt<'a> {
         parser::Stmt::Loop(body) => Stmt::Loop(Loop {
             body: map_block(body),
         }),
-        parser::Stmt::Break => Stmt::Break,
-        parser::Stmt::Continue => Stmt::Continue,
-        parser::Stmt::Return(value) => Stmt::Return(value.as_ref().map(map_expr)),
+        parser::Stmt::Break(span) => Stmt::Break(*span),
+        parser::Stmt::Continue(span) => Stmt::Continue(*span),
+        parser::Stmt::Return((value, span)) => Stmt::Return((value.as_ref().map(map_expr), *span)),
     }
 }
 

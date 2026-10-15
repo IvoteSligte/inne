@@ -105,7 +105,7 @@ fn main() {
     let hir = match hir_from_ast(&ast) {
         Ok(hir) => hir,
         Err(errors) => {
-            print_hir_errors(&errors, &source, filename, "symbol resolution");
+            print_ir_errors(&errors, &source, filename, "symbol resolution");
             return;
         }
     };
@@ -115,14 +115,20 @@ fn main() {
     let typed_hir = match typed_hir_from_hir(hir) {
         Ok(typed_hir) => typed_hir,
         Err(errors) => {
-            print_hir_errors(&errors, &source, filename, "type checking");
+            print_ir_errors(&errors, &source, filename, "type checking");
             return;
         }
     };
     if args.emit == Some(Ir::TypedHir) {
         todo!();
     }
-    let mir = mir_from_typed_hir(&typed_hir);
+    let mir = match mir_from_typed_hir(&typed_hir) {
+        Ok(mir) => mir,
+        Err(errors) => {
+            print_ir_errors(&errors, &source, filename, "control-flow analysis");
+            return;
+        }
+    };
     if args.emit == Some(Ir::Mir) {
         println!("{}", mir);
         return;
@@ -158,7 +164,7 @@ fn print_parse_errors<E>(
     }
 }
 
-fn print_hir_errors<'a>(
+fn print_ir_errors<'a>(
     errors: impl IntoIterator<Item = &'a hir::Error<'a>>,
     source: &str,
     filename: &'static str,

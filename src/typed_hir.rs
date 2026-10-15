@@ -2,7 +2,7 @@ use std::num::IntErrorKind;
 
 pub use crate::hir::{
     Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, DefId, Error, Expr, For, Func, Hir,
-    If, Loop, Param, Stmt, Type, Unary, UnaryOp, VarDecl, While,
+    If, Loop, Param, Range, Stmt, Type, Unary, UnaryOp, VarDecl, While,
 };
 
 pub type Int = i64;
@@ -38,42 +38,50 @@ pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error<'a
             }
         })
         .collect();
-
-    let mut type_checker = TypeChecker {
-        errors: Errors::new(hir.filename),
-        defs,
+    let (errors, defs) = {
+        let mut type_checker = TypeChecker {
+            errors: Errors::new(hir.filename),
+            defs,
+            funcs: &hir.funcs,
+            expected_return_type: Type::Nothing,
+        };
+        type_checker.check_stmts(&hir.stmts);
+        type_checker.check_funcs();
+        (type_checker.errors, type_checker.defs)
     };
-    type_checker.check_funcs(&hir.funcs);
-    type_checker.check_stmts(&hir.funcs, &hir.stmts);
-    match type_checker.errors.is_empty() {
-        true => {
-            debug_assert!(type_checker.defs.iter().all(|def| def.r#type.is_known()));
-            Ok(TypedHir {
-                filename: hir.filename,
-                defs: type_checker.defs,
-                funcs: hir.funcs,
-                stmts: hir.stmts,
-            })
-        }
-        false => Err(type_checker.errors.into_inner()),
+    if !errors.is_empty() {
+        return Err(errors.into_inner());
     }
+    debug_assert!(defs.iter().all(|def| def.r#type.is_known()));
+    Ok(TypedHir {
+        filename: hir.filename,
+        defs,
+        stmts: hir.stmts,
+        funcs: hir.funcs,
+    })
 }
 
-struct TypeChecker<'a> {
+struct TypeChecker<'a, 'b> {
     errors: Errors<'a>,
     defs: Vec<DefInfo>,
+    funcs: &'b [Func<'a>],
+    expected_return_type: Type,
 }
 
-impl<'a> TypeChecker<'a> {
-    fn check_funcs(&mut self, funcs: &[Func<'a>]) {
-        for func in funcs {
+impl<'a, 'b> TypeChecker<'a, 'b> {
+    fn check_funcs(&mut self) {
+        for func in self.funcs {
+            self.expected_return_type = func
+                .return_type
+                .map(|(r#type, _)| r#type)
+                .unwrap_or(Type::Nothing);
             self.defs[func.def_id].r#type = Type::Function;
 
             for param in &func.params {
                 self.defs[param.def_id].r#type = param.r#type.0;
                 self.check_type(&param.r#type);
             }
-            self.check_stmts(funcs, &func.body);
+            self.check_stmts(&func.body);
             if let Some(r#type) = func.return_type.as_ref() {
                 self.check_type(r#type);
             }
@@ -89,28 +97,29 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        self.expected_return_type = Type::Nothing;
     }
 
-    fn check_stmt(&mut self, funcs: &[Func<'a>], stmt: &Stmt<'a>) {
+    fn check_stmt(&mut self, stmt: &Stmt<'a>) {
         match stmt {
             Stmt::VarDecl(VarDecl {
                 def_id,
                 name: _,
                 value,
             }) => {
-                let (r#type, _) = self.check_expr(funcs, value);
+                let (r#type, _) = self.check_expr(value);
                 self.defs[*def_id].r#type = r#type;
             }
             Stmt::Expr(expr) => {
-                self.check_expr(funcs, expr);
+                self.check_expr(expr);
             }
             Stmt::Assign(Assign {
                 op: (op, op_span),
                 target,
                 value,
             }) => {
-                let (target_type, target_is_assignable) = self.check_expr(funcs, target);
-                let (value_type, _) = self.check_expr(funcs, value);
+                let (target_type, target_is_assignable) = self.check_expr(target);
+                let (value_type, _) = self.check_expr(value);
                 if !target_is_assignable {
                     self.errors.add(
                         "The left-hand-side of an assignment must be a variable.",
@@ -145,7 +154,7 @@ impl<'a> TypeChecker<'a> {
             }
             Stmt::If(If { choices, r#else }) => {
                 for Choice { cond, then } in choices {
-                    let (cond_type, _) = self.check_expr(funcs, cond);
+                    let (cond_type, _) = self.check_expr(cond);
                     if cond_type != Type::Bool {
                         let message = format!(
                             "If-conditions must be booleans ('bool'). Found '{}'.",
@@ -153,40 +162,80 @@ impl<'a> TypeChecker<'a> {
                         );
                         self.errors.add(message, cond.1)
                     }
-                    self.check_stmts(funcs, then);
+                    self.check_stmts(then);
                 }
                 if let Some(r#else) = r#else {
-                    self.check_stmts(funcs, r#else);
+                    self.check_stmts(r#else);
                 }
             }
             Stmt::For(For {
                 def_id,
-                var,
+                var: _,
                 iter,
                 body,
-            }) => todo!(), // NOTE: make sure to set var's type in its DefInfo
-            Stmt::While(While { cond, body }) => todo!(),
-            Stmt::Loop(Loop { body }) => todo!(),
-            Stmt::Break => todo!(),
-            Stmt::Continue => todo!(),
-            Stmt::Return(value) => todo!(),
+            }) => {
+                let (iter_type, _) = self.check_expr(iter);
+                let var_type = match iter_type {
+                    Type::Range => Type::Int,
+                    _ => {
+                        // TODO: add "Did you mean to use a range?" as context if iter_type==Type::Int
+                        self.errors
+                            .add(format!("Cannot iterate over type '{}'", iter_type), iter.1);
+                        Type::UNKNOWN
+                    }
+                };
+                self.defs[*def_id].r#type = var_type;
+                self.check_stmts(body);
+            }
+            Stmt::While(While { cond, body }) => {
+                let (cond_type, _) = self.check_expr(cond);
+                if cond_type != Type::Bool {
+                    let message = format!(
+                        "While-conditions must be booleans ('bool'). Found '{}'.",
+                        cond_type
+                    );
+                    self.errors.add(message, cond.1)
+                }
+                self.check_stmts(body);
+            }
+            Stmt::Loop(Loop { body }) => {
+                self.check_stmts(body);
+            }
+            Stmt::Break(_) => {}
+            Stmt::Continue(_) => {}
+            Stmt::Return((value, span)) => {
+                let value_type = value
+                    .as_ref()
+                    .map(|value| self.check_expr(value).0)
+                    .unwrap_or(Type::Nothing);
+                if value_type != self.expected_return_type {
+                    // TODO: add function return type span as context
+                    self.errors.add(
+                        format!(
+                            "Expected return type '{}', but found '{}'",
+                            self.expected_return_type, value_type
+                        ),
+                        value.as_ref().map(|(_, span)| *span).unwrap_or(*span),
+                    );
+                }
+            }
         }
     }
 
-    fn check_stmts(&mut self, funcs: &[Func<'a>], stmts: &[Stmt<'a>]) {
+    fn check_stmts(&mut self, stmts: &[Stmt<'a>]) {
         for stmt in stmts {
-            self.check_stmt(funcs, stmt);
+            self.check_stmt(stmt);
         }
     }
 
     /// Returns the expression's type and whether it can be assigned to.
     /// Expressions can only be assigned to if they are variables.
-    fn check_expr(&mut self, funcs: &[Func<'a>], (expr, span): &Spanned<Expr<'a>>) -> (Type, bool) {
+    fn check_expr(&mut self, (expr, span): &Spanned<Expr<'a>>) -> (Type, bool) {
         (
             match expr {
-                Expr::Binary(binary) => self.check_binary(funcs, (binary, *span)),
-                Expr::Unary(unary) => self.check_unary(funcs, (unary, *span)),
-                Expr::Call(call) => self.check_call(funcs, (call, *span)),
+                Expr::Binary(binary) => self.check_binary((binary, *span)),
+                Expr::Unary(unary) => self.check_unary((unary, *span)),
+                Expr::Call(call) => self.check_call((call, *span)),
                 Expr::Var(def_id) => return (self.defs[*def_id].r#type, true),
                 Expr::Int(int) => {
                     self.check_int((int, *span));
@@ -194,14 +243,19 @@ impl<'a> TypeChecker<'a> {
                 }
                 Expr::Bool(_) => Type::Bool,
                 Expr::String(_) => Type::String,
+                Expr::Range(Range { start, end }) => {
+                    self.check_expr(start);
+                    self.check_expr(end);
+                    Type::Range
+                }
             },
             false,
         )
     }
 
-    fn check_binary(&mut self, funcs: &[Func<'a>], (binary, span): Spanned<&Binary<'a>>) -> Type {
-        let (left_type, _) = self.check_expr(funcs, &binary.left);
-        let (right_type, _) = self.check_expr(funcs, &binary.right);
+    fn check_binary(&mut self, (binary, span): Spanned<&Binary<'a>>) -> Type {
+        let (left_type, _) = self.check_expr(&binary.left);
+        let (right_type, _) = self.check_expr(&binary.right);
         let or_type = left_type.or(right_type); // Known if either one is known
 
         if or_type.is_known() && left_type != right_type {
@@ -231,8 +285,8 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn check_unary(&mut self, funcs: &[Func<'a>], (unary, span): Spanned<&Unary<'a>>) -> Type {
-        let (expr_type, _) = self.check_expr(funcs, &unary.expr);
+    fn check_unary(&mut self, (unary, span): Spanned<&Unary<'a>>) -> Type {
+        let (expr_type, _) = self.check_expr(&unary.expr);
         if expr_type.is_unknown() {
             return expr_type;
         }
@@ -263,13 +317,14 @@ impl<'a> TypeChecker<'a> {
         expr_type
     }
 
-    fn check_call(&mut self, funcs: &[Func<'a>], (call, span): Spanned<&Call<'a>>) -> Type {
+    fn check_call(&mut self, (call, span): Spanned<&Call<'a>>) -> Type {
         if call.def_id == PRINT_DEF_ID {
             // print(...) accepts any number of arguments of any type.
             return Type::Nothing;
         }
         // TODO: faster lookup
-        let func = funcs
+        let func = self
+            .funcs
             .iter()
             .find(|func| func.def_id == call.def_id)
             .unwrap();
@@ -304,7 +359,7 @@ impl<'a> TypeChecker<'a> {
             self.errors.add(message, after_params_span);
         }
         for (arg @ (_, arg_span), param) in std::iter::zip(args, params) {
-            let (arg_type, _) = self.check_expr(funcs, arg);
+            let (arg_type, _) = self.check_expr(arg);
             let (param_type, _) = param.r#type;
             if arg_type.is_known() && arg_type != param_type {
                 let message = format!(
@@ -342,9 +397,8 @@ impl<'a> TypeChecker<'a> {
     }
 
     pub fn check_type(&mut self, (r#type, span): &Spanned<Type>) {
-        match r#type {
-            Type::Named(name) => self.errors.add(format!("Unknown type '{name}'"), *span),
-            Type::Int | Type::Bool | Type::String | Type::Nothing | Type::Function => {}
+        if let Type::Named(name) = r#type {
+            self.errors.add(format!("Unknown type '{name}'"), *span);
         }
     }
 }

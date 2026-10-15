@@ -41,9 +41,9 @@ pub enum Stmt<'a> {
     For(For<'a>),
     While(While<'a>),
     Loop(Loop<'a>),
-    Break,
-    Continue,
-    Return(Option<Spanned<Expr<'a>>>),
+    Break(Span),
+    Continue(Span),
+    Return(Spanned<Option<Spanned<Expr<'a>>>>),
 }
 
 pub type Block<'a> = Vec<Stmt<'a>>;
@@ -66,11 +66,16 @@ pub struct Param<'a> {
 pub enum Type {
     Nothing,
     Int,
+    // Float
     Bool,
     String,
     /// Typed HIR-only
     Function,
-    Named(DefId),
+    Range,
+    // List(TypeId)
+    // Map { key: TypeId, value: TypeId }
+    // Tuple
+    Named(DefId), // TODO: TypeId instead of DefId
 }
 
 impl Type {
@@ -96,6 +101,7 @@ impl std::fmt::Display for Type {
             Type::Int => "int",
             Type::Bool => "bool",
             Type::String => "string",
+            Type::Range => "range",
             Type::Function => "function",
             Type::Named(def_id) => return write!(f, "{def_id}"),
         })
@@ -112,6 +118,7 @@ pub enum Expr<'a> {
     Binary(Binary<'a>),
     Unary(Unary<'a>),
     Call(Call<'a>),
+    Range(Range<'a>),
     Var(DefId),
     Int(&'a str),
     Bool(bool),
@@ -133,6 +140,11 @@ pub struct Call<'a> {
     pub name: Spanned<&'a str>,
     pub def_id: DefId,
     pub args: Vec<Spanned<Expr<'a>>>,
+}
+
+pub struct Range<'a> {
+    pub start: Box<Spanned<Expr<'a>>>,
+    pub end: Box<Spanned<Expr<'a>>>,
 }
 
 pub struct Assign<'a> {
@@ -243,6 +255,7 @@ impl ConstructorDefs {
 struct Constructor<'a> {
     defs: ConstructorDefs,
     funcs: Vec<Func<'a>>,
+    // TODO: separate VarId and FuncId
     func_to_def_id: HashMap<&'a str, DefId>,
     scopes: Vec<HashMap<&'a str, DefId>>,
     errors: Errors<'a>,
@@ -389,12 +402,14 @@ impl<'a> Constructor<'a> {
                 ast::Stmt::Loop(ast::Loop { body }) => out_stmts.push(Stmt::Loop(Loop {
                     body: self.map_scope(body),
                 })),
-                ast::Stmt::Break => out_stmts.push(Stmt::Break),
-                ast::Stmt::Continue => out_stmts.push(Stmt::Continue),
-                ast::Stmt::Return(Some(value)) => {
-                    out_stmts.push(Stmt::Return(Some(self.map_expr(value))))
+                ast::Stmt::Break(span) => out_stmts.push(Stmt::Break(*span)),
+                ast::Stmt::Continue(span) => out_stmts.push(Stmt::Continue(*span)),
+                ast::Stmt::Return((value, span)) => {
+                    out_stmts.push(Stmt::Return((
+                        value.as_ref().map(|value| self.map_expr(value)),
+                        *span,
+                    )));
                 }
-                ast::Stmt::Return(None) => out_stmts.push(Stmt::Return(None)),
             }
         }
         self.scopes.pop();
@@ -476,6 +491,10 @@ impl<'a> Constructor<'a> {
                 ast::Expr::Int(int) => Expr::Int(int),
                 ast::Expr::Bool(bool) => Expr::Bool(*bool),
                 ast::Expr::String(string) => Expr::String(string),
+                ast::Expr::Range(ast::Range { start, end }) => Expr::Range(Range {
+                    start: Box::new(self.map_expr(start)),
+                    end: Box::new(self.map_expr(end)),
+                }),
             },
             *span,
         )

@@ -39,9 +39,9 @@ pub enum Stmt<'a> {
     For(Spanned<&'a str>, Spanned<Expr<'a>>, Block<'a>),
     While(Spanned<Expr<'a>>, Block<'a>),
     Loop(Block<'a>),
-    Break,
-    Continue,
-    Return(Option<Spanned<Expr<'a>>>),
+    Break(Span),
+    Continue(Span),
+    Return(Spanned<Option<Spanned<Expr<'a>>>>),
 }
 
 pub type Block<'a> = Vec<Stmt<'a>>;
@@ -79,6 +79,7 @@ pub enum Expr<'a> {
     Int(&'a str),
     Bool(bool),
     String(&'a str),
+    Range(Box<Spanned<Self>>, Box<Spanned<Self>>),
 }
 
 use crate::Token;
@@ -230,7 +231,15 @@ where
         let for_stmt = just(Token::For)
             .ignore_then(ident)
             .then_ignore(just(Token::In))
-            .then(expr.clone())
+            .then(
+                expr.clone()
+                    .then(just(Token::DotDot).ignore_then(expr.clone()).or_not())
+                    .map_with(with_span)
+                    .map(|((expr, range_end), range_span)| match range_end {
+                        Some(end) => (Expr::Range(Box::new(expr), Box::new(end)), range_span),
+                        None => expr,
+                    }),
+            )
             .then(block.clone())
             .map(|((var, iter), block)| Stmt::For(var, iter, block));
         let while_stmt = just(Token::While)
@@ -246,10 +255,10 @@ where
             for_stmt,
             while_stmt,
             loop_stmt,
-            just(Token::Break).map(|_| Stmt::Break),
-            just(Token::Continue).map(|_| Stmt::Continue),
+            just(Token::Break).map_with(|_, e| Stmt::Break(e.span())),
+            just(Token::Continue).map_with(|_, e| Stmt::Continue(e.span())),
             just(Token::Return)
-                .ignore_then(expr.clone().or_not())
+                .ignore_then(expr.clone().or_not().map_with(with_span))
                 .map(|expr| Stmt::Return(expr)),
             expr.map(Stmt::Expr),
         ))

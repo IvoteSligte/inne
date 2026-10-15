@@ -2,14 +2,6 @@ use crate::{Mir, mir::*};
 
 use std::{mem::discriminant, ops::ControlFlow};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Value {
-    Nothing,
-    Int(Int),
-    Bool(bool),
-    String(Vec<char>),
-}
-
 pub struct Interpreter<'a> {
     funcs: &'a [Func<'a>],
     stack: Vec<Value>,
@@ -48,7 +40,7 @@ impl<'a> Interpreter<'a> {
         self.run_blocks(&func.blocks);
     }
 
-    fn run_blocks(&mut self, blocks: &[Block<'a>]) {
+    fn run_blocks(&mut self, blocks: &[Block]) {
         let mut block_index = 0;
         while block_index < blocks.len() {
             let block = &blocks[block_index];
@@ -63,7 +55,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn run_stmt(&mut self, stmt: &Stmt<'_>) {
+    fn run_stmt(&mut self, stmt: &Stmt) {
         // TODO: arithmetic overflow checks
         let value = match stmt.op {
             Op::Assign => {
@@ -106,9 +98,7 @@ impl<'a> Interpreter<'a> {
                 Value::Bool(bool) => Value::Bool(!bool),
                 _ => unreachable!(),
             },
-            Op::Int => Value::Int(stmt.int),
-            Op::Bool => Value::Bool(stmt.int > 0),
-            Op::String => Value::String(stmt.string.chars().collect()),
+            Op::Constant => stmt.value.clone(),
             Op::Call => {
                 // Push stack frame.
                 let func = &self.funcs[stmt.func_id.get()];
@@ -144,11 +134,34 @@ impl<'a> Interpreter<'a> {
                                 print!("{}", char);
                             }
                         }
+                        Value::Range { .. } => unreachable!(),
                     }
                 }
                 println!();
                 Value::Nothing
             }
+            Op::Range => match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
+                (&Value::Int(start), &Value::Int(end)) => Value::Range { start, end },
+                _ => unreachable!(),
+            },
+            Op::IntoIter => match self.get_local(stmt.args[0]) {
+                &Value::Range { start, end } => Value::Range { start, end },
+                _ => unreachable!(),
+            },
+            Op::Next => match self.get_local(stmt.args[0]) {
+                &Value::Range { start, end } => {
+                    if start < end {
+                        let new_range = Value::Range {
+                            start: start + 1,
+                            end,
+                        };
+                        self.set_local(stmt.args[0], new_range);
+                        self.set_local(stmt.args[1], Value::Int(start));
+                    }
+                    Value::Bool(start < end)
+                }
+                _ => unreachable!(),
+            },
         };
         self.set_local(stmt.local_id, value);
     }
@@ -157,24 +170,17 @@ impl<'a> Interpreter<'a> {
         match branch {
             Branch::Jump(target) => {
                 *block_index = target.get();
+                ControlFlow::Continue(())
             }
             Branch::Cond { cond, target } => {
-                let cond_value = self.get_local(*cond);
-                match cond_value {
+                match self.get_local(*cond) {
                     Value::Bool(true) => *block_index = target.get(),
                     Value::Bool(false) => {}
                     _ => unreachable!(),
                 }
+                ControlFlow::Continue(())
             }
-            Branch::Return(local_id) => {
-                let value = match local_id {
-                    Some(local_id) => self.get_local(*local_id).clone(),
-                    None => Value::Nothing,
-                };
-                self.set_local(LocalId::RETURN_VALUE, value);
-                return ControlFlow::Break(());
-            }
+            Branch::Return => ControlFlow::Break(()),
         }
-        ControlFlow::Continue(())
     }
 }
