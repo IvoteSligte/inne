@@ -615,12 +615,12 @@ impl<'a> std::fmt::Display for Stmt<'a> {
                 }
             }
             Stmt::For(For {
-                def_id: _,
+                def_id,
                 var: (var, _),
                 iter: (iter, _),
                 body,
             }) => {
-                writeln!(f, "for {var} in {iter} {{{INDENT}")?;
+                writeln!(f, "for _{def_id} {var} in {iter} {{{INDENT}")?;
                 for stmt in body {
                     writeln!(f, "{stmt}")?;
                 }

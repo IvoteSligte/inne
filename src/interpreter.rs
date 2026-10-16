@@ -62,22 +62,11 @@ impl<'a> Interpreter<'a> {
                 self.set_local(stmt.args[0], self.get_local(stmt.args[1]).clone());
                 Value::Nothing
             }
-            Op::Add => match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
-                (Value::Int(left), Value::Int(right)) => Value::Int(left + right),
-                _ => unreachable!(),
-            },
-            Op::Sub => match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
-                (Value::Int(left), Value::Int(right)) => Value::Int(left - right),
-                _ => unreachable!(),
-            },
-            Op::Mul => match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
-                (Value::Int(left), Value::Int(right)) => Value::Int(left * right),
-                _ => unreachable!(),
-            },
-            Op::Div => match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
-                (Value::Int(left), Value::Int(right)) => Value::Int(left / right),
-                _ => unreachable!(),
-            },
+            Op::Add => self.calc_arithmetic(stmt, |l, r| l + r),
+            Op::Sub => self.calc_arithmetic(stmt, |l, r| l - r),
+            Op::Mul => self.calc_arithmetic(stmt, |l, r| l * r),
+            Op::Div => self.calc_arithmetic(stmt, |l, r| l / r),
+            Op::Mod => self.calc_arithmetic(stmt, |l, r| l % r),
             Op::Eq => {
                 let left = self.get_local(stmt.args[0]);
                 let right = self.get_local(stmt.args[1]);
@@ -190,6 +179,13 @@ impl<'a> Interpreter<'a> {
                 ControlFlow::Continue(())
             }
             Branch::Return => ControlFlow::Break(()),
+        }
+    }
+
+    fn calc_arithmetic(&self, stmt: &Stmt, f: impl FnOnce(Int, Int) -> Int) -> Value {
+        match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
+            (Value::Int(left), Value::Int(right)) => Value::Int(f(*left, *right)),
+            _ => unreachable!(),
         }
     }
 }

@@ -18,9 +18,6 @@ pub enum Token<'a> {
     Return,
     In,
     Import,
-    Not,
-    And,
-    Or,
     // Tokens with stored data
     Ident(&'a str),
     Int(&'a str),
@@ -60,9 +57,6 @@ impl<'a> std::fmt::Display for Token<'a> {
             Return => f.write_str("return"),
             In => f.write_str("in"),
             Import => f.write_str("import"),
-            Not => f.write_str("not"),
-            And => f.write_str("and"),
-            Or => f.write_str("or"),
             Ident(ident) => f.write_str(ident),
             Bool(bool) => write!(f, "{bool}"),
             Int(int) => f.write_str(int),
@@ -173,11 +167,12 @@ pub fn create_lexer<'a>()
         just('$').to(Dollar),
     ));
     choice((
+        // NOTE: keyword and operator must come before ident because otherwise they may be parsed as idents
         keyword,
+        operator,
         text::ident().map(Ident),
         text::int(10).map(Int),
         string.map(String),
-        operator,
         symbol,
     ))
     .map_with(|token, e| (token, e.span()))

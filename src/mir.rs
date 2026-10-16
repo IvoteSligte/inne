@@ -12,6 +12,10 @@ use crate::{
 //       - warn for unused code
 //       - check for tautological conditions
 
+// TODO: operator string(x) for value->string
+// TODO: string concatenation
+// TODO: print(...) without trailing newline
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Nothing,
@@ -56,6 +60,7 @@ impl LocalId {
     pub const RETURN_VALUE: Self = Self(0);
 }
 
+#[derive(Debug)]
 pub struct Func<'a> {
     pub name: &'a str,
     pub stack_space: usize,
@@ -65,11 +70,13 @@ pub struct Func<'a> {
 }
 
 /// A basic block.
+#[derive(Debug)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
     pub branch: Branch,
 }
 
+#[derive(Debug)]
 pub enum Branch {
     Jump(BlockId),
     Cond { cond: LocalId, target: BlockId },
@@ -83,6 +90,7 @@ pub enum Op {
     Sub,
     Mul,
     Div,
+    Mod,
     Eq,
     NotEq,
     And,
@@ -191,6 +199,7 @@ impl<'a> FuncBuilder<'a> {
 
     fn create_block_id(&mut self) -> BlockId {
         let id = BlockId(self.num_blocks);
+        debug_assert!(id != BlockId::INVALID);
         self.num_blocks += 1;
         id
     }
@@ -202,26 +211,23 @@ impl<'a> FuncBuilder<'a> {
         id
     }
 
-    /// Sets the block currently being processed to `next_block_id`.
-    /// This is assumed to be an empty block.
-    pub fn set_current_block(&mut self, id: BlockId) {
-        let block = self.queued_blocks.remove(&id).unwrap();
-        let (old_id, old_block) = std::mem::replace(&mut self.current_block, (id, block));
-        if old_id != BlockId::INVALID {
-            self.queued_blocks.insert(old_id, old_block);
-        }
-    }
-
     /// Pushes an unconditional jump to `block_id` and also moves to it.
     pub fn jump_to(&mut self, block_id: BlockId) {
+        debug_assert_ne!(self.current_block.0, block_id);
+        self.push_jump(block_id, block_id);
+    }
+
+    pub fn push_jump(&mut self, target_block_id: BlockId, move_to_block_id: BlockId) {
         debug_assert_ne!(self.current_block.0, BlockId::INVALID);
+        debug_assert_ne!(self.current_block.0, target_block_id);
+        debug_assert_ne!(self.current_block.0, move_to_block_id);
         let (id, stmts) = std::mem::replace(
             &mut self.current_block,
-            self.queued_blocks.remove_entry(&block_id).unwrap(),
+            self.queued_blocks.remove_entry(&move_to_block_id).unwrap(),
         );
         let block = Block {
             stmts,
-            branch: Branch::Jump(block_id),
+            branch: Branch::Jump(target_block_id),
         };
         self.finished_blocks.push((id, block));
     }
@@ -230,9 +236,8 @@ impl<'a> FuncBuilder<'a> {
     /// Moves the cursor to `true_id`.
     pub fn cond_jump_to(&mut self, cond: LocalId, true_id: BlockId, false_id: BlockId) {
         debug_assert_ne!(self.current_block.0, BlockId::INVALID);
-        // Inverting the condition because that tends to
-        // keep the MIR stmt ordering the same as in HIR.
-        // NOTE: The Not needs to be pushed before changing the current block.
+        // Negates the condition because that tends to keep the MIR stmt ordering the same as in HIR.
+        // NOTE: The Not needs to be pushed before replacing the current block.
         let not_cond = self.push_op(Op::Not, vec![cond]);
         let (id, stmts) = std::mem::replace(
             &mut self.current_block,
@@ -249,7 +254,8 @@ impl<'a> FuncBuilder<'a> {
     }
 
     /// Finishes the current block and then moves the builder into the INVALID state.
-    /// Use `set_current_block` to move to an OK state.
+    /// This means that further writes should not be performed without moving
+    /// the cursor to a different block first.
     pub fn finish_block(&mut self, branch: Branch) {
         debug_assert_ne!(self.current_block.0, BlockId::INVALID);
         let (id, stmts) =
@@ -315,7 +321,8 @@ impl<'a> Constructor<'a> {
             .map(|func| _self.map_func(func))
             .collect();
         let mut builder = FuncBuilder::new("%main", 0);
-        _self.map_scope(&typed_hir.stmts, None, Branch::Return, &mut builder);
+        _self.map_scope(&typed_hir.stmts, None, &mut builder);
+        builder.finish_block(Branch::Return);
         let main_func = builder.build();
 
         if !_self.errors.is_empty() {
@@ -330,7 +337,8 @@ impl<'a> Constructor<'a> {
 
     fn map_func(&mut self, func: &'a thir::Func<'a>) -> Func<'a> {
         let mut builder = FuncBuilder::new(func.name.0, func.params.len());
-        self.map_scope(&func.body, None, Branch::Return, &mut builder);
+        self.map_scope(&func.body, None, &mut builder);
+        builder.finish_block(Branch::Return);
         builder.build()
     }
 
@@ -339,7 +347,6 @@ impl<'a> Constructor<'a> {
         &mut self,
         stmts: &'a [thir::Stmt<'a>],
         loop_block_ids: Option<(BlockId, BlockId)>,
-        end_branch: Branch,
         builder: &mut FuncBuilder<'a>,
     ) {
         for stmt in stmts {
@@ -370,6 +377,7 @@ impl<'a> Constructor<'a> {
                             Sub => Op::Sub,
                             Mul => Op::Mul,
                             Div => Op::Div,
+                            Mod => Op::Mod,
                             Assign => unreachable!(),
                         };
                         value_id = builder.push_op(op, vec![target_id, value_id]);
@@ -380,7 +388,7 @@ impl<'a> Constructor<'a> {
                     let end_block_id = builder.create_block();
                     for (i, thir::Choice { cond, then }) in choices.iter().enumerate() {
                         let cond_id = self.map_expr(&cond.0, builder);
-                        let next_block_id = if i + 1 == choices.len() {
+                        let next_block_id = if i + 1 == choices.len() && r#else.is_none() {
                             end_block_id
                         } else {
                             builder.create_block()
@@ -388,12 +396,13 @@ impl<'a> Constructor<'a> {
                         // If the condition is false, skip its 'then' block.
                         let body_block_id = builder.create_block();
                         builder.cond_jump_to(cond_id, body_block_id, next_block_id);
-                        self.map_scope(then, loop_block_ids, Branch::Jump(end_block_id), builder);
+                        self.map_scope(then, loop_block_ids, builder);
+                        builder.push_jump(end_block_id, next_block_id);
                     }
                     if let Some(r#else) = r#else {
-                        self.map_scope(r#else, loop_block_ids, Branch::Jump(end_block_id), builder);
+                        self.map_scope(r#else, loop_block_ids, builder);
+                        builder.jump_to(end_block_id);
                     }
-                    builder.set_current_block(end_block_id);
                 }
                 thir::Stmt::For(thir::For {
                     iter,
@@ -418,13 +427,8 @@ impl<'a> Constructor<'a> {
                     let body_block_id = builder.create_block();
                     builder.cond_jump_to(cond_id, body_block_id, end_block_id);
                     // Body block
-                    self.map_scope(
-                        body,
-                        Some((next_block_id, end_block_id)),
-                        Branch::Jump(next_block_id),
-                        builder,
-                    );
-                    builder.set_current_block(end_block_id);
+                    self.map_scope(body, Some((next_block_id, end_block_id)), builder);
+                    builder.push_jump(next_block_id, end_block_id);
                 }
                 thir::Stmt::While(thir::While { cond, body }) => {
                     // blocks:
@@ -438,13 +442,8 @@ impl<'a> Constructor<'a> {
                     let body_block_id = builder.create_block();
                     builder.cond_jump_to(cond_id, body_block_id, end_block_id);
                     // Body block
-                    self.map_scope(
-                        body,
-                        Some((cond_block_id, end_block_id)),
-                        Branch::Jump(cond_block_id),
-                        builder,
-                    );
-                    builder.set_current_block(end_block_id);
+                    self.map_scope(body, Some((cond_block_id, end_block_id)), builder);
+                    builder.push_jump(cond_block_id, end_block_id);
                 }
                 thir::Stmt::Loop(thir::Loop { body }) => {
                     // blocks:
@@ -453,17 +452,12 @@ impl<'a> Constructor<'a> {
                     let body_block_id = builder.create_block();
                     builder.jump_to(body_block_id);
                     // Body block
-                    self.map_scope(
-                        body,
-                        Some((body_block_id, end_block_id)),
-                        Branch::Jump(body_block_id),
-                        builder,
-                    );
-                    builder.set_current_block(end_block_id);
+                    self.map_scope(body, Some((body_block_id, end_block_id)), builder);
+                    builder.push_jump(body_block_id, end_block_id);
                 }
                 thir::Stmt::Break(span) => match loop_block_ids {
                     Some((_, break_block_id)) => {
-                        builder.jump_to(break_block_id);
+                        builder.finish_block(Branch::Jump(break_block_id));
                         // TODO: warn for unreachable code if there are stmts after this 'break'
                         return;
                     }
@@ -474,7 +468,7 @@ impl<'a> Constructor<'a> {
                 },
                 thir::Stmt::Continue(span) => match loop_block_ids {
                     Some((continue_block_id, _)) => {
-                        builder.jump_to(continue_block_id);
+                        builder.finish_block(Branch::Jump(continue_block_id));
                         // TODO: warn for unreachable code if there are stmts after this 'continue'
                         return;
                     }
@@ -493,7 +487,6 @@ impl<'a> Constructor<'a> {
             }
         }
         // TODO: drop declared variables that hold pointers
-        builder.finish_block(end_branch);
     }
 
     fn map_expr(&mut self, expr: &'a thir::Expr<'a>, builder: &mut FuncBuilder<'a>) -> LocalId {
@@ -507,6 +500,7 @@ impl<'a> Constructor<'a> {
                     Sub => Op::Sub,
                     Mul => Op::Mul,
                     Div => Op::Div,
+                    Mod => Op::Mod,
                     Eq => Op::Eq,
                     NotEq => Op::NotEq,
                     And => Op::And,

@@ -139,7 +139,7 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
                     use AssignOp::*;
                     match op {
                         Assign => {}
-                        Add | Sub | Mul | Div => {
+                        Add | Sub | Mul | Div | Mod => {
                             if target_type != Type::Int {
                                 // TODO: simplify error message (also in Binary)
                                 let message = format!(
@@ -269,7 +269,7 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
         }
         use BinaryOp::*;
         match binary.op.0 {
-            Add | Sub | Div | Mul => {
+            Add | Sub | Div | Mul | Mod => {
                 if or_type.is_known() && or_type != Type::Int {
                     self.errors.add(
                         format!(

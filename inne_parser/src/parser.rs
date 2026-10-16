@@ -16,6 +16,7 @@ pub enum AssignOp {
     Sub,
     Mul,
     Div,
+    Mod,
 }
 
 pub enum Stmt<'a> {
@@ -59,6 +60,7 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Mod,
     Eq,
     NotEq,
     And,
@@ -154,6 +156,7 @@ where
                     just(Token::Op("-=")).to(AssignOp::Sub),
                     just(Token::Op("*=")).to(AssignOp::Mul),
                     just(Token::Op("/=")).to(AssignOp::Div),
+                    just(Token::Op("%=")).to(AssignOp::Mod),
                 ))
                 .map_with(with_span),
             )
@@ -250,10 +253,12 @@ where
         let atom = choice((call, var, int, bool, string)).boxed();
 
         // Product ops (multiply and divide) have equal precedence
-        let op = just(Token::Op("*"))
-            .to(BinaryOp::Mul)
-            .or(just(Token::Op("/")).to(BinaryOp::Div))
-            .map_with(with_span);
+        let op = choice((
+            just(Token::Op("*")).to(BinaryOp::Mul),
+            just(Token::Op("/")).to(BinaryOp::Div),
+            just(Token::Op("%")).to(BinaryOp::Mod),
+        ))
+        .map_with(with_span);
         let product = atom
             .clone()
             .foldl_with(op.then(atom.clone()).repeated(), |a, (op, b), e| {
@@ -319,6 +324,7 @@ impl std::fmt::Display for AssignOp {
             AssignOp::Sub => "-=",
             AssignOp::Mul => "*=",
             AssignOp::Div => "/=",
+            AssignOp::Mod => "%=",
         })
     }
 }
@@ -330,6 +336,7 @@ impl std::fmt::Display for BinaryOp {
             BinaryOp::Sub => "-",
             BinaryOp::Mul => "*",
             BinaryOp::Div => "/",
+            BinaryOp::Mod => "%",
             BinaryOp::Eq => "==",
             BinaryOp::NotEq => "!=",
             BinaryOp::And => "and",

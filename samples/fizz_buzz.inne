@@ -1,0 +1,14 @@
+
+for i in 0..100 {
+    var fizz = i % 3 == 0;
+    var buzz = i % 5 == 0;
+    if fizz and buzz {
+        print("Fizzbuzz");
+    } else if fizz {
+        print("Fizz");
+    } else if buzz {
+        print("Buzz");
+    } else {
+        print(i);
+    }
+}
