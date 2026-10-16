@@ -281,6 +281,18 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
                 }
                 or_type
             }
+            Lt | Leq | Gt | Geq => {
+                if or_type.is_known() && or_type != Type::Int {
+                    self.errors.add(
+                        format!(
+                            "Cannot apply comparison operator to values of type '{}'",
+                            or_type
+                        ),
+                        binary.op.1,
+                    );
+                }
+                Type::Bool
+            }
             And | Or => {
                 if or_type.is_known() && or_type != Type::Bool {
                     self.errors.add(
@@ -291,7 +303,7 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
                         binary.op.1,
                     );
                 }
-                or_type
+                Type::Bool
             }
             Eq | NotEq => Type::Bool,
         }

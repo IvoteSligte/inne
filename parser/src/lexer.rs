@@ -3,6 +3,8 @@ use chumsky::prelude::*;
 pub type Span = SimpleSpan;
 pub type Spanned<T> = (T, Span);
 
+// TODO: comments
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token<'a> {
     // Keywords
@@ -37,6 +39,7 @@ pub enum Token<'a> {
     Comma,
     Arrow,
     Semi,
+    Colon,
     At,
     Hashtag,
     Dollar,
@@ -73,6 +76,7 @@ impl<'a> std::fmt::Display for Token<'a> {
             Comma => f.write_str(","),
             Arrow => f.write_str("->"),
             Semi => f.write_str(";"),
+            Colon => f.write_str(":"),
             At => f.write_str("@"),
             Hashtag => f.write_str("#"),
             Dollar => f.write_str("$"),
@@ -162,18 +166,19 @@ pub fn create_lexer<'a>()
         just(',').to(Comma),
         just("->").to(Arrow),
         just(';').to(Semi),
+        just(':').to(Colon),
         just('@').to(At),
         just('#').to(Hashtag),
         just('$').to(Dollar),
     ));
     choice((
-        // NOTE: keyword and operator must come before ident because otherwise they may be parsed as idents
+        // NOTE: ordering is important to ensure the right tokens are lexed
         keyword,
+        symbol,
         operator,
         text::ident().map(Ident),
         text::int(10).map(Int),
         string.map(String),
-        symbol,
     ))
     .map_with(|token, e| (token, e.span()))
     .padded()

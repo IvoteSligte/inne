@@ -63,6 +63,10 @@ pub enum BinaryOp {
     Mod,
     Eq,
     NotEq,
+    Lt,
+    Gt,
+    Leq,
+    Geq,
     And,
     Or,
 }
@@ -121,7 +125,10 @@ where
         }
     }
     .map_with(with_span);
-    let param = ident.then(r#type).map(|(name, r#type)| Param(name, r#type));
+    let param = ident
+        .then_ignore(just(Token::Colon))
+        .then(r#type)
+        .map(|(name, r#type)| Param(name, r#type));
     recursive(|stmt| {
         let block = stmt
             .repeated()
@@ -277,14 +284,28 @@ where
             })
             .boxed();
 
+        // Comparison ops (<, <=, >, >=) have equal precedence
+        let op = choice((
+            just(Token::Op("<")).to(BinaryOp::Lt),
+            just(Token::Op("<=")).to(BinaryOp::Leq),
+            just(Token::Op(">")).to(BinaryOp::Gt),
+            just(Token::Op(">=")).to(BinaryOp::Geq),
+        ))
+        .map_with(with_span);
+        let ordering = sum
+            .clone()
+            .foldl_with(op.then(sum).repeated(), |a, (op, b), e| {
+                (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+            });
+
         // Comparison ops (equal, not-equal) have equal precedence
         let op = just(Token::Op("=="))
             .to(BinaryOp::Eq)
             .or(just(Token::Op("!=")).to(BinaryOp::NotEq))
             .map_with(with_span);
-        let equal = sum
+        let equal = ordering
             .clone()
-            .foldl_with(op.then(sum).repeated(), |a, (op, b), e| {
+            .foldl_with(op.then(ordering).repeated(), |a, (op, b), e| {
                 (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
             });
 
@@ -339,6 +360,10 @@ impl std::fmt::Display for BinaryOp {
             BinaryOp::Mod => "%",
             BinaryOp::Eq => "==",
             BinaryOp::NotEq => "!=",
+            BinaryOp::Lt => "<",
+            BinaryOp::Leq => "<=",
+            BinaryOp::Gt => ">",
+            BinaryOp::Geq => ">=",
             BinaryOp::And => "and",
             BinaryOp::Or => "or",
         })

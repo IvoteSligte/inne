@@ -1,0 +1,15 @@
+
+func sqrt(n: int) -> int {
+    if n <= 0 {
+        return 0
+    }
+    var sqrt = n/2
+    while sqrt * sqrt > n {
+        sqrt -= 1
+    }
+    return sqrt
+}
+
+var number = 144
+
+print("The square root of", number, "is", sqrt(144))

@@ -62,11 +62,15 @@ impl<'a> Interpreter<'a> {
                 self.set_local(stmt.args[0], self.get_local(stmt.args[1]).clone());
                 Value::Nothing
             }
-            Op::Add => self.calc_arithmetic(stmt, |l, r| l + r),
-            Op::Sub => self.calc_arithmetic(stmt, |l, r| l - r),
-            Op::Mul => self.calc_arithmetic(stmt, |l, r| l * r),
-            Op::Div => self.calc_arithmetic(stmt, |l, r| l / r),
-            Op::Mod => self.calc_arithmetic(stmt, |l, r| l % r),
+            Op::Add => self.int_op(stmt, |l, r| l + r),
+            Op::Sub => self.int_op(stmt, |l, r| l - r),
+            Op::Mul => self.int_op(stmt, |l, r| l * r),
+            Op::Div => self.int_op(stmt, |l, r| l / r),
+            Op::Mod => self.int_op(stmt, |l, r| l % r),
+            Op::Lt => self.cmp_op(stmt, |l, r| l < r),
+            Op::Leq => self.cmp_op(stmt, |l, r| l <= r),
+            Op::Gt => self.cmp_op(stmt, |l, r| l > r),
+            Op::Geq => self.cmp_op(stmt, |l, r| l >= r),
             Op::Eq => {
                 let left = self.get_local(stmt.args[0]);
                 let right = self.get_local(stmt.args[1]);
@@ -182,9 +186,16 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn calc_arithmetic(&self, stmt: &Stmt, f: impl FnOnce(Int, Int) -> Int) -> Value {
+    fn int_op(&self, stmt: &Stmt, f: impl FnOnce(Int, Int) -> Int) -> Value {
         match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
             (Value::Int(left), Value::Int(right)) => Value::Int(f(*left, *right)),
+            _ => unreachable!(),
+        }
+    }
+
+    fn cmp_op(&self, stmt: &Stmt, f: impl FnOnce(Int, Int) -> bool) -> Value {
+        match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
+            (Value::Int(left), Value::Int(right)) => Value::Bool(f(*left, *right)),
             _ => unreachable!(),
         }
     }
