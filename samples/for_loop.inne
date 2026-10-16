@@ -1,4 +1,4 @@
 
 for i in 0..10 {
-    print("The number is... ", i)
+    print("The number is...", i)
 }

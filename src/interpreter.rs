@@ -184,7 +184,8 @@ impl<'a> Interpreter<'a> {
                 match self.get_local(*cond) {
                     Value::Bool(true) => *block_index = target.get(),
                     Value::Bool(false) => {}
-                    _ => unreachable!(),
+                    Value::Nothing => unreachable!("'Nothing' was used as condition."),
+                    _ => unreachable!("A non-boolean type was used as condition."),
                 }
                 ControlFlow::Continue(())
             }
