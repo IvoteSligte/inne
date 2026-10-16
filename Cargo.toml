@@ -7,7 +7,7 @@ edition = "2024"
 ariadne = "0.6.0"
 clap = { version = "4.6.7", features = ["derive"] }
 indentify = "0.1.2"
-inne_parser = { path = "inne_parser" }
+inne_parser = { path = "./parser" }
 
 [workspace]
-members = ["inne_parser"]
+members = ["parser"]
