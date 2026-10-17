@@ -196,6 +196,7 @@ impl LanguageServer for Backend {
                     semantic_tokens.insert(span, token_type);
                 });
             }
+        } else {
             eprintln!("Semantic tokens: Failed to parse file '{}'.", file.name);
         }
         let data = to_semantic_tokens(&file.source, semantic_tokens);
