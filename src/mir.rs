@@ -79,7 +79,11 @@ pub struct Block {
 #[derive(Debug)]
 pub enum Branch {
     Jump(BlockId),
-    Cond { cond: LocalId, target: BlockId },
+    Cond {
+        cond: LocalId,
+        true_target: BlockId,
+        false_target: BlockId,
+    },
     Return,
 }
 
@@ -511,7 +515,8 @@ impl<'a> FuncBuilder<'a> {
                 stmts,
                 branch: Branch::Cond {
                     cond: not_cond,
-                    target: false_id,
+                    true_target: false_id, // false_id because the condition is negated
+                    false_target: true_id,
                 },
             };
             self.finished_blocks.push((id, block));
@@ -549,7 +554,14 @@ impl<'a> FuncBuilder<'a> {
             for (_, block) in &mut self.finished_blocks {
                 match &mut block.branch {
                     Branch::Jump(target) => *target = id_map[target.get()],
-                    Branch::Cond { cond: _, target } => *target = id_map[target.get()],
+                    Branch::Cond {
+                        cond: _,
+                        true_target,
+                        false_target,
+                    } => {
+                        *true_target = id_map[true_target.get()];
+                        *false_target = id_map[false_target.get()];
+                    }
                     Branch::Return => {}
                 }
             }
@@ -660,8 +672,18 @@ impl std::fmt::Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Branch::Jump(target) => write!(f, "Jump(block {})", target.get()),
-            Branch::Cond { cond, target } => {
-                write!(f, "Cond(_{}, block {})", cond.get(), target.get())
+            Branch::Cond {
+                cond,
+                true_target,
+                false_target,
+            } => {
+                write!(
+                    f,
+                    "Cond(_{}, block {}, block {})",
+                    cond.get(),
+                    true_target.get(),
+                    false_target.get()
+                )
             }
             Branch::Return => write!(f, "Return"),
         }

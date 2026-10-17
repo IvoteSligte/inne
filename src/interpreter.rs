@@ -1,6 +1,6 @@
 use crate::{Mir, mir::*};
 
-use std::{mem::discriminant, ops::ControlFlow};
+use std::mem::discriminant;
 
 pub struct Interpreter<'a> {
     funcs: &'a [Func<'a>],
@@ -44,14 +44,23 @@ impl<'a> Interpreter<'a> {
         let mut block_index = 0;
         while block_index < blocks.len() {
             let block = &blocks[block_index];
-            block_index += 1;
-
             for stmt in &block.stmts {
                 self.run_stmt(stmt);
             }
-            if let ControlFlow::Break(()) = self.run_branch(&block.branch, &mut block_index) {
-                break;
-            }
+            block_index = match &block.branch {
+                Branch::Jump(target) => target.get(),
+                Branch::Cond {
+                    cond,
+                    true_target,
+                    false_target,
+                } => match self.get_local(*cond) {
+                    Value::Bool(true) => true_target.get(),
+                    Value::Bool(false) => false_target.get(),
+                    Value::Nothing => unreachable!("'Nothing' was used as condition."),
+                    _ => unreachable!("A non-boolean type was used as condition."),
+                },
+                Branch::Return => break,
+            };
         }
     }
 
@@ -167,25 +176,6 @@ impl<'a> Interpreter<'a> {
             },
         };
         self.set_local(stmt.local_id, value);
-    }
-
-    fn run_branch(&mut self, branch: &Branch, block_index: &mut usize) -> ControlFlow<()> {
-        match branch {
-            Branch::Jump(target) => {
-                *block_index = target.get();
-                ControlFlow::Continue(())
-            }
-            Branch::Cond { cond, target } => {
-                match self.get_local(*cond) {
-                    Value::Bool(true) => *block_index = target.get(),
-                    Value::Bool(false) => {}
-                    Value::Nothing => unreachable!("'Nothing' was used as condition."),
-                    _ => unreachable!("A non-boolean type was used as condition."),
-                }
-                ControlFlow::Continue(())
-            }
-            Branch::Return => ControlFlow::Break(()),
-        }
     }
 
     fn int_op(&self, stmt: &Stmt, f: impl FnOnce(Int, Int) -> Int) -> Value {
