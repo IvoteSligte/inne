@@ -4,6 +4,10 @@ use chumsky::{input::ValueInput, prelude::*};
 
 use crate::{Span, Spanned};
 
+pub type ParseError<'tokens, 'src> = Rich<'tokens, Token<'src>, Span>;
+
+type ParseErrorExtra<'tokens, 'src> = extra::Err<Rich<'tokens, Token<'src>, Span>>;
+
 pub struct ParseTree<'a> {
     pub filename: &'a str,
     pub stmts: Vec<Stmt<'a>>,
@@ -98,20 +102,17 @@ where
     (o, e.span())
 }
 
-pub fn create_parser<'tokens, 'src: 'tokens, I>(
-    filename: &'src str,
-) -> impl Parser<'tokens, I, ParseTree<'src>, extra::Err<Rich<'tokens, Token<'src>, Span>>> + Clone
+pub fn create_parser<'tokens, 'src: 'tokens, I>()
+-> impl Parser<'tokens, I, Vec<Stmt<'src>>, ParseErrorExtra<'tokens, 'src>> + Clone
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {
     let stmt = stmt_parser();
-    stmt.repeated()
-        .collect()
-        .map(|stmts| ParseTree { filename, stmts })
+    stmt.repeated().collect()
 }
 
 fn stmt_parser<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, Stmt<'src>, extra::Err<Rich<'tokens, Token<'src>, Span>>> + Clone
+-> impl Parser<'tokens, I, Stmt<'src>, ParseErrorExtra<'tokens, 'src>> + Clone
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {
@@ -223,7 +224,7 @@ where
 }
 
 fn ident_parser<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, Spanned<&'src str>, extra::Err<Rich<'tokens, Token<'src>, Span>>> + Copy
+-> impl Parser<'tokens, I, Spanned<&'src str>, ParseErrorExtra<'tokens, 'src>> + Copy
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {
@@ -231,7 +232,7 @@ where
 }
 
 fn expr_parser<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, Spanned<Expr<'src>>, extra::Err<Rich<'tokens, Token<'src>, Span>>> + Clone
+-> impl Parser<'tokens, I, Spanned<Expr<'src>>, ParseErrorExtra<'tokens, 'src>> + Clone
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {

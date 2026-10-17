@@ -2,11 +2,14 @@ use chumsky::prelude::*;
 
 pub type Span = SimpleSpan;
 pub type Spanned<T> = (T, Span);
+pub type LexError<'src> = Rich<'src, char, Span>;
+
+type LexErrorExtra<'src> = extra::Err<LexError<'src>>;
 
 // TODO: comments
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Token<'a> {
+pub enum Token<'src> {
     // Keywords
     Func,
     Var,
@@ -21,11 +24,11 @@ pub enum Token<'a> {
     In,
     Import,
     // Tokens with stored data
-    Ident(&'a str),
-    Int(&'a str),
+    Ident(&'src str),
+    Int(&'src str),
     Bool(bool),
-    String(&'a str),
-    Op(&'a str),
+    String(&'src str),
+    Op(&'src str),
     // Delimiters
     LBrace,
     RBrace,
@@ -45,7 +48,16 @@ pub enum Token<'a> {
     Dollar,
 }
 
-impl<'a> std::fmt::Display for Token<'a> {
+impl Token<'_> {
+    pub fn is_keyword(self) -> bool {
+        matches!(
+            self,
+            Func | Var | If | Else | For | While | Loop | Break | Continue | Return | In | Import
+        )
+    }
+}
+
+impl std::fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Func => f.write_str("func"),
@@ -86,8 +98,8 @@ impl<'a> std::fmt::Display for Token<'a> {
 
 use Token::*;
 
-pub fn create_lexer<'a>()
--> impl Parser<'a, &'a str, Vec<Spanned<Token<'a>>>, extra::Err<Rich<'a, char, Span>>> {
+pub fn create_lexer<'src>()
+-> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>, LexErrorExtra<'src>> {
     let escape = just('\\')
         .then(choice((
             just('\\'),

@@ -1,4 +1,8 @@
-use std::{ffi::OsStr, io, path::PathBuf};
+use std::{
+    ffi::OsStr,
+    io,
+    path::{Path, PathBuf},
+};
 
 use ariadne::{Color, Label, Report, ReportKind, sources};
 use clap::Parser;
@@ -29,55 +33,50 @@ enum Ir {
 // TODO: display general diagnostics through ariadne as well
 // TODO: do not immediately return from main() when any errors are encountered
 
+fn read_file(path: impl AsRef<Path>, filename: &str) -> Option<String> {
+    match std::fs::read_to_string(path) {
+        Ok(source) => Some(source),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            eprintln!("Error: The file '{}' does not exist.", filename);
+            None
+        }
+        Err(err) if err.kind() == io::ErrorKind::IsADirectory => {
+            eprintln!("Error: '{}' is a directory, not a '.inne' file.", filename);
+            None
+        }
+        Err(err) => {
+            eprintln!("Error: Failed to read file '{}': {}", filename, err);
+            None
+        }
+    }
+}
+
 fn main() {
     let args = Args::parse();
     // Human-readable filename.
     let filename = args.file.as_os_str().to_string_lossy();
-    let source = match std::fs::read_to_string(&args.file) {
-        Ok(source) => source,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            eprintln!("Error: The file '{}' does not exist.", filename);
-            return;
-        }
-        Err(err) if err.kind() == io::ErrorKind::IsADirectory => {
-            eprintln!("Error: '{}' is a directory, not a '.inne' file.", filename);
-            return;
-        }
-        Err(err) => {
-            eprintln!("Error: Failed to read file '{}': {}", filename, err);
-            return;
-        }
+    let Some(source) = read_file(&args.file, &filename) else {
+        return;
     };
     if args.file.extension() != Some(OsStr::new("inne")) {
         eprintln!(
-            "Warning: The file '{}' does not seem to be a '.inne' file. Trying to run it anyways.",
+            "Warning: The file '{}' does not seem to be a '.inne' file. Will try to compile it anyway.",
             filename
         );
     }
     let filename = "filename.inne";
-    let tokens = match create_lexer().parse(&source).into_result() {
-        Ok(tokens) => tokens,
-        Err(errors) => {
-            print_parse_errors(errors, filename, &source, "lexing");
-            return;
-        }
+    let (maybe_tokens, errors) = lex(&source);
+    print_parse_errors(errors, filename, &source, "lexing");
+    let Some(tokens) = maybe_tokens else {
+        return;
     };
     if args.emit == Some(Ir::Tokens) {
         todo!();
     }
-    let parse_tree = match create_parser(filename)
-        .parse(
-            tokens
-                .as_slice()
-                .map((source.len()..source.len()).into(), |(t, s)| (t, s)),
-        )
-        .into_result()
-    {
-        Ok(parse_tree) => parse_tree,
-        Err(errors) => {
-            print_parse_errors(errors, filename, &source, "parsing");
-            return;
-        }
+    let (maybe_parse_tree, errors) = parse(&tokens, filename, &source);
+    print_parse_errors(errors, filename, &source, "parsing");
+    let Some(parse_tree) = maybe_parse_tree else {
+        return;
     };
     if args.emit == Some(Ir::ParseTree) {
         todo!();

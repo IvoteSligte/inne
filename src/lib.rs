@@ -10,7 +10,8 @@ pub use inne_parser as parser;
 pub use interpreter::Interpreter;
 pub use mir::{Mir, mir_from_typed_hir};
 pub use parser::{
-    Input as _, ParseTree, Parser as _, Rich, Span, Spanned, Token, create_lexer, create_parser,
+    Input as _, LexError, ParseError, ParseTree, Parser as _, Span, Spanned, Token, create_lexer,
+    create_parser, lex, parse,
 };
 pub use typed_hir::{TypedHir, typed_hir_from_hir};
 
