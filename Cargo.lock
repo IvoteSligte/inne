@@ -214,6 +214,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "inne_ls"
+version = "0.1.0"
+dependencies = [
+ "inne",
+]
+
+[[package]]
 name = "inne_parser"
 version = "0.1.0"
 dependencies = [

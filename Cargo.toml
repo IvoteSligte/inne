@@ -10,4 +10,4 @@ indentify = "0.1.2"
 inne_parser = { path = "./parser" }
 
 [workspace]
-members = ["parser"]
+members = ["language-server", "parser"]
