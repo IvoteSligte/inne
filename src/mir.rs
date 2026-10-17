@@ -408,7 +408,7 @@ impl<'a> FuncBuilder<'a> {
         Self {
             name,
             def_to_local: HashMap::new(),
-            num_locals: 0,
+            num_locals: 1, // Only the return value exists at the start.
             num_blocks: 1, // Only the current block exists at the start.
             current_block: (BlockId(0), Vec::new()),
             queued_blocks: HashMap::new(),
@@ -432,10 +432,9 @@ impl<'a> FuncBuilder<'a> {
 
     /// Creates a local for a statement without requiring a body.
     pub fn create_local(&mut self) -> LocalId {
+        let id = LocalId(self.num_locals);
         self.num_locals += 1;
-        // Equal to 1 + num_locals_before_this_function
-        // because the return value has Localid(0).
-        LocalId(self.num_locals)
+        id
     }
 
     fn push_stmt(&mut self, op: Op, args: Vec<LocalId>, func_id: FuncId, value: Value) -> LocalId {
@@ -479,7 +478,7 @@ impl<'a> FuncBuilder<'a> {
     }
 
     /// Moves the cursor to `move_to_block_id` after pushing a jump to `target_block_id`.
-    /// Does not push the jump if the current block is finished.
+    /// Does not push the jump (but still moves the cursor) if the current block is finished.
     pub fn push_jump(&mut self, target_block_id: BlockId, move_to_block_id: BlockId) {
         debug_assert_ne!(self.current_block.0, target_block_id);
         debug_assert_ne!(self.current_block.0, move_to_block_id);
@@ -497,7 +496,7 @@ impl<'a> FuncBuilder<'a> {
     }
 
     /// Moves the cursor to `true_id` after pushing a conditional jump to either `true_id` or `false_id`.
-    /// Does not push the jump if the current block is finished.
+    /// Does not push the jump (but still moves the cursor) if the current block is finished.
     pub fn cond_jump_to(&mut self, cond: LocalId, true_id: BlockId, false_id: BlockId) {
         // Negates the condition because that tends to keep the MIR stmt ordering the same as in HIR.
         // NOTE: The Not needs to be pushed before replacing the current block.
@@ -568,8 +567,7 @@ impl<'a> FuncBuilder<'a> {
         }
         Func {
             name: self.name,
-            // Return value + number of locals
-            stack_space: 1 + self.num_locals,
+            stack_space: self.num_locals,
             blocks: self
                 .finished_blocks
                 .into_iter()
