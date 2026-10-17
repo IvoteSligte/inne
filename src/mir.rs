@@ -27,7 +27,9 @@ pub enum Value {
 
 pub struct Mir<'a> {
     pub funcs: Vec<Func<'a>>,
+    /// Stack space (in number of values) used by the global scope.
     pub stack_space: usize,
+    /// Basic blocks in the global scope.
     pub blocks: Vec<Block>,
 }
 

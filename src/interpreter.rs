@@ -15,7 +15,7 @@ impl<'a> Interpreter<'a> {
             funcs: &mir.funcs,
             stack: Vec::with_capacity(1000),
             frame_start: 0,
-            frame_end: 0,
+            frame_end: mir.stack_space,
         };
         // Reserve space on the stack for global variables (and "return value")
         _self
@@ -110,14 +110,11 @@ impl<'a> Interpreter<'a> {
             },
             Op::Constant => stmt.value.clone(),
             Op::Call => {
-                // FIXME: param locations are totally messed up (and do we even need a return value slot?)
-
                 // Push stack frame.
                 let func = &self.funcs[stmt.func_id.get()];
                 let prev_frame_start = self.frame_start;
                 let prev_frame_end = self.frame_end;
-                // This ensures that the return value is placed at stmt.local_id
-                self.frame_start = self.frame_start + stmt.local_id.get();
+                self.frame_start = self.frame_end;
                 self.frame_end = self.frame_start + func.stack_space;
                 if self.stack.len() < self.frame_end {
                     self.stack.extend(std::iter::repeat_n(
@@ -125,11 +122,24 @@ impl<'a> Interpreter<'a> {
                         self.frame_end - self.stack.len(),
                     ));
                 }
+                // Default-initialize return value
+                self.stack[self.frame_start] = Value::Nothing;
+                // Move arguments to function parameter slots
+                for (arg, i) in stmt.args.iter().zip(1..) {
+                    self.stack[self.frame_start + i] = std::mem::replace(
+                        &mut self.stack[prev_frame_start + arg.get()],
+                        Value::Nothing,
+                    );
+                }
                 // Run function.
                 self.run_func(func);
+                // Move return value
+                self.stack[prev_frame_start + stmt.local_id.get()] =
+                    std::mem::replace(&mut self.stack[self.frame_start], Value::Nothing);
                 // Pop stack frame.
                 self.frame_start = prev_frame_start;
                 self.frame_end = prev_frame_end;
+                self.stack[self.frame_end..].fill(Value::Nothing);
                 return; // The value is already on the stack.
             }
             Op::Print => {
