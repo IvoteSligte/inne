@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -24,12 +25,30 @@ mod tt {
 
 #[derive(Debug)]
 struct File {
+    version: i32,
     /// Human-readable filename.
     name: String,
     /// Absolute path of the file.
     _path: PathBuf,
     /// Source-code contained in the file.
     source: String,
+}
+
+impl File {
+    pub fn new(uri: &Uri, source: impl ToString, version: i32) -> Option<Self> {
+        let source = source.to_string();
+        let name = uri.as_str().to_string(); // TODO: better human-readable name
+        let Some(path) = uri.to_file_path().as_deref().map(Path::to_path_buf) else {
+            eprintln!("The provided URI is not a file: '{}'", uri.as_str());
+            return None;
+        };
+        Some(Self {
+            version,
+            name,
+            _path: path,
+            source,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -43,7 +62,7 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL, // TODO: incremental
+                    TextDocumentSyncKind::FULL, // TODO: incremental updates
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions::default()),
@@ -85,22 +104,40 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        eprintln!("Received did_open event.");
         let uri = params.text_document.uri;
-        let Some(path) = uri.to_file_path().as_deref().map(Path::to_path_buf) else {
-            eprintln!("The provided URI is not a file: '{}'", uri.as_str());
+        let source = params.text_document.text;
+        if let Some(file) = File::new(&uri, source, params.text_document.version) {
+            eprintln!("Registered file: '{}'", uri.as_str());
+            self.files.write().await.insert(uri, file);
+        }
+    }
+
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        eprintln!("Received did_change event.");
+        let uri = params.text_document.uri;
+        let mut write_guard = self.files.write().await;
+        let Some(source) = params.content_changes.get(0).map(|change| &change.text) else {
+            eprintln!("did_change event did not contain any changes.");
             return;
         };
-        let source = params.text_document.text;
-        let name = uri.as_str().to_string(); // TODO: better human-readable name
-        eprintln!("Registered file: '{}'", uri.as_str());
-        self.files.write().await.insert(
-            uri,
-            File {
-                name,
-                _path: path,
-                source,
-            },
-        );
+        let new_version = params.text_document.version;
+        match write_guard.entry(uri.clone()) {
+            Entry::Occupied(mut occupied_entry) => {
+                let entry = occupied_entry.get_mut();
+                if entry.version < new_version {
+                    eprintln!("Updated file: '{}'", uri.as_str());
+                    entry.source = source.to_owned();
+                    entry.version = new_version;
+                }
+            }
+            Entry::Vacant(vacant_entry) => {
+                if let Some(file) = File::new(&uri, source, new_version) {
+                    eprintln!("Registered file (from did_change): '{}'", uri.as_str());
+                    vacant_entry.insert(file);
+                }
+            }
+        };
     }
 
     async fn completion(&self, _: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -111,6 +148,7 @@ impl LanguageServer for Backend {
     }
 
     async fn hover(&self, _: HoverParams) -> Result<Option<Hover>> {
+        // TODO: show type and docstring in hover window
         Ok(Some(Hover {
             contents: HoverContents::Scalar(MarkedString::String("You're hovering!".to_string())),
             range: None,
@@ -144,6 +182,7 @@ impl LanguageServer for Backend {
                 Token::Int(_) => tt::NUMBER,
                 Token::Bool(_) => tt::NUMBER,
                 Token::String(_) => tt::STRING,
+                Token::Op("and") | Token::Op("or") | Token::Op("not") => tt::KEYWORD,
                 Token::Op(_) => tt::OPERATOR,
                 _ if token.is_keyword() => tt::KEYWORD,
                 _ => return None,
