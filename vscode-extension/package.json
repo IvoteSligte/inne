@@ -1,0 +1,45 @@
+{
+	"name": "inne-extension",
+	"description": "Official extension for the Inne programming language",
+	"author": "Ivo te Sligte",
+	"license": "MIT",
+	"version": "0.0.1",
+	"publisher": "IvoteSligte",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/IvoteSligte/inne"
+	},
+    "categories": [],
+    "keywords": ["inne"],
+    "main": "./out/extension",
+    "activationEvents": [
+      "onLanguage:inne"
+    ],
+    "contributes": {
+      "languages": [
+        {
+          "id": "inne",
+          "aliases": ["Inne", "inne"],
+          "extensions": [".inne", ".in"],
+          "configuration": "./language-configuration.json"
+        }
+      ]
+    },
+	"engines": {
+		"vscode": "^1.100.0"
+    },
+    "scripts": {
+		"vscode:prepublish": "npm run compile",
+		"compile": "tsc -b",
+		"watch": "tsc -b -w"
+	},
+	"dependencies": {
+		"glob": "^11.0.0",
+		"vscode-languageclient": "^9.0.1"
+	},
+	"devDependencies": {
+	    "@types/vscode": "^1.100.0",
+		"@types/node": "^22",
+		"typescript": "^5.9.2"
+	}
+}
