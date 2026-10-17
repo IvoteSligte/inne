@@ -89,31 +89,36 @@ pub enum Branch {
     Return,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Op {
-    // TODO: remove Assign and instead just set stmt.local_id to the assign target
-    Assign,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    Eq,
-    NotEq,
-    Lt,
-    Leq,
-    Gt,
-    Geq,
-    And,
-    Or,
-    Neg,
-    Not,
-    Constant,
-    Call,
-    Print,
-    Range,
-    IntoIter,
-    Next,
+    Assign { target: LocalId, value: LocalId },
+    Add(Binary),
+    Sub(Binary),
+    Mul(Binary),
+    Div(Binary),
+    Mod(Binary),
+    Eq(Binary),
+    Neq(Binary),
+    Lt(Binary),
+    Leq(Binary),
+    Gt(Binary),
+    Geq(Binary),
+    And(Binary),
+    Or(Binary),
+    Neg(LocalId),
+    Not(LocalId),
+    Constant(Value),
+    Call { func_id: FuncId, args: Vec<LocalId> },
+    Print { args: Vec<LocalId> },
+    Range { start: LocalId, end: LocalId },
+    IntoIter(LocalId),
+    Next { target: LocalId, iter: LocalId },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Binary {
+    pub left: LocalId,
+    pub right: LocalId,
 }
 
 // TODO: just add the args to Op, making it a tagged union
@@ -121,11 +126,6 @@ pub enum Op {
 pub struct Stmt {
     pub local_id: LocalId,
     pub op: Op,
-    pub args: Vec<LocalId>,
-
-    // Constants (mutually exclusive and optional)
-    pub func_id: FuncId,
-    pub value: Value,
 }
 
 pub fn mir_from_typed_hir<'a>(typed_hir: &'a TypedHir<'a>) -> Result<Mir<'a>, Vec<Error<'a>>> {
@@ -209,6 +209,10 @@ impl<'a> Constructor<'a> {
                     use thir::AssignOp::*;
                     if op.0 != Assign {
                         // Rewrite statements such as `x += 1` to `x = x + 1`
+                        let args = Binary {
+                            left: target_id,
+                            right: value_id,
+                        };
                         let op = match op.0 {
                             Add => Op::Add,
                             Sub => Op::Sub,
@@ -216,10 +220,13 @@ impl<'a> Constructor<'a> {
                             Div => Op::Div,
                             Mod => Op::Mod,
                             Assign => unreachable!(),
-                        };
-                        value_id = builder.push_op(op, vec![target_id, value_id]);
+                        }(args);
+                        value_id = builder.push_op(op);
                     }
-                    builder.push_op(Op::Assign, vec![target_id, value_id]);
+                    builder.push_op(Op::Assign {
+                        target: target_id,
+                        value: value_id,
+                    });
                 }
                 thir::Stmt::If(thir::If { choices, r#else }) => {
                     let end_block_id = builder.create_block();
@@ -254,13 +261,16 @@ impl<'a> Constructor<'a> {
                     let end_block_id = builder.create_block();
                     // Init block
                     let into_iter_id = self.map_expr(&iter.0, builder);
-                    let iter_id = builder.push_op(Op::IntoIter, vec![into_iter_id]);
+                    let iter_id = builder.push_op(Op::IntoIter(into_iter_id));
                     let next_block_id = builder.create_block();
                     builder.jump_to(next_block_id);
                     // Next block
                     let var_id = builder.push_constant(Value::Nothing);
                     builder.declare(*def_id, var_id);
-                    let cond_id = builder.push_op(Op::Next, vec![iter_id, var_id]);
+                    let cond_id = builder.push_op(Op::Next {
+                        target: var_id,
+                        iter: iter_id,
+                    });
                     let body_block_id = builder.create_block();
                     builder.cond_jump_to(cond_id, body_block_id, end_block_id);
                     // Body block
@@ -317,7 +327,10 @@ impl<'a> Constructor<'a> {
                 thir::Stmt::Return((value, _)) => {
                     if let Some(value) = value {
                         let value_id = self.map_expr(&value.0, builder);
-                        builder.push_op(Op::Assign, vec![LocalId::RETURN_VALUE, value_id]);
+                        builder.push_op(Op::Assign {
+                            target: LocalId::RETURN_VALUE,
+                            value: value_id,
+                        });
                     }
                     builder.finish_block(Branch::Return);
                     // TODO: warn for unreachable code if there are stmts after this 'return'
@@ -334,6 +347,10 @@ impl<'a> Constructor<'a> {
                 let left_id = self.map_expr(&left.0, builder);
                 let right_id = self.map_expr(&right.0, builder);
                 use thir::BinaryOp::*;
+                let args = Binary {
+                    left: left_id,
+                    right: right_id,
+                };
                 let op = match op.0 {
                     Add => Op::Add,
                     Sub => Op::Sub,
@@ -341,15 +358,15 @@ impl<'a> Constructor<'a> {
                     Div => Op::Div,
                     Mod => Op::Mod,
                     Eq => Op::Eq,
-                    NotEq => Op::NotEq,
+                    NotEq => Op::Neq,
                     Lt => Op::Lt,
                     Leq => Op::Leq,
                     Gt => Op::Gt,
                     Geq => Op::Geq,
                     And => Op::And,
                     Or => Op::Or,
-                };
-                builder.push_op(op, vec![left_id, right_id])
+                }(args);
+                builder.push_op(op)
             }
             thir::Expr::Unary(thir::Unary { op, expr }) => {
                 let expr_id = self.map_expr(&expr.0, builder);
@@ -357,8 +374,8 @@ impl<'a> Constructor<'a> {
                 let op = match op.0 {
                     Neg => Op::Neg,
                     Not => Op::Not,
-                };
-                builder.push_op(op, vec![expr_id])
+                }(expr_id);
+                builder.push_op(op)
             }
             thir::Expr::Call(thir::Call {
                 name: _,
@@ -370,10 +387,13 @@ impl<'a> Constructor<'a> {
                     .map(|arg| self.map_expr(&arg.0, builder))
                     .collect();
                 if *def_id == PRINT_DEF_ID {
-                    builder.push_op(Op::Print, arg_ids)
+                    builder.push_op(Op::Print { args: arg_ids })
                 } else {
                     let func_id = *self.def_to_func.get(def_id).unwrap();
-                    builder.push_call(func_id, arg_ids)
+                    builder.push_op(Op::Call {
+                        func_id,
+                        args: arg_ids,
+                    })
                 }
             }
             thir::Expr::Var(def_id) => builder.get_local(*def_id),
@@ -385,7 +405,10 @@ impl<'a> Constructor<'a> {
             thir::Expr::Range(thir::Range { start, end }) => {
                 let start_id = self.map_expr(&start.0, builder);
                 let end_id = self.map_expr(&end.0, builder);
-                builder.push_op(Op::Range, vec![start_id, end_id])
+                builder.push_op(Op::Range {
+                    start: start_id,
+                    end: end_id,
+                })
             }
         }
     }
@@ -439,29 +462,15 @@ impl<'a> FuncBuilder<'a> {
         id
     }
 
-    fn push_stmt(&mut self, op: Op, args: Vec<LocalId>, func_id: FuncId, value: Value) -> LocalId {
+    pub fn push_op(&mut self, op: Op) -> LocalId {
         debug_assert_ne!(self.current_block.0, BlockId::FINISHED);
         let local_id = self.create_local();
-        self.current_block.1.push(Stmt {
-            local_id,
-            op,
-            args,
-            func_id,
-            value,
-        });
+        self.current_block.1.push(Stmt { local_id, op });
         local_id
     }
 
-    pub fn push_op(&mut self, op: Op, args: Vec<LocalId>) -> LocalId {
-        self.push_stmt(op, args, FuncId::DEFAULT, Value::Nothing)
-    }
-
     pub fn push_constant(&mut self, value: Value) -> LocalId {
-        self.push_stmt(Op::Constant, Vec::new(), FuncId::DEFAULT, value)
-    }
-
-    pub fn push_call(&mut self, func_id: FuncId, args: Vec<LocalId>) -> LocalId {
-        self.push_stmt(Op::Call, args, func_id, Value::Nothing)
+        self.push_op(Op::Constant(value))
     }
 
     /// Creates a new block and returns its ID, but does not enter it.
@@ -503,7 +512,7 @@ impl<'a> FuncBuilder<'a> {
         // Negates the condition because that tends to keep the MIR stmt ordering the same as in HIR.
         // NOTE: The Not needs to be pushed before replacing the current block.
         let not_cond = if self.current_block.0 != BlockId::FINISHED {
-            self.push_op(Op::Not, vec![cond])
+            self.push_op(Op::Not(cond))
         } else {
             LocalId(usize::MAX) // Not actually used, but satisfies the compiler.
         };
@@ -641,30 +650,62 @@ impl std::fmt::Display for Block {
     }
 }
 
+fn write_tuple(elements: &[LocalId], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "(",)?;
+    for (i, element) in elements.iter().enumerate() {
+        if i > 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "_{}", element.get())?;
+    }
+    write!(f, ")")
+}
+
 impl std::fmt::Display for Stmt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self {
-            local_id,
-            op,
-            args,
-            func_id,
-            value,
-        } = self;
+        let Self { local_id, op } = self;
         write!(f, "var _{} = {op:?}", local_id.get())?;
+        use Op::*;
         match op {
-            Op::Constant => write!(f, "<{}>", value)?,
-            Op::Call => write!(f, "<{:?}>", func_id.get())?,
-            _ => {}
-        }
-        write!(f, "(",)?;
-        for (i, arg) in args.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?;
+            Constant(value) => write!(f, "<{}>", value),
+            Call { func_id, args } => {
+                write!(f, "<{:?}>", func_id.get())?;
+                write_tuple(args, f)
             }
-            write!(f, "_{}", arg.get())?;
+            Print { args } => {
+                write!(f, "Print")?;
+                write_tuple(args, f)
+            }
+            Assign { target, value } => {
+                write!(f, "Assign({}, {})", target.get(), value.get())
+            }
+            Add(binary) | Sub(binary) | Mul(binary) | Div(binary) | Mod(binary) | Eq(binary)
+            | Neq(binary) | Lt(binary) | Leq(binary) | Gt(binary) | Geq(binary) | And(binary)
+            | Or(binary) => {
+                let name = match op {
+                    Add(_) => "Add",
+                    Sub(_) => "Sub",
+                    Mul(_) => "Mul",
+                    Div(_) => "Div",
+                    Mod(_) => "Mod",
+                    Eq(_) => "Eq",
+                    Neq(_) => "Neq",
+                    Lt(_) => "Lt",
+                    Leq(_) => "Leq",
+                    Gt(_) => "Gt",
+                    Geq(_) => "Geq",
+                    And(_) => "And",
+                    Or(_) => "Or",
+                    _ => unreachable!(),
+                };
+                write!(f, "{}({}, {})", name, binary.left.get(), binary.right.get())
+            }
+            Neg(value) => write!(f, "Neg({})", value.get()),
+            Not(value) => write!(f, "Not({})", value.get()),
+            Range { start, end } => write!(f, "Range({}, {})", start.get(), end.get()),
+            IntoIter(iter) => write!(f, "IntoIter({})", iter.get()),
+            Next { target, iter } => write!(f, "Next({}, {})", target.get(), iter.get()),
         }
-        write!(f, ")")?;
-        Ok(())
     }
 }
 

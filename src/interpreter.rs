@@ -66,52 +66,56 @@ impl<'a> Interpreter<'a> {
 
     fn run_stmt(&mut self, stmt: &Stmt) {
         // TODO: arithmetic overflow checks
-        let value = match stmt.op {
-            Op::Assign => {
-                self.set_local(stmt.args[0], self.get_local(stmt.args[1]).clone());
+        let value = match &stmt.op {
+            &Op::Assign { target, value } => {
+                self.set_local(target, self.get_local(value).clone());
                 Value::Nothing
             }
-            Op::Add => self.int_op(stmt, |l, r| l + r),
-            Op::Sub => self.int_op(stmt, |l, r| l - r),
-            Op::Mul => self.int_op(stmt, |l, r| l * r),
-            Op::Div => self.int_op(stmt, |l, r| l / r),
-            Op::Mod => self.int_op(stmt, |l, r| l % r),
-            Op::Lt => self.cmp_op(stmt, |l, r| l < r),
-            Op::Leq => self.cmp_op(stmt, |l, r| l <= r),
-            Op::Gt => self.cmp_op(stmt, |l, r| l > r),
-            Op::Geq => self.cmp_op(stmt, |l, r| l >= r),
-            Op::Eq => {
-                let left = self.get_local(stmt.args[0]);
-                let right = self.get_local(stmt.args[1]);
+            &Op::Add(binary) => self.int_op(binary, |l, r| l + r),
+            &Op::Sub(binary) => self.int_op(binary, |l, r| l - r),
+            &Op::Mul(binary) => self.int_op(binary, |l, r| l * r),
+            &Op::Div(binary) => self.int_op(binary, |l, r| l / r),
+            &Op::Mod(binary) => self.int_op(binary, |l, r| l % r),
+            &Op::Lt(binary) => self.cmp_op(binary, |l, r| l < r),
+            &Op::Leq(binary) => self.cmp_op(binary, |l, r| l <= r),
+            &Op::Gt(binary) => self.cmp_op(binary, |l, r| l > r),
+            &Op::Geq(binary) => self.cmp_op(binary, |l, r| l >= r),
+            &Op::Eq(Binary { left, right }) => {
+                let left = self.get_local(left);
+                let right = self.get_local(right);
                 debug_assert_eq!(discriminant(left), discriminant(right));
                 Value::Bool(left == right)
             }
-            Op::NotEq => {
-                let left = self.get_local(stmt.args[0]);
-                let right = self.get_local(stmt.args[1]);
+            &Op::Neq(Binary { left, right }) => {
+                let left = self.get_local(left);
+                let right = self.get_local(right);
                 debug_assert_eq!(discriminant(left), discriminant(right));
                 Value::Bool(left != right)
             }
-            Op::And => match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
-                (&Value::Bool(left), &Value::Bool(right)) => Value::Bool(left && right),
-                _ => unreachable!(),
-            },
-            Op::Or => match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
-                (&Value::Bool(left), &Value::Bool(right)) => Value::Bool(left || right),
-                _ => unreachable!(),
-            },
-            Op::Neg => match self.get_local(stmt.args[0]) {
+            &Op::And(Binary { left, right }) => {
+                match (self.get_local(left), self.get_local(right)) {
+                    (&Value::Bool(left), &Value::Bool(right)) => Value::Bool(left && right),
+                    _ => unreachable!(),
+                }
+            }
+            &Op::Or(Binary { left, right }) => {
+                match (self.get_local(left), self.get_local(right)) {
+                    (&Value::Bool(left), &Value::Bool(right)) => Value::Bool(left || right),
+                    _ => unreachable!(),
+                }
+            }
+            &Op::Neg(value) => match self.get_local(value) {
                 Value::Int(int) => Value::Int(-int),
                 _ => unreachable!(),
             },
-            Op::Not => match self.get_local(stmt.args[0]) {
+            &Op::Not(value) => match self.get_local(value) {
                 Value::Bool(bool) => Value::Bool(!bool),
                 _ => unreachable!(),
             },
-            Op::Constant => stmt.value.clone(),
-            Op::Call => {
+            Op::Constant(value) => value.clone(),
+            Op::Call { func_id, args } => {
                 // Push stack frame.
-                let func = &self.funcs[stmt.func_id.get()];
+                let func = &self.funcs[func_id.get()];
                 let prev_frame_start = self.frame_start;
                 let prev_frame_end = self.frame_end;
                 self.frame_start = self.frame_end;
@@ -125,7 +129,7 @@ impl<'a> Interpreter<'a> {
                 // Default-initialize return value
                 self.stack[self.frame_start] = Value::Nothing;
                 // Move arguments to function parameter slots
-                for (arg, i) in stmt.args.iter().zip(1..) {
+                for (arg, i) in args.iter().zip(1..) {
                     self.stack[self.frame_start + i] = std::mem::replace(
                         &mut self.stack[prev_frame_start + arg.get()],
                         Value::Nothing,
@@ -142,8 +146,8 @@ impl<'a> Interpreter<'a> {
                 self.stack[self.frame_end..].fill(Value::Nothing);
                 return; // The value is already on the stack.
             }
-            Op::Print => {
-                for (i, arg_id) in stmt.args.iter().enumerate() {
+            Op::Print { args } => {
+                for (i, arg_id) in args.iter().enumerate() {
                     if i > 0 {
                         print!(" ");
                     }
@@ -162,23 +166,23 @@ impl<'a> Interpreter<'a> {
                 println!();
                 Value::Nothing
             }
-            Op::Range => match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
+            &Op::Range { start, end } => match (self.get_local(start), self.get_local(end)) {
                 (&Value::Int(start), &Value::Int(end)) => Value::Range { start, end },
                 _ => unreachable!(),
             },
-            Op::IntoIter => match self.get_local(stmt.args[0]) {
+            &Op::IntoIter(iter) => match self.get_local(iter) {
                 &Value::Range { start, end } => Value::Range { start, end },
                 _ => unreachable!(),
             },
-            Op::Next => match self.get_local(stmt.args[0]) {
+            &Op::Next { target, iter } => match self.get_local(iter) {
                 &Value::Range { start, end } => {
                     if start < end {
                         let new_range = Value::Range {
                             start: start + 1,
                             end,
                         };
-                        self.set_local(stmt.args[0], new_range);
-                        self.set_local(stmt.args[1], Value::Int(start));
+                        self.set_local(iter, new_range);
+                        self.set_local(target, Value::Int(start));
                     }
                     Value::Bool(start < end)
                 }
@@ -188,8 +192,8 @@ impl<'a> Interpreter<'a> {
         self.set_local(stmt.local_id, value);
     }
 
-    fn int_op(&self, stmt: &Stmt, f: impl FnOnce(Int, Int) -> Int) -> Value {
-        match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
+    fn int_op(&self, binary: Binary, f: impl FnOnce(Int, Int) -> Int) -> Value {
+        match (self.get_local(binary.left), self.get_local(binary.right)) {
             (Value::Int(left), Value::Int(right)) => Value::Int(f(*left, *right)),
             (Value::Nothing, _) => unreachable!("Left side is 'Nothing'"),
             (_, Value::Nothing) => unreachable!("Right side is 'Nothing'"),
@@ -197,8 +201,8 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn cmp_op(&self, stmt: &Stmt, f: impl FnOnce(Int, Int) -> bool) -> Value {
-        match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
+    fn cmp_op(&self, binary: Binary, f: impl FnOnce(Int, Int) -> bool) -> Value {
+        match (self.get_local(binary.left), self.get_local(binary.right)) {
             (Value::Int(left), Value::Int(right)) => Value::Bool(f(*left, *right)),
             (Value::Nothing, _) => unreachable!("Left side is 'Nothing'"),
             (_, Value::Nothing) => unreachable!("Right side is 'Nothing'"),
