@@ -1,14 +1,14 @@
 use std::num::IntErrorKind;
 
 pub use crate::hir::{
-    Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, DefId, Error, Expr, For, Func, Hir,
-    If, Loop, Param, Range, Stmt, Type, Unary, UnaryOp, VarDecl, While,
+    Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, DefId, Expr, For, Func, Hir, If, Loop,
+    Param, Range, Stmt, Type, Unary, UnaryOp, VarDecl, While,
 };
 
 pub type Int = i64;
 
 use crate::{
-    Span, Spanned,
+    Error, Span, Spanned,
     hir::{Errors, PRINT_DEF_ID},
 };
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{Span, Spanned, ast};
+use crate::{Error, Span, Spanned, ast};
 
 pub use crate::ast::{AssignOp, BinaryOp, UnaryOp};
 
@@ -181,13 +181,6 @@ pub struct While<'a> {
 
 pub struct Loop<'a> {
     pub body: Block<'a>,
-}
-
-pub struct Error<'a> {
-    pub filename: &'a str,
-    pub message: String,
-    pub span: Span,
-    pub contexts: Vec<(String, Span)>,
 }
 
 pub fn hir_from_ast<'a>(ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error<'a>>> {

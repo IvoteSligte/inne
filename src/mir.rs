@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-pub use crate::typed_hir::{DefId, DefInfo, Error, Int};
+pub use crate::typed_hir::{DefId, DefInfo, Int};
 use crate::{
-    TypedHir,
+    Error, TypedHir,
     hir::{Errors, PRINT_DEF_ID},
     typed_hir as thir,
 };
