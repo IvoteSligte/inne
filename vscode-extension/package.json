@@ -9,26 +9,36 @@
 		"type": "git",
 		"url": "https://github.com/IvoteSligte/inne"
 	},
-    "categories": [],
-    "keywords": ["inne"],
-    "main": "./out/extension",
-    "activationEvents": [
-      "onLanguage:inne"
-    ],
-    "contributes": {
-      "languages": [
-        {
-          "id": "inne",
-          "aliases": ["Inne", "inne"],
-          "extensions": [".inne", ".in"],
-          "configuration": "./language-configuration.json"
-        }
-      ]
-    },
+	"categories": [],
+	"keywords": [
+		"inne"
+	],
+	"main": "./out/extension",
+	"contributes": {
+		"languages": [
+			{
+				"id": "inne",
+				"aliases": [
+					"Inne",
+					"inne"
+				],
+				"extensions": [
+					".inne",
+					".in"
+				],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"configurationDefaults": {
+			"[inne]": {
+				"editor.semanticHighlighting.enabled": true
+			}
+		}
+	},
 	"engines": {
 		"vscode": "^1.100.0"
-    },
-    "scripts": {
+	},
+	"scripts": {
 		"vscode:prepublish": "npm run compile",
 		"compile": "tsc -b",
 		"watch": "tsc -b -w"
@@ -38,7 +48,7 @@
 		"vscode-languageclient": "^9.0.1"
 	},
 	"devDependencies": {
-	    "@types/vscode": "^1.100.0",
+		"@types/vscode": "^1.100.0",
 		"@types/node": "^22",
 		"typescript": "^5.9.2"
 	}
