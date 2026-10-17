@@ -53,7 +53,7 @@ impl FuncId {
 }
 
 impl BlockId {
-    pub const INVALID: Self = Self(usize::MAX);
+    pub const FINISHED: Self = Self(usize::MAX);
 }
 
 impl LocalId {
@@ -85,6 +85,7 @@ pub enum Branch {
 
 #[derive(Debug, Clone, Copy)]
 pub enum Op {
+    // TODO: remove Assign and instead just set stmt.local_id to the assign target
     Assign,
     Add,
     Sub,
@@ -125,184 +126,6 @@ pub fn mir_from_typed_hir<'a>(typed_hir: &'a TypedHir<'a>) -> Result<Mir<'a>, Ve
     Constructor::map_thir(typed_hir)
 }
 
-struct FuncBuilder<'a> {
-    /// Function name.
-    name: &'a str,
-    /// Maps [DefId]s for variable declarations to their [LocalId].
-    def_to_local: HashMap<DefId, LocalId>,
-    /// The number of parameters this function has.
-    num_params: usize,
-    /// Counter for the number of locals in this function.
-    num_locals: usize,
-    /// Total number of blocks, including partial ones.
-    num_blocks: usize,
-    current_block: (BlockId, Vec<Stmt>),
-    queued_blocks: HashMap<BlockId, Vec<Stmt>>,
-    finished_blocks: Vec<(BlockId, Block)>,
-}
-
-impl<'a> FuncBuilder<'a> {
-    pub fn new(name: &'a str, num_params: usize) -> Self {
-        Self {
-            name,
-            def_to_local: HashMap::new(),
-            num_params,
-            num_locals: 0,
-            num_blocks: 1, // Only the current block exists at the start.
-            current_block: (BlockId(0), Vec::new()),
-            queued_blocks: HashMap::new(),
-            finished_blocks: Vec::new(),
-        }
-    }
-
-    pub fn declare(&mut self, def_id: DefId, local_id: LocalId) {
-        self.def_to_local.insert(def_id, local_id);
-    }
-
-    pub fn get_local(&self, def_id: DefId) -> LocalId {
-        debug_assert!(
-            self.def_to_local.contains_key(&def_id),
-            "def_to_local does not contain def_id {def_id}; def_to_local: {:?}",
-            self.def_to_local
-        );
-        // FIXME: this also retrieves globals and maps them to LocalIds, which is incorrect.
-        *self.def_to_local.get(&def_id).unwrap()
-    }
-
-    fn new_local(&mut self) -> LocalId {
-        self.num_locals += 1;
-        // Equal to 1 + num_params + num_locals_before_this_function
-        // because the return value has Localid(0).
-        LocalId(self.num_params + self.num_locals)
-    }
-
-    fn push_stmt(&mut self, op: Op, args: Vec<LocalId>, func_id: FuncId, value: Value) -> LocalId {
-        debug_assert_ne!(self.current_block.0, BlockId::INVALID);
-        let local_id = self.new_local();
-        self.current_block.1.push(Stmt {
-            local_id,
-            op,
-            args,
-            func_id,
-            value,
-        });
-        local_id
-    }
-
-    pub fn push_op(&mut self, op: Op, args: Vec<LocalId>) -> LocalId {
-        self.push_stmt(op, args, FuncId::DEFAULT, Value::Nothing)
-    }
-
-    pub fn push_constant(&mut self, value: Value) -> LocalId {
-        self.push_stmt(Op::Constant, Vec::new(), FuncId::DEFAULT, value)
-    }
-
-    pub fn push_call(&mut self, func_id: FuncId, args: Vec<LocalId>) -> LocalId {
-        self.push_stmt(Op::Call, args, func_id, Value::Nothing)
-    }
-
-    fn create_block_id(&mut self) -> BlockId {
-        let id = BlockId(self.num_blocks);
-        debug_assert!(id != BlockId::INVALID);
-        self.num_blocks += 1;
-        id
-    }
-
-    /// Creates a new block and returns its ID, but does not enter it.
-    pub fn create_block(&mut self) -> BlockId {
-        let id = self.create_block_id();
-        self.queued_blocks.insert(id, Vec::new());
-        id
-    }
-
-    /// Pushes an unconditional jump to `block_id` and also moves to it.
-    pub fn jump_to(&mut self, block_id: BlockId) {
-        debug_assert_ne!(self.current_block.0, block_id);
-        self.push_jump(block_id, block_id);
-    }
-
-    pub fn push_jump(&mut self, target_block_id: BlockId, move_to_block_id: BlockId) {
-        debug_assert_ne!(self.current_block.0, BlockId::INVALID);
-        debug_assert_ne!(self.current_block.0, target_block_id);
-        debug_assert_ne!(self.current_block.0, move_to_block_id);
-        let (id, stmts) = std::mem::replace(
-            &mut self.current_block,
-            self.queued_blocks.remove_entry(&move_to_block_id).unwrap(),
-        );
-        let block = Block {
-            stmts,
-            branch: Branch::Jump(target_block_id),
-        };
-        self.finished_blocks.push((id, block));
-    }
-
-    /// Pushes a conditional jump to either `true_id` or `false_id`.
-    /// Moves the cursor to `true_id`.
-    pub fn cond_jump_to(&mut self, cond: LocalId, true_id: BlockId, false_id: BlockId) {
-        debug_assert_ne!(self.current_block.0, BlockId::INVALID);
-        // Negates the condition because that tends to keep the MIR stmt ordering the same as in HIR.
-        // NOTE: The Not needs to be pushed before replacing the current block.
-        let not_cond = self.push_op(Op::Not, vec![cond]);
-        let (id, stmts) = std::mem::replace(
-            &mut self.current_block,
-            self.queued_blocks.remove_entry(&true_id).unwrap(),
-        );
-        let block = Block {
-            stmts,
-            branch: Branch::Cond {
-                cond: not_cond,
-                target: false_id,
-            },
-        };
-        self.finished_blocks.push((id, block));
-    }
-
-    /// Finishes the current block and then moves the builder into the INVALID state.
-    /// This means that further writes should not be performed without moving
-    /// the cursor to a different block first.
-    pub fn finish_block(&mut self, branch: Branch) {
-        debug_assert_ne!(self.current_block.0, BlockId::INVALID);
-        let (id, stmts) =
-            std::mem::replace(&mut self.current_block, (BlockId::INVALID, Vec::new()));
-        let block = Block { stmts, branch };
-        self.finished_blocks.push((id, block));
-    }
-
-    pub fn build(mut self) -> Func<'a> {
-        debug_assert!(self.current_block.1.is_empty());
-        debug_assert!(!self.queued_blocks.contains_key(&BlockId::INVALID));
-        debug_assert!(self.queued_blocks.is_empty());
-
-        // Replace placeholder block IDs with new ones now that their final positions are known.
-        {
-            let mut id_map = Vec::from_iter(std::iter::repeat_n(
-                BlockId(usize::MAX),
-                self.finished_blocks.len(),
-            ));
-            for (new_id, (old_id, _)) in self.finished_blocks.iter().enumerate() {
-                id_map[old_id.get()] = BlockId(new_id);
-            }
-            for (_, block) in &mut self.finished_blocks {
-                match &mut block.branch {
-                    Branch::Jump(target) => *target = id_map[target.get()],
-                    Branch::Cond { cond: _, target } => *target = id_map[target.get()],
-                    Branch::Return => {}
-                }
-            }
-        }
-        Func {
-            name: self.name,
-            // Return value + number of params + number of locals
-            stack_space: 1 + self.num_params + self.num_locals,
-            blocks: self
-                .finished_blocks
-                .into_iter()
-                .map(|(_, block)| block)
-                .collect(),
-        }
-    }
-}
-
 struct Constructor<'a> {
     def_to_func: HashMap<DefId, FuncId>,
     errors: Errors<'a>,
@@ -324,7 +147,7 @@ impl<'a> Constructor<'a> {
             .iter()
             .map(|func| _self.map_func(func))
             .collect();
-        let mut builder = FuncBuilder::new("%main", 0);
+        let mut builder = FuncBuilder::new("%main");
         _self.map_scope(&typed_hir.stmts, None, &mut builder);
         builder.finish_block(Branch::Return);
         let main_func = builder.build();
@@ -340,7 +163,11 @@ impl<'a> Constructor<'a> {
     }
 
     fn map_func(&mut self, func: &'a thir::Func<'a>) -> Func<'a> {
-        let mut builder = FuncBuilder::new(func.name.0, func.params.len());
+        let mut builder = FuncBuilder::new(func.name.0);
+        for param in &func.params {
+            let local_id = builder.create_local();
+            builder.declare(param.def_id, local_id);
+        }
         self.map_scope(&func.body, None, &mut builder);
         builder.finish_block(Branch::Return);
         builder.build()
@@ -463,7 +290,7 @@ impl<'a> Constructor<'a> {
                     Some((_, break_block_id)) => {
                         builder.finish_block(Branch::Jump(break_block_id));
                         // TODO: warn for unreachable code if there are stmts after this 'break'
-                        return;
+                        break;
                     }
                     None => {
                         self.errors
@@ -474,7 +301,7 @@ impl<'a> Constructor<'a> {
                     Some((continue_block_id, _)) => {
                         builder.finish_block(Branch::Jump(continue_block_id));
                         // TODO: warn for unreachable code if there are stmts after this 'continue'
-                        return;
+                        break;
                     }
                     None => {
                         self.errors
@@ -487,6 +314,8 @@ impl<'a> Constructor<'a> {
                         builder.push_op(Op::Assign, vec![LocalId::RETURN_VALUE, value_id]);
                     }
                     builder.finish_block(Branch::Return);
+                    // TODO: warn for unreachable code if there are stmts after this 'return'
+                    break;
                 }
             }
         }
@@ -556,6 +385,188 @@ impl<'a> Constructor<'a> {
     }
 }
 
+struct FuncBuilder<'a> {
+    /// Function name.
+    name: &'a str,
+    /// Maps [DefId]s for variable declarations to their [LocalId].
+    def_to_local: HashMap<DefId, LocalId>,
+    /// Counter for the number of locals in this function.
+    num_locals: usize,
+    /// Total number of blocks, including partial ones.
+    num_blocks: usize,
+    current_block: (BlockId, Vec<Stmt>),
+    queued_blocks: HashMap<BlockId, Vec<Stmt>>,
+    finished_blocks: Vec<(BlockId, Block)>,
+}
+
+impl<'a> FuncBuilder<'a> {
+    pub fn new(name: &'a str) -> Self {
+        Self {
+            name,
+            def_to_local: HashMap::new(),
+            num_locals: 0,
+            num_blocks: 1, // Only the current block exists at the start.
+            current_block: (BlockId(0), Vec::new()),
+            queued_blocks: HashMap::new(),
+            finished_blocks: Vec::new(),
+        }
+    }
+
+    pub fn declare(&mut self, def_id: DefId, local_id: LocalId) {
+        self.def_to_local.insert(def_id, local_id);
+    }
+
+    pub fn get_local(&self, def_id: DefId) -> LocalId {
+        debug_assert!(
+            self.def_to_local.contains_key(&def_id),
+            "def_to_local does not contain def_id {def_id}; def_to_local: {:?}",
+            self.def_to_local
+        );
+        // FIXME: this also retrieves globals and maps them to LocalIds, which is incorrect.
+        *self.def_to_local.get(&def_id).unwrap()
+    }
+
+    /// Creates a local for a statement without requiring a body.
+    pub fn create_local(&mut self) -> LocalId {
+        self.num_locals += 1;
+        // Equal to 1 + num_locals_before_this_function
+        // because the return value has Localid(0).
+        LocalId(self.num_locals)
+    }
+
+    fn push_stmt(&mut self, op: Op, args: Vec<LocalId>, func_id: FuncId, value: Value) -> LocalId {
+        debug_assert_ne!(self.current_block.0, BlockId::FINISHED);
+        let local_id = self.create_local();
+        self.current_block.1.push(Stmt {
+            local_id,
+            op,
+            args,
+            func_id,
+            value,
+        });
+        local_id
+    }
+
+    pub fn push_op(&mut self, op: Op, args: Vec<LocalId>) -> LocalId {
+        self.push_stmt(op, args, FuncId::DEFAULT, Value::Nothing)
+    }
+
+    pub fn push_constant(&mut self, value: Value) -> LocalId {
+        self.push_stmt(Op::Constant, Vec::new(), FuncId::DEFAULT, value)
+    }
+
+    pub fn push_call(&mut self, func_id: FuncId, args: Vec<LocalId>) -> LocalId {
+        self.push_stmt(Op::Call, args, func_id, Value::Nothing)
+    }
+
+    /// Creates a new block and returns its ID, but does not enter it.
+    pub fn create_block(&mut self) -> BlockId {
+        let id = BlockId(self.num_blocks);
+        debug_assert!(id != BlockId::FINISHED);
+        self.num_blocks += 1;
+        self.queued_blocks.insert(id, Vec::new());
+        id
+    }
+
+    /// Pushes an unconditional jump to `block_id` and also moves to it.
+    pub fn jump_to(&mut self, block_id: BlockId) {
+        debug_assert_ne!(self.current_block.0, block_id);
+        self.push_jump(block_id, block_id);
+    }
+
+    /// Moves the cursor to `move_to_block_id` after pushing a jump to `target_block_id`.
+    /// Does not push the jump if the current block is finished.
+    pub fn push_jump(&mut self, target_block_id: BlockId, move_to_block_id: BlockId) {
+        debug_assert_ne!(self.current_block.0, target_block_id);
+        debug_assert_ne!(self.current_block.0, move_to_block_id);
+        let (id, stmts) = std::mem::replace(
+            &mut self.current_block,
+            self.queued_blocks.remove_entry(&move_to_block_id).unwrap(),
+        );
+        if id != BlockId::FINISHED {
+            let block = Block {
+                stmts,
+                branch: Branch::Jump(target_block_id),
+            };
+            self.finished_blocks.push((id, block));
+        }
+    }
+
+    /// Moves the cursor to `true_id` after pushing a conditional jump to either `true_id` or `false_id`.
+    /// Does not push the jump if the current block is finished.
+    pub fn cond_jump_to(&mut self, cond: LocalId, true_id: BlockId, false_id: BlockId) {
+        // Negates the condition because that tends to keep the MIR stmt ordering the same as in HIR.
+        // NOTE: The Not needs to be pushed before replacing the current block.
+        let not_cond = if self.current_block.0 != BlockId::FINISHED {
+            self.push_op(Op::Not, vec![cond])
+        } else {
+            LocalId(usize::MAX) // Not actually used, but satisfies the compiler.
+        };
+        let (id, stmts) = std::mem::replace(
+            &mut self.current_block,
+            self.queued_blocks.remove_entry(&true_id).unwrap(),
+        );
+        if id != BlockId::FINISHED {
+            let block = Block {
+                stmts,
+                branch: Branch::Cond {
+                    cond: not_cond,
+                    target: false_id,
+                },
+            };
+            self.finished_blocks.push((id, block));
+        }
+    }
+
+    /// Finishes the current block and then moves the builder into the FINISHED state.
+    /// This means that further writes should not be performed without moving
+    /// the cursor to a different block first.
+    /// If there current block is already finished, then this does nothing.
+    pub fn finish_block(&mut self, branch: Branch) {
+        if self.current_block.0 != BlockId::FINISHED {
+            let (id, stmts) =
+                std::mem::replace(&mut self.current_block, (BlockId::FINISHED, Vec::new()));
+            let block = Block { stmts, branch };
+            self.finished_blocks.push((id, block));
+        }
+    }
+
+    pub fn build(mut self) -> Func<'a> {
+        debug_assert!(self.current_block.1.is_empty());
+        debug_assert!(!self.queued_blocks.contains_key(&BlockId::FINISHED));
+        debug_assert!(self.queued_blocks.is_empty());
+
+        // Replace placeholder block IDs with new ones now that their final positions are known.
+        {
+            let mut id_map = Vec::from_iter(std::iter::repeat_n(
+                BlockId(usize::MAX),
+                self.finished_blocks.len(),
+            ));
+            for (new_id, (old_id, _)) in self.finished_blocks.iter().enumerate() {
+                debug_assert_ne!(*old_id, BlockId::FINISHED);
+                id_map[old_id.get()] = BlockId(new_id);
+            }
+            for (_, block) in &mut self.finished_blocks {
+                match &mut block.branch {
+                    Branch::Jump(target) => *target = id_map[target.get()],
+                    Branch::Cond { cond: _, target } => *target = id_map[target.get()],
+                    Branch::Return => {}
+                }
+            }
+        }
+        Func {
+            name: self.name,
+            // Return value + number of locals
+            stack_space: 1 + self.num_locals,
+            blocks: self
+                .finished_blocks
+                .into_iter()
+                .map(|(_, block)| block)
+                .collect(),
+        }
+    }
+}
+
 use indentify::*;
 
 impl std::fmt::Display for Value {
@@ -592,7 +603,11 @@ impl std::fmt::Display for Func<'_> {
             stack_space,
             blocks,
         } = self;
-        writeln!(f, "func {name}({} locals) {{{INDENT}", stack_space - 1)?;
+        writeln!(
+            f,
+            "func {name}({} locals) -> _0 {{{INDENT}",
+            stack_space - 1
+        )?;
         for (i, block) in blocks.iter().enumerate() {
             writeln!(f, "block {i}: {block}")?;
         }

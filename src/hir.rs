@@ -551,12 +551,12 @@ impl std::fmt::Display for Hir<'_> {
             body,
         } in &self.funcs
         {
-            write!(f, "_{} func {name}(", def_id)?;
+            write!(f, "func _{} {name}(", def_id)?;
             for (i, param) in params.iter().enumerate() {
                 if i > 0 {
                     f.write_str(", ")?;
                 }
-                write!(f, "{}: {}", param.name.0, param.r#type.0)?;
+                write!(f, "_{} {}: {}", param.def_id, param.name.0, param.r#type.0)?;
             }
             write!(f, ") ")?;
             if let Some((return_type, _)) = return_type {
@@ -569,7 +569,7 @@ impl std::fmt::Display for Hir<'_> {
             writeln!(f, "{DEDENT}}}")?;
         }
         for stmt in &self.stmts {
-            write!(f, "{stmt}")?;
+            writeln!(f, "{stmt}")?;
         }
         Ok(())
     }
@@ -583,7 +583,7 @@ impl<'a> std::fmt::Display for Stmt<'a> {
                 name: (name, _),
                 value: (value, _),
             }) => {
-                write!(f, "_{def_id} var {name} = {value};")?;
+                write!(f, "var _{def_id} {name} = {value};")?;
             }
             Stmt::Expr((expr, _)) => write!(f, "{expr};")?,
             Stmt::Assign(Assign {

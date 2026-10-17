@@ -101,6 +101,8 @@ impl<'a> Interpreter<'a> {
             },
             Op::Constant => stmt.value.clone(),
             Op::Call => {
+                // FIXME: param locations are totally messed up (and do we even need a return value slot?)
+
                 // Push stack frame.
                 let func = &self.funcs[stmt.func_id.get()];
                 let prev_frame_start = self.frame_start;
@@ -189,6 +191,8 @@ impl<'a> Interpreter<'a> {
     fn int_op(&self, stmt: &Stmt, f: impl FnOnce(Int, Int) -> Int) -> Value {
         match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
             (Value::Int(left), Value::Int(right)) => Value::Int(f(*left, *right)),
+            (Value::Nothing, _) => unreachable!("Left side is 'Nothing'"),
+            (_, Value::Nothing) => unreachable!("Right side is 'Nothing'"),
             _ => unreachable!(),
         }
     }
@@ -196,6 +200,8 @@ impl<'a> Interpreter<'a> {
     fn cmp_op(&self, stmt: &Stmt, f: impl FnOnce(Int, Int) -> bool) -> Value {
         match (self.get_local(stmt.args[0]), self.get_local(stmt.args[1])) {
             (Value::Int(left), Value::Int(right)) => Value::Bool(f(*left, *right)),
+            (Value::Nothing, _) => unreachable!("Left side is 'Nothing'"),
+            (_, Value::Nothing) => unreachable!("Right side is 'Nothing'"),
             _ => unreachable!(),
         }
     }
