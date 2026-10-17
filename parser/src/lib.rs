@@ -5,7 +5,7 @@ pub mod parser;
 pub use lexer::*;
 pub use parser::*;
 
-pub use chumsky::{Parser, input::Input};
+pub use chumsky::{Parser, error::Rich, input::Input};
 
 pub fn lex(source: &str) -> (Option<Vec<(Token<'_>, Span)>>, Vec<LexError<'_>>) {
     create_lexer().parse(source).into_output_errors()

@@ -3,7 +3,7 @@ func sqrt(n: int) -> int {
     if n <= 0 {
         return 0
     }
-    var sqrt = n/2
+    var sqrt = n / 2
     while sqrt * sqrt > n {
         sqrt -= 1
     }
