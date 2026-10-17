@@ -11,15 +11,10 @@ import {
 let client: LanguageClient;
 
 export function activate(context: ExtensionContext) {
-    // The server is implemented as separate executable
-    const serverPath = context.asAbsolutePath(
-        path.join('bin', 'inne_ls') // NOTE: file extension differs on Windows
-    );
-
     // If the extension is launched in debug mode then the debug server options are used
     // Otherwise the run options are used
     const serverOptions: ServerOptions = {
-        command: serverPath
+        command: 'inne-ls' // NOTE: should this be inne_ls instead?
     };
 
     // Options to control the language client
