@@ -25,6 +25,10 @@ pub fn parse<'src>(
     source: &'src str,
     filename: &'src str,
 ) -> (Option<ParseTree<'src>>, Vec<Error>) {
+    let tokens = tokens
+        .iter()
+        .filter(|(token, _)| !matches!(token, Token::Comment(_)))
+        .collect::<Vec<_>>();
     let (tokens, errors) = parser::create_parser()
         .map(|stmts| ParseTree { filename, stmts })
         .parse(tokens.map((source.len()..source.len()).into(), |(t, s)| (t, s)))

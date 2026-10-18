@@ -16,7 +16,7 @@ mod semantic_tokens;
 
 // NOTE: The LSP protocol uses UTF-16 by default, so care should be taken when counting characters.
 
-/// Token types.
+/// Token types. Must be the same as in the [SemanticTokenLegend].
 mod tt {
     pub const KEYWORD: u32 = 0;
     pub const OPERATOR: u32 = 1;
@@ -26,6 +26,7 @@ mod tt {
     pub const FUNCTION: u32 = 5;
     pub const PARAMETER: u32 = 6;
     pub const TYPE: u32 = 7;
+    pub const COMMENT: u32 = 8;
 }
 
 pub fn position_at_end(source: &str, line: &mut u32, character: &mut u32) -> Position {
@@ -130,6 +131,7 @@ impl LanguageServer for Backend {
                                     SemanticTokenType::FUNCTION,
                                     SemanticTokenType::PARAMETER,
                                     SemanticTokenType::TYPE,
+                                    SemanticTokenType::COMMENT,
                                 ],
                                 token_modifiers: Vec::new(),
                             },

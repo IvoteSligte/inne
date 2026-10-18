@@ -1,4 +1,5 @@
 
+// Computes the square root of `n`.
 func sqrt(n: int) -> int {
     if n <= 0 {
         return 0

@@ -26,6 +26,7 @@ pub fn extract_semantic_tokens(file: &File) -> Option<SemanticTokensResult> {
             Token::String(_) => tt::STRING,
             Token::Op("and") | Token::Op("or") | Token::Op("not") => tt::KEYWORD,
             Token::Op(_) => tt::OPERATOR,
+            Token::Comment(_) => tt::COMMENT,
             _ if token.is_keyword() => tt::KEYWORD,
             _ => return None,
         };

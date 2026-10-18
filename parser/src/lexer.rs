@@ -29,6 +29,7 @@ pub enum Token<'src> {
     Bool(bool),
     String(&'src str),
     Op(&'src str),
+    Comment(&'src str),
     // Delimiters
     LBrace,
     RBrace,
@@ -77,6 +78,7 @@ impl std::fmt::Display for Token<'_> {
             Int(int) => f.write_str(int),
             String(string) => write!(f, "{string:?}"),
             Op(op) => f.write_str(op),
+            Comment(comment) => write!(f, "// {comment}"),
             LBrace => f.write_str("{"),
             RBrace => f.write_str("}"),
             LParen => f.write_str("("),
@@ -185,6 +187,13 @@ pub fn create_lexer<'src>()
     ));
     choice((
         // NOTE: ordering is important to ensure the right tokens are lexed
+        just("//").then(just(' ').or_not()).ignore_then(
+            any()
+                .and_is(text::newline().not())
+                .repeated()
+                .to_slice()
+                .map(Comment),
+        ),
         keyword,
         symbol,
         operator,
