@@ -10,7 +10,7 @@ pub use hir::{Hir, hir_from_ast};
 pub use interpreter::Interpreter;
 pub use mir::{Mir, mir_from_typed_hir};
 pub use parser::{
-    Input as _, LexError, ParseError, ParseTree, Parser as _, Rich, Span, Spanned, Token,
+    self, Input as _, LexError, ParseError, ParseTree, Parser as _, Rich, Span, Spanned, Token,
 };
 pub use typed_hir::{TypedHir, typed_hir_from_hir};
 

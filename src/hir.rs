@@ -194,9 +194,7 @@ pub(crate) struct Errors {
 
 impl Errors {
     pub fn new() -> Self {
-        Self {
-            inner: Vec::new(),
-        }
+        Self { inner: Vec::new() }
     }
 
     pub fn is_empty(&self) -> bool {
