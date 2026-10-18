@@ -65,7 +65,7 @@ fn main() {
     }
     let filename = "filename.inne";
     let (maybe_tokens, errors) = lex(&source);
-    print_parse_errors(errors, filename, &source, "lexing");
+    eprint_errors(&errors, filename, &source, "lexing");
     let Some(tokens) = maybe_tokens else {
         return;
     };
@@ -73,7 +73,7 @@ fn main() {
         todo!();
     }
     let (maybe_parse_tree, errors) = parse(&tokens, filename, &source);
-    print_parse_errors(errors, filename, &source, "parsing");
+    eprint_errors(&errors, filename, &source, "parsing");
     let Some(parse_tree) = maybe_parse_tree else {
         return;
     };
@@ -87,7 +87,7 @@ fn main() {
     let hir = match hir_from_ast(&ast) {
         Ok(hir) => hir,
         Err(errors) => {
-            print_ir_errors(&errors, &source, filename, "symbol resolution");
+            eprint_errors(&errors, &source, filename, "symbol resolution");
             return;
         }
     };
@@ -98,7 +98,7 @@ fn main() {
     let typed_hir = match typed_hir_from_hir(hir) {
         Ok(typed_hir) => typed_hir,
         Err(errors) => {
-            print_ir_errors(&errors, &source, filename, "type checking");
+            eprint_errors(&errors, &source, filename, "type checking");
             return;
         }
     };
@@ -108,7 +108,7 @@ fn main() {
     let mir = match mir_from_typed_hir(&typed_hir) {
         Ok(mir) => mir,
         Err(errors) => {
-            print_ir_errors(&errors, &source, filename, "control-flow analysis");
+            eprint_errors(&errors, &source, filename, "control-flow analysis");
             return;
         }
     };
@@ -117,4 +117,10 @@ fn main() {
         return;
     }
     Interpreter::run(&mir);
+}
+
+pub fn eprint_errors(errors: &[Error], source: &str, filename: &str, stage: &str) {
+    for error in errors {
+        error.eprint(source, filename, stage);
+    }
 }

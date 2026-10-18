@@ -128,17 +128,17 @@ pub struct Stmt {
     pub op: Op,
 }
 
-pub fn mir_from_typed_hir<'a>(typed_hir: &'a TypedHir<'a>) -> Result<Mir<'a>, Vec<Error<'a>>> {
+pub fn mir_from_typed_hir<'a>(typed_hir: &'a TypedHir<'a>) -> Result<Mir<'a>, Vec<Error>> {
     Constructor::map_thir(typed_hir)
 }
 
-struct Constructor<'a> {
+struct Constructor {
     def_to_func: HashMap<DefId, FuncId>,
-    errors: Errors<'a>,
+    errors: Errors,
 }
 
-impl<'a> Constructor<'a> {
-    pub fn map_thir(typed_hir: &'a TypedHir<'a>) -> Result<Mir<'a>, Vec<Error<'a>>> {
+impl Constructor {
+    pub fn map_thir<'a>(typed_hir: &'a TypedHir<'a>) -> Result<Mir<'a>, Vec<Error>> {
         let mut _self = Self {
             def_to_func: typed_hir
                 .funcs
@@ -146,7 +146,7 @@ impl<'a> Constructor<'a> {
                 .enumerate()
                 .map(|(i, func)| (func.def_id, FuncId(i)))
                 .collect(),
-            errors: Errors::new(typed_hir.filename),
+            errors: Errors::new(),
         };
         let funcs = typed_hir
             .funcs
@@ -168,7 +168,7 @@ impl<'a> Constructor<'a> {
         })
     }
 
-    fn map_func(&mut self, func: &'a thir::Func<'a>) -> Func<'a> {
+    fn map_func<'a>(&mut self, func: &'a thir::Func<'a>) -> Func<'a> {
         let mut builder = FuncBuilder::new(func.name.0);
         for param in &func.params {
             let local_id = builder.create_local();
@@ -180,7 +180,7 @@ impl<'a> Constructor<'a> {
     }
 
     /// `loop_block_ids` are the block IDs for statements to jump to on `(continue, break)`.
-    fn map_scope(
+    fn map_scope<'a>(
         &mut self,
         stmts: &'a [thir::Stmt<'a>],
         loop_block_ids: Option<(BlockId, BlockId)>,
@@ -341,7 +341,7 @@ impl<'a> Constructor<'a> {
         // TODO: drop declared variables that hold pointers
     }
 
-    fn map_expr(&mut self, expr: &'a thir::Expr<'a>, builder: &mut FuncBuilder<'a>) -> LocalId {
+    fn map_expr<'a>(&mut self, expr: &'a thir::Expr<'a>, builder: &mut FuncBuilder<'a>) -> LocalId {
         match expr {
             thir::Expr::Binary(thir::Binary { op, left, right }) => {
                 let left_id = self.map_expr(&left.0, builder);

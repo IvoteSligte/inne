@@ -183,20 +183,18 @@ pub struct Loop<'a> {
     pub body: Block<'a>,
 }
 
-pub fn hir_from_ast<'a>(ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error<'a>>> {
+pub fn hir_from_ast<'a>(ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error>> {
     Constructor::map_ast(ast)
 }
 
 /// Helper type for managing error messages.
-pub(crate) struct Errors<'a> {
-    filename: &'a str,
-    inner: Vec<Error<'a>>,
+pub(crate) struct Errors {
+    inner: Vec<Error>,
 }
 
-impl<'a> Errors<'a> {
-    pub fn new(filename: &'a str) -> Self {
+impl Errors {
+    pub fn new() -> Self {
         Self {
-            filename,
             inner: Vec::new(),
         }
     }
@@ -216,14 +214,13 @@ impl<'a> Errors<'a> {
         contexts: Vec<(String, Span)>,
     ) {
         self.inner.push(Error {
-            filename: self.filename,
             message: message.to_string(),
             span,
             contexts,
         });
     }
 
-    pub fn into_inner(self) -> Vec<Error<'a>> {
+    pub fn into_inner(self) -> Vec<Error> {
         self.inner
     }
 }
@@ -252,17 +249,17 @@ struct Constructor<'a> {
     // TODO: separate VarId and FuncId
     func_to_def_id: HashMap<&'a str, DefId>,
     scopes: Vec<HashMap<&'a str, DefId>>,
-    errors: Errors<'a>,
+    errors: Errors,
 }
 
 impl<'a> Constructor<'a> {
-    pub fn map_ast(ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error<'a>>> {
+    pub fn map_ast(ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error>> {
         let mut _self = Self {
             defs: ConstructorDefs(Vec::new()),
             funcs: Vec::new(),
             func_to_def_id: HashMap::new(),
             scopes: Vec::new(),
-            errors: Errors::new(ast.filename),
+            errors: Errors::new(),
         };
         for stmt in &ast.stmts {
             let ast::Stmt::Func(func) = stmt else {

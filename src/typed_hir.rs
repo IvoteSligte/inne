@@ -27,7 +27,7 @@ pub struct DefInfo {
     pub r#type: Type,
 }
 
-pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error<'a>>> {
+pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error>> {
     let defs = hir
         .defs
         .into_iter()
@@ -40,7 +40,7 @@ pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error<'a
         .collect();
     let (errors, defs) = {
         let mut type_checker = TypeChecker {
-            errors: Errors::new(hir.filename),
+            errors: Errors::new(),
             defs,
             funcs: &hir.funcs,
             expected_return_type: Type::Nothing,
@@ -62,7 +62,7 @@ pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error<'a
 }
 
 struct TypeChecker<'a, 'b> {
-    errors: Errors<'a>,
+    errors: Errors,
     defs: Vec<DefInfo>,
     funcs: &'b [Func<'a>],
     expected_return_type: Type,
