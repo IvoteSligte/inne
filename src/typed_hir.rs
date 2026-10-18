@@ -27,6 +27,7 @@ pub struct DefInfo {
     pub r#type: Type,
 }
 
+// TODO: return (Option<TypedHir<'a>>, Vec<Error>) instead because the TypedHir may be recoverable on error
 pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error>> {
     let defs = hir
         .defs

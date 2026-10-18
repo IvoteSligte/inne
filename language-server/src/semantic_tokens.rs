@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use inne::*;
 use tower_lsp_server::ls_types::*;
 
-use crate::File;
+use crate::{File, position_at_end};
 
 use super::tt;
 
@@ -150,22 +150,12 @@ fn to_semantic_tokens(
     tokens
         .into_iter()
         .map(|(span, token_type)| {
-            let mut delta_line = 0;
-            let mut delta_start = 0; // character/column
-            for c in source[start_byte..span.start].chars() {
-                if c == '\n' {
-                    delta_line += 1;
-                    delta_start = 0;
-                } else {
-                    delta_start += 1;
-                }
-            }
+            let delta_position = position_at_end(&source[start_byte..span.start], &mut 0, &mut 0);
             start_byte = span.start;
-            let length = (span.end - span.start) as _;
             SemanticToken {
-                delta_line,
-                delta_start,
-                length,
+                delta_line: delta_position.line,
+                delta_start: delta_position.character,
+                length: (span.end - span.start) as _,
                 token_type,
                 token_modifiers_bitset: 0,
             }

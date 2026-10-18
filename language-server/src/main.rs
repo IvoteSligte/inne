@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
 
+use diagnostics::extract_diagnostics;
 use semantic_tokens::extract_semantic_tokens;
 use tokio::sync::RwLock;
 use tower_lsp_server::jsonrpc::Result;
@@ -10,6 +11,7 @@ use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
 use inne::*;
 
+mod diagnostics;
 mod semantic_tokens;
 
 // NOTE: The LSP protocol uses UTF-16 by default, so care should be taken when counting characters.
@@ -26,8 +28,24 @@ mod tt {
     pub const TYPE: u32 = 7;
 }
 
+pub fn position_at_end(source: &str, line: &mut u32, character: &mut u32) -> Position {
+    for c in source.chars() {
+        if c == '\n' {
+            *line += 1;
+            *character = 0;
+        } else if c != '\r' {
+            *character += 1;
+        }
+    }
+    Position {
+        line: *line,
+        character: *character,
+    }
+}
+
 struct File {
     version: i32,
+    uri: Uri,
     /// Human-readable filename.
     name: String,
     /// Absolute path of the file.
@@ -46,10 +64,42 @@ impl File {
         };
         Some(Self {
             version,
+            uri: uri.clone(),
             name,
             _path: path,
             source,
         })
+    }
+
+    pub fn analyze(&self) -> Vec<Error> {
+        let mut all_errors = Vec::new();
+        let (maybe_tokens, errors) = inne::lex(&self.source);
+        all_errors.extend(errors);
+        let Some(tokens) = maybe_tokens else {
+            return all_errors;
+        };
+        let (maybe_parse_tree, errors) = inne::parse(&tokens, &self.source, &self.name);
+        all_errors.extend(errors);
+        let Some(parse_tree) = maybe_parse_tree else {
+            return all_errors;
+        };
+        let ast = inne::ast_from_parse_tree(&parse_tree);
+        let hir = match inne::hir_from_ast(&ast) {
+            Ok(hir) => hir,
+            Err(errors) => {
+                all_errors.extend(errors);
+                return all_errors;
+            }
+        };
+        let _typed_hir = match inne::typed_hir_from_hir(hir) {
+            Ok(typed_hir) => typed_hir,
+            Err(errors) => {
+                all_errors.extend(errors);
+                return all_errors;
+            }
+        };
+        // NOTE: THIR -> MIR currently does not produce diagnostics, so it is skipped
+        all_errors
     }
 }
 
@@ -88,14 +138,6 @@ impl LanguageServer for Backend {
                         },
                     ),
                 ),
-                diagnostic_provider: Some(DiagnosticServerCapabilities::Options(
-                    DiagnosticOptions {
-                        identifier: None,
-                        inter_file_dependencies: true,
-                        workspace_diagnostics: true,
-                        ..Default::default()
-                    },
-                )),
                 ..Default::default()
             },
             ..Default::default()
@@ -116,8 +158,10 @@ impl LanguageServer for Backend {
         eprintln!("Received did_open event.");
         let uri = params.text_document.uri;
         let source = params.text_document.text;
-        if let Some(file) = File::new(&uri, source, params.text_document.version) {
+        let version = params.text_document.version;
+        if let Some(file) = File::new(&uri, source, version) {
             eprintln!("Registered file: '{}'", uri.as_str());
+            self.publish_diagnostics(&file).await;
             self.files.write().await.insert(uri, file);
         }
     }
@@ -127,26 +171,31 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         let mut write_guard = self.files.write().await;
         let Some(source) = params.content_changes.get(0).map(|change| &change.text) else {
-            eprintln!("did_change event did not contain any changes.");
+            eprintln!(
+                "did_change event did not contain any changes for file '{}'.",
+                uri.as_str()
+            );
             return;
         };
         let new_version = params.text_document.version;
         match write_guard.entry(uri.clone()) {
             Entry::Occupied(mut occupied_entry) => {
-                let entry = occupied_entry.get_mut();
-                if entry.version < new_version {
-                    eprintln!("Updated file: '{}'", uri.as_str());
-                    entry.source = source.to_owned();
-                    entry.version = new_version;
+                let file = occupied_entry.get_mut();
+                if file.version < new_version {
+                    eprintln!("Updated file: '{}'", file.name);
+                    file.source = source.to_owned();
+                    file.version = new_version;
+                    self.publish_diagnostics(&file).await;
                 }
             }
             Entry::Vacant(vacant_entry) => {
                 if let Some(file) = File::new(&uri, source, new_version) {
-                    eprintln!("Registered file (from did_change): '{}'", uri.as_str());
+                    eprintln!("Registered file (from did_change): '{}'", file.name);
+                    self.publish_diagnostics(&file).await;
                     vacant_entry.insert(file);
                 }
             }
-        };
+        }
     }
 
     async fn completion(&self, _: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -187,6 +236,20 @@ impl LanguageServer for Backend {
     // TODO: async fn formatting
 
     // TODO: inlay hint? probably not
+}
+
+impl Backend {
+    async fn publish_diagnostics(&self, file: &File) {
+        let diagnostics = extract_diagnostics(file);
+        eprintln!(
+            "Published {} diagnostics for file '{}'",
+            diagnostics.len(),
+            file.name
+        );
+        self.client
+            .publish_diagnostics(file.uri.clone(), diagnostics, Some(file.version))
+            .await;
+    }
 }
 
 #[tokio::main]

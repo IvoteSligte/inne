@@ -183,6 +183,7 @@ pub struct Loop<'a> {
     pub body: Block<'a>,
 }
 
+// TODO: return (Option<Hir<'a>>, Vec<Error>) instead because the Hir may be recoverable on error
 pub fn hir_from_ast<'a>(ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error>> {
     Constructor::map_ast(ast)
 }
