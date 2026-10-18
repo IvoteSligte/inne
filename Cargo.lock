@@ -344,9 +344,17 @@ checksum = "2dc93ea7ae8d8df4c2ea0ffe6a8aaa28b8a746becb49b607171388de4b170c5d"
 name = "inne"
 version = "0.1.0"
 dependencies = [
- "ariadne",
  "clap",
  "indentify",
+ "inne_error",
+ "inne_parser",
+]
+
+[[package]]
+name = "inne_error"
+version = "0.1.0"
+dependencies = [
+ "ariadne",
  "inne_parser",
 ]
 

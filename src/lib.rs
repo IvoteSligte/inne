@@ -5,8 +5,8 @@ pub mod mir;
 pub mod typed_hir;
 
 pub use ast::{Ast, ast_from_parse_tree};
+pub use error::*;
 pub use hir::{Hir, hir_from_ast};
-pub use inne_parser as parser;
 pub use interpreter::Interpreter;
 pub use mir::{Mir, mir_from_typed_hir};
 pub use parser::{
@@ -14,10 +14,3 @@ pub use parser::{
     create_lexer, create_parser, lex, parse,
 };
 pub use typed_hir::{TypedHir, typed_hir_from_hir};
-
-pub struct Error<'a> {
-    pub filename: &'a str,
-    pub message: String,
-    pub span: Span,
-    pub contexts: Vec<(String, Span)>,
-}

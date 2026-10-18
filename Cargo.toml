@@ -4,10 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ariadne = "0.6.0"
 clap = { version = "4.6.7", features = ["derive"] }
 indentify = "0.1.2"
-inne_parser = { path = "./parser" }
+parser = { workspace = true }
+error = { workspace = true }
 
 [workspace]
-members = ["language-server", "parser"]
+members = ["parser", "error", "language-server"]
+
+[workspace.dependencies]
+parser = { package = "inne_parser", path = "./parser" }
+error = { package = "inne_error", path = "./error" }

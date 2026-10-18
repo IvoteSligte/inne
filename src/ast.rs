@@ -1,6 +1,6 @@
-use crate::{ParseTree, Span, Spanned, parser};
+use crate::{ParseTree, Span, Spanned};
 
-pub use crate::parser::{AssignOp, BinaryOp, UnaryOp};
+pub use parser::{AssignOp, BinaryOp, UnaryOp};
 
 pub struct Ast<'a> {
     pub filename: &'a str,
