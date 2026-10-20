@@ -349,14 +349,14 @@ where
         ))
         .boxed();
 
-        let index = atom
+        let index_or_atom = atom.clone().or(atom
             .clone()
             .then(
                 expr.clone()
                     .delimited_by(just(Token::LBracket), just(Token::LBracket)),
             )
             .map(|(expr, index)| Expr::Index(Box::new(expr), Box::new(index)))
-            .map_with(with_span);
+            .map_with(with_span));
 
         // Product ops (multiply and divide) have equal precedence
         let op = choice((
@@ -365,11 +365,10 @@ where
             just(Token::Op("%")).to(BinaryOp::Mod),
         ))
         .map_with(with_span);
-        let product = index
-            .clone()
-            .foldl_with(op.then(index.clone()).repeated(), |a, (op, b), e| {
-                (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
-            });
+        let product = index_or_atom.clone().foldl_with(
+            op.then(index_or_atom.clone()).repeated(),
+            |a, (op, b), e| (Expr::Binary(Box::new(a), op, Box::new(b)), e.span()),
+        );
 
         // Sum ops (add and subtract) have equal precedence
         let op = just(Token::Op("+"))
@@ -428,10 +427,10 @@ where
             .to(UnaryOp::Neg)
             .or(just(Token::Op("not")).to(UnaryOp::Not))
             .map_with(with_span)
-            .then(index.clone())
+            .then(index_or_atom.clone())
             .map(|(op, expr)| Expr::Unary(op, Box::new(expr)))
             .map_with(with_span);
-        choice((binary, unary, index, atom))
+        choice((binary, unary, index_or_atom))
     })
     .boxed()
 }
