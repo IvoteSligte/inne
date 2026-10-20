@@ -1,8 +1,8 @@
-use std::num::IntErrorKind;
+use std::{num::IntErrorKind, ops::Deref};
 
 pub use crate::hir::{
-    Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, DefId, Expr, For, Func, Hir, If, Loop,
-    Param, Range, Stmt, Type, Unary, UnaryOp, VarDecl, While,
+    Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, DefId, Expr, For, Func, Hir, If,
+    Index, List, Loop, Map, Pair, Param, Range, Stmt, Type, Unary, UnaryOp, VarDecl, While,
 };
 
 pub type Int = i64;
@@ -74,18 +74,15 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
         for func in self.funcs {
             self.expected_return_type = func
                 .return_type
-                .map(|(r#type, _)| r#type)
+                .as_ref()
+                .map(|(r#type, _)| r#type.clone())
                 .unwrap_or(Type::Nothing);
             self.defs[func.def_id].r#type = Type::Function;
 
             for param in &func.params {
-                self.defs[param.def_id].r#type = param.r#type.0;
-                self.check_type(&param.r#type);
+                self.defs[param.def_id].r#type = param.r#type.0.clone();
             }
             self.check_stmts(&func.body);
-            if let Some(r#type) = func.return_type.as_ref() {
-                self.check_type(r#type);
-            }
             if func.name.0 == "main" {
                 if !func.params.is_empty() {
                     self.errors.add(
@@ -178,6 +175,8 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
                 let (iter_type, _) = self.check_expr(iter);
                 let var_type = match iter_type {
                     Type::Range => Type::Int,
+                    Type::List(elem_type) => *elem_type,
+                    // TODO: iteration over map (key, value) pairs (requires tuples)
                     _ => {
                         // TODO: add "Did you mean to use a range?" as context if iter_type==Type::Int
                         self.errors
@@ -237,7 +236,10 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
                 Expr::Binary(binary) => self.check_binary((binary, *span)),
                 Expr::Unary(unary) => self.check_unary((unary, *span)),
                 Expr::Call(call) => self.check_call((call, *span)),
-                Expr::Var(def_id) => return (self.defs[*def_id].r#type, true),
+                Expr::List(list) => self.check_list((list, *span)),
+                Expr::Map(map) => self.check_map((map, *span)),
+                Expr::Index(index) => self.check_index((index, *span)),
+                Expr::Var(def_id) => return (self.defs[*def_id].r#type.clone(), true),
                 Expr::Int(int) => {
                     self.check_int((int, *span));
                     Type::Int
@@ -257,7 +259,7 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
     fn check_binary(&mut self, (binary, span): Spanned<&Binary<'a>>) -> Type {
         let (left_type, _) = self.check_expr(&binary.left);
         let (right_type, _) = self.check_expr(&binary.right);
-        let or_type = left_type.or(right_type); // Known if either one is known
+        let or_type = left_type.or(&right_type); // Known if either one is known
 
         if or_type.is_known() && left_type != right_type {
             self.errors.add(
@@ -271,7 +273,7 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
         use BinaryOp::*;
         match binary.op.0 {
             Add | Sub | Div | Mul | Mod => {
-                if or_type.is_known() && or_type != Type::Int {
+                if or_type.is_known() && *or_type != Type::Int {
                     self.errors.add(
                         format!(
                             "Cannot apply arithmetic operator to values of type '{}'",
@@ -280,10 +282,10 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
                         binary.op.1,
                     );
                 }
-                or_type
+                or_type.clone()
             }
             Lt | Leq | Gt | Geq => {
-                if or_type.is_known() && or_type != Type::Int {
+                if or_type.is_known() && *or_type != Type::Int {
                     self.errors.add(
                         format!(
                             "Cannot apply comparison operator to values of type '{}'",
@@ -295,7 +297,7 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
                 Type::Bool
             }
             And | Or => {
-                if or_type.is_known() && or_type != Type::Bool {
+                if or_type.is_known() && *or_type != Type::Bool {
                     self.errors.add(
                         format!(
                             "Cannot apply boolean operator to values of type '{}'",
@@ -385,8 +387,8 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
         }
         for (arg @ (_, arg_span), param) in std::iter::zip(args, params) {
             let (arg_type, _) = self.check_expr(arg);
-            let (param_type, _) = param.r#type;
-            if arg_type.is_known() && arg_type != param_type {
+            let (param_type, _) = &param.r#type;
+            if arg_type.is_known() && arg_type != *param_type {
                 let message = format!(
                     "Expected a value of type '{}' but found a value of type '{}'",
                     arg_type, param_type
@@ -395,8 +397,124 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
             }
         }
         func.return_type
-            .map(|(r#type, _)| r#type)
+            .as_ref()
+            .map(|(r#type, _)| r#type.clone())
             .unwrap_or(Type::Nothing)
+    }
+
+    fn check_list(&mut self, (list, _): Spanned<&List<'a>>) -> Type {
+        if list.elements.is_empty() {
+            todo!("empty list");
+        }
+        let (first_element_type, _) = self.check_expr(&list.elements[0]);
+        for element @ (_, element_span) in &list.elements[1..] {
+            let (element_type, _) = self.check_expr(element);
+            if first_element_type.is_known()
+                && element_type.is_known()
+                && first_element_type != element_type
+            {
+                self.errors.add_with_contexts(
+                    format!(
+                        "All list elements should have the same type, but this one has type '{}'",
+                        element_type
+                    ),
+                    *element_span,
+                    vec![(
+                        format!("The first element has type '{}'", first_element_type),
+                        list.elements[0].1,
+                    )],
+                );
+            }
+        }
+        Type::List(Box::new(first_element_type))
+    }
+
+    fn check_map(&mut self, (map, _): Spanned<&Map<'a>>) -> Type {
+        if map.pairs.is_empty() {
+            todo!("empty map");
+        }
+        let (first_key_type, _) = self.check_expr(&map.pairs[0].key);
+        let (first_value_type, _) = self.check_expr(&map.pairs[0].value);
+        for Pair { key, value } in &map.pairs[1..] {
+            let (key_type, _) = self.check_expr(key);
+            let (value_type, _) = self.check_expr(value);
+            if first_key_type.is_known() && key_type.is_known() && first_key_type != key_type {
+                self.errors.add_with_contexts(
+                    format!(
+                        "All map keys should have the same type, but this one has type '{}'",
+                        key_type
+                    ),
+                    key.1,
+                    vec![(
+                        format!("The first key has type '{}'", first_key_type),
+                        map.pairs[0].key.1,
+                    )],
+                );
+            }
+            if first_value_type.is_known()
+                && value_type.is_known()
+                && first_value_type != value_type
+            {
+                self.errors.add_with_contexts(
+                    format!(
+                        "All map values should have the same type, but this one has type '{}'",
+                        value_type
+                    ),
+                    value.1,
+                    vec![(
+                        format!("The first value has type '{}'", first_value_type),
+                        map.pairs[0].value.1,
+                    )],
+                );
+            }
+        }
+        Type::Map {
+            key: Box::new(first_key_type),
+            value: Box::new(first_value_type),
+        }
+    }
+
+    fn check_index(&mut self, (index, _): Spanned<&Index<'a>>) -> Type {
+        let (expr_type, _) = self.check_expr(&index.expr);
+        let (index_type, _) = self.check_expr(&index.index);
+        match expr_type {
+            Type::String => match index_type {
+                Type::Int => Type::Char,
+                Type::Range => Type::String,
+                index_type => {
+                    if index_type.is_known() {
+                        self.errors.add(format!("Only int and range can be used to index into strings, not '{index_type}'."), index.index.1);
+                    }
+                    Type::UNKNOWN
+                }
+            },
+            Type::List(ref element_type) => match index_type {
+                Type::Int => element_type.deref().clone(),
+                Type::Range => expr_type,
+                index_type => {
+                    if index_type.is_known() {
+                        self.errors.add(format!("Only int and range can be used to index into lists, not '{index_type}'."), index.index.1);
+                    }
+                    Type::UNKNOWN
+                }
+            },
+            Type::Map {
+                key: key_type,
+                value: value_type,
+            } => {
+                if index_type.is_known() && key_type.is_known() && index_type != *key_type {
+                    self.errors.add(format!("The map's key type is '{key_type}', but '{index_type}' was used to access it."), index.index.1);
+                }
+                *value_type
+            }
+            expr_type => {
+                self.errors.add(
+                    format!("Only 'string', 'list', and 'map' can be indexed, not '{expr_type}'."),
+                    index.expr.1,
+                );
+                Type::UNKNOWN
+            }
+        }
     }
 
     fn check_int(&mut self, (int, span): Spanned<&str>) {
@@ -419,11 +537,5 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
             _ => unimplemented!(),
         };
         self.errors.add(message, span);
-    }
-
-    pub fn check_type(&mut self, (r#type, span): &Spanned<Type>) {
-        if let Type::Named(name) = r#type {
-            self.errors.add(format!("Unknown type '{name}'"), *span);
-        }
     }
 }

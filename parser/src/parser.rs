@@ -1,8 +1,10 @@
 use chumsky::{input::ValueInput, prelude::*};
 
 // TODO: error recovery
+// TODO: tuples
+// TODO: list/tuple pattern matching in variable declarations
 
-use crate::{Span, Spanned};
+use crate::{Span, Spanned, util::write_comma_separated};
 
 pub type ParseError<'tokens, 'src> = Rich<'tokens, Token<'src>, Span>;
 
@@ -51,11 +53,22 @@ pub type Block<'a> = Vec<Stmt<'a>>;
 
 pub struct Param<'a>(pub Spanned<&'a str>, pub Spanned<Type<'a>>);
 
-pub enum Type<'a> {
-    Int,
-    Bool,
-    String,
-    Named(&'a str),
+#[derive(Clone)]
+pub struct Type<'a> {
+    pub name: &'a str,
+    pub generics: Vec<Spanned<Self>>,
+}
+
+impl std::fmt::Display for Type<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self { name, generics } = self;
+        if !generics.is_empty() {
+            write!(f, "{name}<")?;
+            write_comma_separated(f, generics.iter().map(|(generic, _)| generic))?;
+            return f.write_str(">");
+        }
+        f.write_str(name)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -85,10 +98,14 @@ pub enum Expr<'a> {
     Binary(Box<Spanned<Self>>, Spanned<BinaryOp>, Box<Spanned<Self>>),
     Unary(Spanned<UnaryOp>, Box<Spanned<Self>>),
     Call(Spanned<&'a str>, Spanned<Vec<Spanned<Self>>>),
+    List(Vec<Spanned<Self>>),
+    Map(Vec<(Spanned<Self>, Spanned<Self>)>),
+    Index(Box<Spanned<Self>>, Box<Spanned<Self>>),
     Var(&'a str),
     Int(&'a str),
     Bool(bool),
     String(&'a str),
+    // TODO: Char(char)
     Range(Box<Spanned<Self>>, Box<Spanned<Self>>),
 }
 
@@ -117,24 +134,34 @@ where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {
     let ident = ident_parser();
-    let r#type = select! {
-        Token::Ident(ident) => match ident {
-            "int" => Type::Int,
-            "bool" => Type::Bool,
-            "string" => Type::String,
-            _ => Type::Named(ident),
+    let r#type = recursive(|r#type| {
+        select! {
+            Token::Ident(ident) => ident
         }
-    }
-    .map_with(with_span);
+        .then(
+            r#type
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::Op("<")), just(Token::Op(">")))
+                .or_not(),
+        )
+        .map(|(name, generics)| Type {
+            name,
+            generics: generics.unwrap_or(Vec::new()),
+        })
+        .map_with(with_span)
+    });
     let param = ident
         .then_ignore(just(Token::Colon))
-        .then(r#type)
+        .then(r#type.clone())
         .map(|(name, r#type)| Param(name, r#type));
     recursive(|stmt| {
         let block = stmt
             .repeated()
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LBrace), just(Token::RBrace));
+        // TODO: generic functions
         let func = just(Token::Func)
             .ignore_then(ident)
             .then(
@@ -256,9 +283,47 @@ where
             .map(|(name, args)| Expr::Call(name, args))
             .map_with(with_span)
             .boxed();
+        let list = expr
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBracket), just(Token::RBracket))
+            .map(|elements| Expr::List(elements))
+            .map_with(with_span);
+        let map = expr
+            .clone()
+            .then_ignore(just(Token::Colon))
+            .then(expr.clone())
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .map(|pairs| Expr::Map(pairs))
+            .map_with(with_span);
 
         // Unambiguous expressions
-        let atom = choice((call, var, int, bool, string)).boxed();
+        let atom = choice((
+            call,
+            list,
+            map,
+            var,
+            int,
+            bool,
+            string,
+            expr.clone()
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        ))
+        .boxed();
+
+        let index = atom
+            .clone()
+            .then(
+                expr.clone()
+                    .delimited_by(just(Token::LBracket), just(Token::LBracket)),
+            )
+            .map(|(expr, index)| Expr::Index(Box::new(expr), Box::new(index)))
+            .map_with(with_span);
 
         // Product ops (multiply and divide) have equal precedence
         let op = choice((
@@ -267,9 +332,9 @@ where
             just(Token::Op("%")).to(BinaryOp::Mod),
         ))
         .map_with(with_span);
-        let product = atom
+        let product = index
             .clone()
-            .foldl_with(op.then(atom.clone()).repeated(), |a, (op, b), e| {
+            .foldl_with(op.then(index.clone()).repeated(), |a, (op, b), e| {
                 (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
             });
 
@@ -330,10 +395,10 @@ where
             .to(UnaryOp::Neg)
             .or(just(Token::Op("not")).to(UnaryOp::Not))
             .map_with(with_span)
-            .then(atom.clone())
+            .then(index.clone())
             .map(|(op, expr)| Expr::Unary(op, Box::new(expr)))
             .map_with(with_span);
-        choice((binary, unary, atom))
+        choice((binary, unary, index, atom))
     })
     .boxed()
 }

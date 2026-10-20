@@ -151,17 +151,7 @@ impl<'a> Interpreter<'a> {
                     if i > 0 {
                         print!(" ");
                     }
-                    match self.get_local(*arg_id) {
-                        Value::Nothing => print!("Nothing"),
-                        Value::Int(int) => print!("{}", int),
-                        Value::Bool(bool) => print!("{}", bool),
-                        Value::String(chars) => {
-                            for char in chars {
-                                print!("{}", char);
-                            }
-                        }
-                        Value::Range { .. } => unreachable!(),
-                    }
+                    self.get_local(*arg_id).print();
                 }
                 println!();
                 Value::Nothing
@@ -172,6 +162,9 @@ impl<'a> Interpreter<'a> {
             },
             &Op::IntoIter(iter) => match self.get_local(iter) {
                 &Value::Range { start, end } => Value::Range { start, end },
+                // TODO: more efficient list iterator (should probably still be a "copy" of the original list, though,
+                //       because shooting yourself in the foot by modifying the original list is way too easy)
+                Value::List(elements) => Value::List(elements.clone()),
                 _ => unreachable!(),
             },
             &Op::Next { target, iter } => match self.get_local(iter) {
@@ -186,6 +179,46 @@ impl<'a> Interpreter<'a> {
                     }
                     Value::Bool(start < end)
                 }
+                Value::List(elements) => {
+                    let is_empty = elements.is_empty();
+                    if !is_empty {
+                        let new_list = Value::List(elements[1..].to_vec());
+                        self.set_local(target, elements[0].clone());
+                        self.set_local(iter, new_list);
+                    }
+                    Value::Bool(is_empty)
+                }
+                _ => unreachable!(),
+            },
+            Op::List(local_ids) => Value::List(
+                local_ids
+                    .iter()
+                    .map(|&local_id| self.get_local(local_id).clone())
+                    .collect(),
+            ),
+            Op::Map(pairs) => Value::Map(
+                pairs
+                    .iter()
+                    .map(|&pair| {
+                        (
+                            self.get_local(pair.key).clone(),
+                            self.get_local(pair.value).clone(),
+                        )
+                    })
+                    .collect(),
+            ),
+            &Op::Index { expr, index } => match (self.get_local(expr), self.get_local(index)) {
+                // TODO: out-of-bounds checks
+                (Value::String(string), &Value::Int(i)) => Value::Char(string[i as usize]),
+                (Value::String(string), &Value::Range { start, end }) => {
+                    Value::String(string[start as usize..end as usize].to_vec())
+                }
+                (Value::List(elements), &Value::Int(i)) => elements[i as usize].clone(),
+                (Value::List(elements), &Value::Range { start, end }) => {
+                    Value::List(elements[start as usize..end as usize].to_vec())
+                }
+                // TODO: "key not in map" check
+                (Value::Map(map), key) => map[key].clone(),
                 _ => unreachable!(),
             },
         };

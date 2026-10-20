@@ -74,17 +74,21 @@ impl File {
 
     pub fn analyze(&self) -> Vec<Error> {
         let mut all_errors = Vec::new();
+        eprintln!("Lexing file '{}'", self.name);
         let (maybe_tokens, errors) = inne::lex(&self.source);
         all_errors.extend(errors);
         let Some(tokens) = maybe_tokens else {
             return all_errors;
         };
+        eprintln!("Parsing file '{}'", self.name);
         let (maybe_parse_tree, errors) = inne::parse(&tokens, &self.source, &self.name);
         all_errors.extend(errors);
         let Some(parse_tree) = maybe_parse_tree else {
             return all_errors;
         };
+        eprintln!("Converting parse-tree to AST for file '{}'", self.name);
         let ast = inne::ast_from_parse_tree(&parse_tree);
+        eprintln!("Converting AST to HIR for file '{}'", self.name);
         let hir = match inne::hir_from_ast(&ast) {
             Ok(hir) => hir,
             Err(errors) => {
@@ -92,6 +96,7 @@ impl File {
                 return all_errors;
             }
         };
+        eprintln!("Converting HIR to Typed HIR for file '{}'", self.name);
         let _typed_hir = match inne::typed_hir_from_hir(hir) {
             Ok(typed_hir) => typed_hir,
             Err(errors) => {
@@ -99,6 +104,11 @@ impl File {
                 return all_errors;
             }
         };
+        eprintln!(
+            "Analyzing file '{}' yielded {} errors",
+            self.name,
+            all_errors.len()
+        );
         // NOTE: THIR -> MIR currently does not produce diagnostics, so it is skipped
         all_errors
     }
@@ -242,6 +252,7 @@ impl LanguageServer for Backend {
 
 impl Backend {
     async fn publish_diagnostics(&self, file: &File) {
+        eprintln!("Extracting diagnostics from file '{}'", file.name);
         let diagnostics = extract_diagnostics(file);
         eprintln!(
             "Published {} diagnostics for file '{}'",

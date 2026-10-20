@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{Error, Span, Spanned, ast};
+use crate::{Error, Span, Spanned, ast, util::write_comma_separated};
 
 pub use crate::ast::{AssignOp, BinaryOp, UnaryOp};
 
@@ -8,6 +8,7 @@ pub use crate::ast::{AssignOp, BinaryOp, UnaryOp};
 // TODO: warn for unused expression return value
 // TODO: info for variable accessed from a different scope
 
+// TODO: newtype instead of alias
 pub type DefId = usize;
 
 pub const UNKNOWN_DEF_ID: DefId = DefId::MAX;
@@ -63,35 +64,59 @@ pub struct Param<'a> {
     pub r#type: Spanned<Type>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TypeId(usize);
+
+impl TypeId {
+    pub const UNKNOWN: Self = Self(usize::MAX);
+}
+
+impl std::fmt::Display for TypeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+// TODO: make cheaper to clone with Rc's
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Nothing,
     Int,
     // Float
     Bool,
     String,
-    /// Typed HIR-only
+    Char,
+    /// Typed-HIR-only
     Function,
     Range,
-    // List(TypeId)
-    // Map { key: TypeId, value: TypeId }
+    List(Box<Self>),
+    Map {
+        key: Box<Self>,
+        value: Box<Self>,
+    },
     // Tuple
-    Named(DefId), // TODO: TypeId instead of DefId
+    Named {
+        id: TypeId,
+        generics: Vec<Self>,
+    },
 }
 
 impl Type {
-    pub const UNKNOWN: Self = Self::Named(UNKNOWN_DEF_ID);
+    pub const UNKNOWN: Self = Self::Named {
+        id: TypeId::UNKNOWN,
+        generics: Vec::new(),
+    };
 
-    pub fn is_known(self) -> bool {
-        self != Type::UNKNOWN
+    pub fn is_known(&self) -> bool {
+        *self != Type::UNKNOWN
     }
 
-    pub fn is_unknown(self) -> bool {
-        self == Type::UNKNOWN
+    pub fn is_unknown(&self) -> bool {
+        *self == Type::UNKNOWN
     }
 
-    pub fn or(self, other: Self) -> Type {
-        if self == Type::UNKNOWN { other } else { self }
+    pub fn or<'a>(&'a self, other: &'a Self) -> &'a Type {
+        if *self == Type::UNKNOWN { other } else { self }
     }
 }
 
@@ -102,9 +127,20 @@ impl std::fmt::Display for Type {
             Type::Int => "int",
             Type::Bool => "bool",
             Type::String => "string",
-            Type::Range => "range",
+            Type::Char => "char",
             Type::Function => "function",
-            Type::Named(def_id) => return write!(f, "{def_id}"),
+            Type::Range => "range",
+            Type::List(element) => return write!(f, "List<{element}>"),
+            Type::Map { key, value } => return write!(f, "Map<{key}, {value}>"),
+            Type::Named { id, generics } => {
+                write!(f, "{id}")?;
+                if !generics.is_empty() {
+                    f.write_str("<")?;
+                    write_comma_separated(f, generics)?;
+                    f.write_str(">")?;
+                }
+                return Ok(());
+            }
         })
     }
 }
@@ -119,6 +155,9 @@ pub enum Expr<'a> {
     Binary(Binary<'a>),
     Unary(Unary<'a>),
     Call(Call<'a>),
+    List(List<'a>),
+    Map(Map<'a>),
+    Index(Index<'a>),
     Range(Range<'a>),
     Var(DefId),
     Int(&'a str),
@@ -141,6 +180,24 @@ pub struct Call<'a> {
     pub name: Spanned<&'a str>,
     pub def_id: DefId,
     pub args: Vec<Spanned<Expr<'a>>>,
+}
+
+pub struct List<'a> {
+    pub elements: Vec<Spanned<Expr<'a>>>,
+}
+
+pub struct Map<'a> {
+    pub pairs: Vec<Pair<'a>>,
+}
+
+pub struct Pair<'a> {
+    pub key: Spanned<Expr<'a>>,
+    pub value: Spanned<Expr<'a>>,
+}
+
+pub struct Index<'a> {
+    pub expr: Box<Spanned<Expr<'a>>>,
+    pub index: Box<Spanned<Expr<'a>>>,
 }
 
 pub struct Range<'a> {
@@ -332,7 +389,8 @@ impl<'a> Constructor<'a> {
                     let def_id = *self.func_to_def_id.get(name.0).unwrap();
                     self.in_scope(|_self| {
                         let params = params.iter().map(|param| _self.map_param(param)).collect();
-                        let return_type = return_type.map(|r#type| _self.map_type(&r#type));
+                        let return_type =
+                            return_type.as_ref().map(|r#type| _self.map_type(&r#type));
                         let body = _self.map_stmts(&body);
                         _self.funcs.push(Func {
                             def_id,
@@ -460,24 +518,40 @@ impl<'a> Constructor<'a> {
                     op: *op,
                     expr: Box::new(self.map_expr(expr)),
                 }),
-                ast::Expr::Call(call) => {
-                    let def_id = match self.func_to_def_id.get(call.name.0) {
+                ast::Expr::Call(ast::Call { name, args }) => {
+                    let def_id = match self.func_to_def_id.get(name.0) {
                         Some(&def_id) => def_id,
-                        None if call.name.0 == "print" => PRINT_DEF_ID,
+                        None if name.0 == "print" => PRINT_DEF_ID,
                         None => {
                             // TODO: add context if function is defined as variable
                             // TODO: add similarly named functions as context
                             self.errors
-                                .add(format!("Unknown function '{}'", call.name.0), call.name.1);
+                                .add(format!("Unknown function '{}'", name.0), name.1);
                             UNKNOWN_DEF_ID
                         }
                     };
                     Expr::Call(Call {
-                        name: call.name,
+                        name: *name,
                         def_id,
-                        args: call.args.iter().map(|arg| self.map_expr(arg)).collect(),
+                        args: args.iter().map(|arg| self.map_expr(arg)).collect(),
                     })
                 }
+                ast::Expr::List(ast::List { elements }) => Expr::List(List {
+                    elements: elements.iter().map(|elem| self.map_expr(elem)).collect(),
+                }),
+                ast::Expr::Map(ast::Map { pairs }) => Expr::Map(Map {
+                    pairs: pairs
+                        .iter()
+                        .map(|pair| Pair {
+                            key: self.map_expr(&pair.key),
+                            value: self.map_expr(&pair.value),
+                        })
+                        .collect(),
+                }),
+                ast::Expr::Index(ast::Index { expr, index }) => Expr::Index(Index {
+                    expr: Box::new(self.map_expr(expr)),
+                    index: Box::new(self.map_expr(index)),
+                }),
                 ast::Expr::Var(name) => {
                     match self.scopes.iter().rev().find_map(|scope| scope.get(name)) {
                         Some(&def_id) => Expr::Var(def_id),
@@ -503,19 +577,57 @@ impl<'a> Constructor<'a> {
     }
 
     fn map_type(&mut self, (r#type, span): &Spanned<ast::Type<'_>>) -> Spanned<Type> {
-        (
-            match r#type {
-                ast::Type::Nothing => Type::Nothing,
-                ast::Type::Int => Type::Int,
-                ast::Type::Bool => Type::Bool,
-                ast::Type::String => Type::String,
-                ast::Type::Named(name) => {
-                    self.errors.add(format!("Unknown type '{}'", name), *span);
-                    Type::Named(UNKNOWN_DEF_ID)
+        let ast::Type { name, generics } = r#type;
+        if matches!(*name, "int" | "char" | "string" | "bool") && !generics.is_empty() {
+            self.errors
+                .add(format!("'{name}' takes no generic arguments"), *span);
+        }
+        if *name == "list" && generics.len() != 1 {
+            self.errors
+                .add(format!("'list<Element>' takes one generic argument"), *span);
+        }
+        if *name == "map" && generics.len() != 2 {
+            self.errors.add(
+                format!("'map<Key, Value>' takes two generic arguments"),
+                *span,
+            );
+        }
+        let r#type = match *name {
+            "int" => Type::Int,
+            "string" => Type::String,
+            "bool" => Type::Bool,
+            "char" => Type::Char,
+            "list" => {
+                let element = generics
+                    .get(0)
+                    .map(|r#type| self.map_type(r#type).0)
+                    .unwrap_or(Type::UNKNOWN);
+                Type::List(Box::new(element))
+            }
+            "map" => {
+                let key = generics
+                    .get(0)
+                    .map(|r#type| self.map_type(r#type).0)
+                    .unwrap_or(Type::UNKNOWN);
+                let value = generics
+                    .get(1)
+                    .map(|r#type| self.map_type(r#type).0)
+                    .unwrap_or(Type::UNKNOWN);
+                Type::Map {
+                    key: Box::new(key),
+                    value: Box::new(value),
                 }
-            },
-            *span,
-        )
+            }
+            // NOTE: named type definitions are currently unimplemented
+            _ => {
+                for generic in generics {
+                    let _ = self.map_type(generic);
+                }
+                self.errors.add(format!("Unknown type '{}'", name), *span);
+                Type::UNKNOWN
+            }
+        };
+        (r#type, *span)
     }
 }
 
@@ -649,24 +761,31 @@ impl<'a> std::fmt::Display for Stmt<'a> {
 impl<'a> std::fmt::Display for Expr<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Binary(Binary {
-                op: (op, _),
-                left,
-                right,
-            }) => write!(f, "({} {op} {})", left.0, right.0)?,
-            Expr::Unary(Unary { op: (op, _), expr }) => write!(f, "({op}{})", expr.0)?,
-            Expr::Call(Call {
-                name: (name, _),
-                def_id: _,
-                args,
-            }) => {
-                write!(f, "{name}(")?;
-                for (i, (arg, _)) in args.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "{arg}")?;
-                }
+            Expr::Binary(Binary { op, left, right }) => {
+                write!(f, "({} {} {})", left.0, op.0, right.0)?
+            }
+            Expr::Unary(Unary { op, expr }) => write!(f, "({}{})", op.0, expr.0)?,
+            Expr::Call(Call { name, args, .. }) => {
+                write!(f, "{}(", name.0)?;
+                write_comma_separated(f, args.iter().map(|(arg, _)| arg))?;
+                f.write_str(")")?;
+            }
+            Expr::List(List { elements }) => {
+                f.write_str("[")?;
+                write_comma_separated(f, elements.iter().map(|(elem, _)| elem))?;
+                f.write_str("]")?;
+            }
+            Expr::Map(Map { pairs }) => {
+                f.write_str("{")?;
+                write_comma_separated(f, pairs.iter())?;
+                f.write_str("}")?;
+            }
+            Expr::Index(Index { expr, index }) => {
+                f.write_str("(")?;
+                expr.0.fmt(f)?;
+                f.write_str("[")?;
+                index.0.fmt(f)?;
+                f.write_str("]")?;
                 f.write_str(")")?;
             }
             Expr::Range(Range { start, end }) => write!(f, "{}..{}", start.0, end.0)?,
@@ -676,5 +795,13 @@ impl<'a> std::fmt::Display for Expr<'a> {
             Expr::String(string) => write!(f, "{string:?}")?,
         }
         Ok(())
+    }
+}
+
+impl std::fmt::Display for Pair<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.key.0.fmt(f)?;
+        f.write_str(": ")?;
+        self.value.0.fmt(f)
     }
 }

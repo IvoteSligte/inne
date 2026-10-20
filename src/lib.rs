@@ -3,6 +3,7 @@ pub mod hir;
 pub mod interpreter;
 pub mod mir;
 pub mod typed_hir;
+mod util;
 
 pub use ast::{Ast, ast_from_parse_tree};
 pub use error::*;

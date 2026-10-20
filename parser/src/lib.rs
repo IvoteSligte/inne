@@ -1,6 +1,7 @@
 pub mod diagnosis;
 pub mod lexer;
 pub mod parser;
+mod util;
 
 pub use lexer::*;
 pub use parser::*;

@@ -140,6 +140,17 @@ fn expr_extract_idents(expr: &parser::Expr, set: &mut impl FnMut(u32, Span)) {
             expr_extract_idents(&start.0, set);
             expr_extract_idents(&end.0, set);
         }
+        parser::Expr::List(items) => items
+            .iter()
+            .for_each(|item| expr_extract_idents(&item.0, set)),
+        parser::Expr::Map(pairs) => pairs.iter().for_each(|(key, value)| {
+            expr_extract_idents(&key.0, set);
+            expr_extract_idents(&value.0, set);
+        }),
+        parser::Expr::Index(expr, index) => {
+            expr_extract_idents(&expr.0, set);
+            expr_extract_idents(&index.0, set);
+        }
     }
 }
 

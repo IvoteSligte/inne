@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 pub use crate::typed_hir::{DefId, DefInfo, Int};
 use crate::{
     Error, TypedHir,
     hir::{Errors, PRINT_DEF_ID},
     typed_hir as thir,
+    util::write_comma_separated,
 };
 
 // TODO: reachability analysis
@@ -16,13 +17,56 @@ use crate::{
 // TODO: string concatenation
 // TODO: print(...) without trailing newline
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+// TODO: make string and list slicing cheap
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Value {
     Nothing,
     Int(Int),
     Bool(bool),
     String(Vec<char>),
+    Char(char),
+    List(Vec<Self>),
+    Map(BTreeMap<Self, Self>),
     Range { start: Int, end: Int },
+}
+
+impl Value {
+    pub fn print(&self) {
+        match self {
+            Value::Nothing => print!("Nothing"),
+            Value::Int(int) => print!("{}", int),
+            Value::Bool(bool) => print!("{}", bool),
+            Value::String(chars) => {
+                for char in chars {
+                    print!("{}", char);
+                }
+            }
+            Value::Char(char) => print!("{char}"),
+            Value::List(elements) => {
+                print!("[");
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        print!(", ");
+                    }
+                    elem.print();
+                }
+                print!("]");
+            }
+            Value::Map(pairs) => {
+                print!("{{");
+                for (i, (key, value)) in pairs.iter().enumerate() {
+                    if i > 0 {
+                        print!(", ");
+                    }
+                    key.print();
+                    print!(": ");
+                    value.print();
+                }
+                print!("}}");
+            }
+            Value::Range { .. } => unreachable!(),
+        }
+    }
 }
 
 pub struct Mir<'a> {
@@ -109,6 +153,9 @@ pub enum Op {
     Not(LocalId),
     Constant(Value),
     Call { func_id: FuncId, args: Vec<LocalId> },
+    List(Vec<LocalId>),
+    Map(Vec<Pair>),
+    Index { expr: LocalId, index: LocalId },
     Print { args: Vec<LocalId> },
     Range { start: LocalId, end: LocalId },
     IntoIter(LocalId),
@@ -119,6 +166,12 @@ pub enum Op {
 pub struct Binary {
     pub left: LocalId,
     pub right: LocalId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Pair {
+    pub key: LocalId,
+    pub value: LocalId,
 }
 
 // TODO: just add the args to Op, making it a tagged union
@@ -403,12 +456,31 @@ impl Constructor {
                 builder.push_constant(Value::String(string.chars().collect()))
             }
             thir::Expr::Range(thir::Range { start, end }) => {
-                let start_id = self.map_expr(&start.0, builder);
-                let end_id = self.map_expr(&end.0, builder);
-                builder.push_op(Op::Range {
-                    start: start_id,
-                    end: end_id,
-                })
+                let start = self.map_expr(&start.0, builder);
+                let end = self.map_expr(&end.0, builder);
+                builder.push_op(Op::Range { start, end })
+            }
+            thir::Expr::List(thir::List { elements }) => {
+                let elements = elements
+                    .iter()
+                    .map(|elem| self.map_expr(&elem.0, builder))
+                    .collect();
+                builder.push_op(Op::List(elements))
+            }
+            thir::Expr::Map(thir::Map { pairs }) => {
+                let pairs = pairs
+                    .iter()
+                    .map(|pair| Pair {
+                        key: self.map_expr(&pair.key.0, builder),
+                        value: self.map_expr(&pair.value.0, builder),
+                    })
+                    .collect();
+                builder.push_op(Op::Map(pairs))
+            }
+            thir::Expr::Index(thir::Index { expr, index }) => {
+                let expr = self.map_expr(&expr.0, builder);
+                let index = self.map_expr(&index.0, builder);
+                builder.push_op(Op::Index { expr, index })
             }
         }
     }
@@ -596,7 +668,32 @@ impl std::fmt::Display for Value {
             Value::Nothing => f.write_str("Nothing"),
             Value::Int(int) => write!(f, "{int}"),
             Value::Bool(bool) => write!(f, "{bool}"),
-            Value::String(chars) => chars.iter().map(|c| write!(f, "{c}")).collect(),
+            Value::String(chars) => {
+                f.write_str("\"")?;
+                chars
+                    .iter()
+                    .map(|c| write!(f, "{c}"))
+                    .collect::<std::fmt::Result>()?;
+                f.write_str("\"")
+            }
+            Value::Char(char) => write!(f, "{char:?}"),
+            Value::List(elements) => {
+                f.write_str("[")?;
+                write_comma_separated(f, elements)?;
+                f.write_str("]")
+            }
+            Value::Map(pairs) => {
+                f.write_str("{")?;
+                for (i, pair) in pairs.into_iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    pair.0.fmt(f)?;
+                    f.write_str(": ")?;
+                    pair.1.fmt(f)?;
+                }
+                f.write_str("}")
+            }
             Value::Range { start, end } => write!(f, "{start}..{end}"),
         }
     }
@@ -671,6 +768,26 @@ impl std::fmt::Display for Stmt {
             Call { func_id, args } => {
                 write!(f, "<{:?}>", func_id.get())?;
                 write_tuple(args, f)
+            }
+            List(elements) => {
+                f.write_str("List(")?;
+                write_comma_separated(f, elements.iter().map(|id| id.get()))?;
+                f.write_str(")")
+            }
+            Map(pairs) => {
+                f.write_str("Map(")?;
+                for (i, pair) in pairs.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    pair.key.0.fmt(f)?;
+                    f.write_str(": ")?;
+                    pair.value.0.fmt(f)?;
+                }
+                f.write_str(")")
+            }
+            Index { expr, index } => {
+                write!(f, "Index({}, {})", expr.get(), index.get())
             }
             Print { args } => {
                 write!(f, "Print")?;
