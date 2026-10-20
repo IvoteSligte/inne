@@ -1,0 +1,6 @@
+
+var list = [<int>];
+
+var map = {<string, int>};
+
+

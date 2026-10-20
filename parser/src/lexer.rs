@@ -28,6 +28,7 @@ pub enum Token<'src> {
     Int(&'src str),
     Bool(bool),
     String(&'src str),
+    // TODO: change Op("<") and Op(">") to explicit Delimiter tokens
     Op(&'src str),
     Comment(&'src str),
     // Delimiters
@@ -83,8 +84,8 @@ impl std::fmt::Display for Token<'_> {
             RBrace => f.write_str("}"),
             LParen => f.write_str("("),
             RParen => f.write_str(")"),
-            LBracket => f.write_str("{"),
-            RBracket => f.write_str("}"),
+            LBracket => f.write_str("["),
+            RBracket => f.write_str("]"),
             Dot => f.write_str("."),
             DotDot => f.write_str(".."),
             Comma => f.write_str(","),

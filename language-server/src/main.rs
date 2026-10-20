@@ -27,6 +27,7 @@ mod tt {
     pub const PARAMETER: u32 = 6;
     pub const TYPE: u32 = 7;
     pub const COMMENT: u32 = 8;
+    pub const DELIMITER: u32 = 9;
 }
 
 pub fn position_at_end(source: &str, line: &mut u32, character: &mut u32) -> Position {
@@ -142,6 +143,7 @@ impl LanguageServer for Backend {
                                     SemanticTokenType::PARAMETER,
                                     SemanticTokenType::TYPE,
                                     SemanticTokenType::COMMENT,
+                                    SemanticTokenType::new("delimiter"),
                                 ],
                                 token_modifiers: Vec::new(),
                             },

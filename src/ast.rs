@@ -44,7 +44,9 @@ pub enum Expr<'a> {
     Binary(Binary<'a>),
     Unary(Unary<'a>),
     Call(Call<'a>),
+    EmptyList(EmptyList<'a>),
     List(List<'a>),
+    EmptyMap(EmptyMap<'a>),
     Map(Map<'a>),
     Index(Index<'a>),
     Range(Range<'a>),
@@ -70,8 +72,17 @@ pub struct Call<'a> {
     pub args: Vec<Spanned<Expr<'a>>>,
 }
 
+pub struct EmptyList<'a> {
+    pub element_type: Spanned<Type<'a>>,
+}
+
 pub struct List<'a> {
     pub elements: Vec<Spanned<Expr<'a>>>,
+}
+
+pub struct EmptyMap<'a> {
+    pub key_type: Spanned<Type<'a>>,
+    pub value_type: Spanned<Type<'a>>,
 }
 
 pub struct Map<'a> {
@@ -145,8 +156,15 @@ fn map_expr<'a>((expr, span): &Spanned<parser::Expr<'a>>) -> Spanned<Expr<'a>> {
                 name: *name,
                 args: map_to_vec(args, map_expr),
             }),
+            parser::Expr::EmptyList(element_type) => Expr::EmptyList(EmptyList {
+                element_type: element_type.clone(),
+            }),
             parser::Expr::List(elements) => Expr::List(List {
                 elements: map_to_vec(elements, map_expr),
+            }),
+            parser::Expr::EmptyMap(key_type, value_type) => Expr::EmptyMap(EmptyMap {
+                key_type: key_type.clone(),
+                value_type: value_type.clone(),
             }),
             parser::Expr::Map(pairs) => Expr::Map(Map {
                 pairs: map_to_vec(pairs, |(key, value)| Pair {

@@ -155,7 +155,9 @@ pub enum Expr<'a> {
     Binary(Binary<'a>),
     Unary(Unary<'a>),
     Call(Call<'a>),
+    EmptyList(EmptyList),
     List(List<'a>),
+    EmptyMap(EmptyMap),
     Map(Map<'a>),
     Index(Index<'a>),
     Range(Range<'a>),
@@ -182,8 +184,16 @@ pub struct Call<'a> {
     pub args: Vec<Spanned<Expr<'a>>>,
 }
 
+pub struct EmptyList {
+    pub element_type: Spanned<Type>,
+}
+
 pub struct List<'a> {
     pub elements: Vec<Spanned<Expr<'a>>>,
+}
+pub struct EmptyMap {
+    pub key_type: Spanned<Type>,
+    pub value_type: Spanned<Type>,
 }
 
 pub struct Map<'a> {
@@ -276,6 +286,20 @@ impl Errors {
         });
     }
 
+    pub fn add_with_context(
+        &mut self,
+        message: impl ToString,
+        span: Span,
+        context_message: impl ToString,
+        context_span: Span,
+    ) {
+        self.add_with_contexts(
+            message,
+            span,
+            vec![(context_message.to_string(), context_span)],
+        );
+    }
+
     pub fn into_inner(self) -> Vec<Error> {
         self.inner
     }
@@ -322,16 +346,14 @@ impl<'a> Constructor<'a> {
                 continue;
             };
             if let Some(&prev_func_def_id) = _self.func_to_def_id.get(func.name.0) {
-                _self.errors.add_with_contexts(
+                _self.errors.add_with_context(
                     format!(
                         "Function '{}' was already defined. Functions must have unique names.",
                         func.name.0
                     ),
                     func.name.1,
-                    vec![(
-                        format!("Previously defined here:"),
-                        _self.defs.get(prev_func_def_id).span,
-                    )],
+                    "Previously defined here:",
+                    _self.defs.get(prev_func_def_id).span,
                 );
             } else {
                 _self
@@ -484,16 +506,14 @@ impl<'a> Constructor<'a> {
         if let Some(prev_param_def_id) =
             self.scopes.last_mut().unwrap().insert(param.name.0, def_id)
         {
-            self.errors.add_with_contexts(
+            self.errors.add_with_context(
                 format!(
                     "Parameter '{}' was already defined. Parameters must have unique names.",
                     param.name.0
                 ),
                 param.name.1,
-                vec![(
-                    format!("Previously defined here:"),
-                    self.defs.get(prev_param_def_id).span,
-                )],
+                format!("Previously defined here:"),
+                self.defs.get(prev_param_def_id).span,
             );
         }
         Param {
@@ -536,8 +556,20 @@ impl<'a> Constructor<'a> {
                         args: args.iter().map(|arg| self.map_expr(arg)).collect(),
                     })
                 }
+                ast::Expr::EmptyList(ast::EmptyList { element_type }) => {
+                    Expr::EmptyList(EmptyList {
+                        element_type: self.map_type(element_type),
+                    })
+                }
                 ast::Expr::List(ast::List { elements }) => Expr::List(List {
                     elements: elements.iter().map(|elem| self.map_expr(elem)).collect(),
+                }),
+                ast::Expr::EmptyMap(ast::EmptyMap {
+                    key_type,
+                    value_type,
+                }) => Expr::EmptyMap(EmptyMap {
+                    key_type: self.map_type(key_type),
+                    value_type: self.map_type(value_type),
                 }),
                 ast::Expr::Map(ast::Map { pairs }) => Expr::Map(Map {
                     pairs: pairs
@@ -770,10 +802,25 @@ impl<'a> std::fmt::Display for Expr<'a> {
                 write_comma_separated(f, args.iter().map(|(arg, _)| arg))?;
                 f.write_str(")")?;
             }
+            Expr::EmptyList(EmptyList { element_type }) => {
+                f.write_str("<")?;
+                element_type.0.fmt(f)?;
+                f.write_str(">")?;
+            }
             Expr::List(List { elements }) => {
                 f.write_str("[")?;
                 write_comma_separated(f, elements.iter().map(|(elem, _)| elem))?;
                 f.write_str("]")?;
+            }
+            Expr::EmptyMap(EmptyMap {
+                key_type,
+                value_type,
+            }) => {
+                f.write_str("<")?;
+                key_type.0.fmt(f)?;
+                f.write_str(", ")?;
+                value_type.0.fmt(f)?;
+                f.write_str(">")?;
             }
             Expr::Map(Map { pairs }) => {
                 f.write_str("{")?;

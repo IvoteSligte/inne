@@ -8,6 +8,8 @@ import {
     TransportKind
 } from 'vscode-languageclient/node';
 
+// TODO: "delimiter" semantic token highlighting
+
 let client: LanguageClient;
 
 export function activate(context: ExtensionContext) {

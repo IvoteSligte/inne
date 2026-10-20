@@ -94,17 +94,19 @@ pub enum UnaryOp {
     Not,
 }
 
-pub enum Expr<'a> {
+pub enum Expr<'src> {
     Binary(Box<Spanned<Self>>, Spanned<BinaryOp>, Box<Spanned<Self>>),
     Unary(Spanned<UnaryOp>, Box<Spanned<Self>>),
-    Call(Spanned<&'a str>, Spanned<Vec<Spanned<Self>>>),
+    Call(Spanned<&'src str>, Spanned<Vec<Spanned<Self>>>),
+    EmptyList(Spanned<Type<'src>>),
     List(Vec<Spanned<Self>>),
+    EmptyMap(Spanned<Type<'src>>, Spanned<Type<'src>>),
     Map(Vec<(Spanned<Self>, Spanned<Self>)>),
     Index(Box<Spanned<Self>>, Box<Spanned<Self>>),
-    Var(&'a str),
-    Int(&'a str),
+    Var(&'src str),
+    Int(&'src str),
     Bool(bool),
-    String(&'a str),
+    String(&'src str),
     // TODO: Char(char)
     Range(Box<Spanned<Self>>, Box<Spanned<Self>>),
 }
@@ -134,24 +136,7 @@ where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {
     let ident = ident_parser();
-    let r#type = recursive(|r#type| {
-        select! {
-            Token::Ident(ident) => ident
-        }
-        .then(
-            r#type
-                .separated_by(just(Token::Comma))
-                .allow_trailing()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::Op("<")), just(Token::Op(">")))
-                .or_not(),
-        )
-        .map(|(name, generics)| Type {
-            name,
-            generics: generics.unwrap_or(Vec::new()),
-        })
-        .map_with(with_span)
-    });
+    let r#type = type_parser();
     let param = ident
         .then_ignore(just(Token::Colon))
         .then(r#type.clone())
@@ -250,6 +235,31 @@ where
     })
 }
 
+fn type_parser<'tokens, 'src: 'tokens, I>()
+-> impl Parser<'tokens, I, Spanned<Type<'src>>, ParseErrorExtra<'tokens, 'src>> + Clone
+where
+    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
+{
+    recursive(|r#type| {
+        select! {
+            Token::Ident(ident) => ident
+        }
+        .then(
+            r#type
+                .separated_by(just(Token::Comma))
+                .allow_trailing()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::Op("<")), just(Token::Op(">")))
+                .or_not(),
+        )
+        .map(|(name, generics)| Type {
+            name,
+            generics: generics.unwrap_or(Vec::new()),
+        })
+        .map_with(with_span)
+    })
+}
+
 fn ident_parser<'tokens, 'src: 'tokens, I>()
 -> impl Parser<'tokens, I, Spanned<&'src str>, ParseErrorExtra<'tokens, 'src>> + Copy
 where
@@ -268,6 +278,7 @@ where
     let int = select! { Token::Int(int) => Expr::Int(int) }.map_with(with_span);
     let bool = select! { Token::Bool(bool) => Expr::Bool(bool) }.map_with(with_span);
     let string = select! { Token::String(string) => Expr::String(string) }.map_with(with_span);
+    let r#type = type_parser();
 
     recursive(|expr| {
         // Function calls have very high precedence so we prioritise them
@@ -283,14 +294,25 @@ where
             .map(|(name, args)| Expr::Call(name, args))
             .map_with(with_span)
             .boxed();
+        // TODO: make specifying more than one type instead of [<type>] report a nice error message
         let list = expr
             .clone()
             .separated_by(just(Token::Comma))
             .allow_trailing()
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LBracket), just(Token::RBracket))
-            .map(|elements| Expr::List(elements))
+            .map(Expr::List)
+            .or(r#type
+                .clone()
+                .delimited_by(
+                    // Have to do this instead of nested delimited_by (which would be cleaner)
+                    // because chumsky doesn't support that.
+                    just(Token::LBracket).then(just(Token::Op("<"))),
+                    just(Token::Op(">")).then(just(Token::RBracket)),
+                )
+                .map(Expr::EmptyList))
             .map_with(with_span);
+        // TODO: make specifying only one type instead of {<key, value>} report a nice error message
         let map = expr
             .clone()
             .then_ignore(just(Token::Colon))
@@ -299,7 +321,18 @@ where
             .allow_trailing()
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LBrace), just(Token::RBrace))
-            .map(|pairs| Expr::Map(pairs))
+            .map(Expr::Map)
+            .or(r#type
+                .clone()
+                .then_ignore(just(Token::Comma))
+                .then(r#type.clone())
+                .delimited_by(
+                    // Have to do this instead of nested delimited_by (which would be cleaner)
+                    // because chumsky doesn't support that.
+                    just(Token::LBrace).then(just(Token::Op("<"))),
+                    just(Token::Op(">")).then(just(Token::RBrace)),
+                )
+                .map(|(key_type, value_type)| Expr::EmptyMap(key_type, value_type)))
             .map_with(with_span);
 
         // Unambiguous expressions

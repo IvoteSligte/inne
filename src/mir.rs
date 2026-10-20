@@ -460,6 +460,7 @@ impl Constructor {
                 let end = self.map_expr(&end.0, builder);
                 builder.push_op(Op::Range { start, end })
             }
+            thir::Expr::EmptyList(_) => builder.push_op(Op::List(Vec::new())),
             thir::Expr::List(thir::List { elements }) => {
                 let elements = elements
                     .iter()
@@ -467,6 +468,7 @@ impl Constructor {
                     .collect();
                 builder.push_op(Op::List(elements))
             }
+            thir::Expr::EmptyMap(_) => builder.push_op(Op::Map(Vec::new())),
             thir::Expr::Map(thir::Map { pairs }) => {
                 let pairs = pairs
                     .iter()

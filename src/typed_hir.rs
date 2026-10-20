@@ -1,8 +1,9 @@
 use std::{num::IntErrorKind, ops::Deref};
 
 pub use crate::hir::{
-    Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, DefId, Expr, For, Func, Hir, If,
-    Index, List, Loop, Map, Pair, Param, Range, Stmt, Type, Unary, UnaryOp, VarDecl, While,
+    Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, DefId, EmptyList, EmptyMap, Expr, For,
+    Func, Hir, If, Index, List, Loop, Map, Pair, Param, Range, Stmt, Type, Unary, UnaryOp, VarDecl,
+    While,
 };
 
 pub type Int = i64;
@@ -62,14 +63,14 @@ pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error>> 
     })
 }
 
-struct TypeChecker<'a, 'b> {
+struct TypeChecker<'src, 'funcs> {
     errors: Errors,
     defs: Vec<DefInfo>,
-    funcs: &'b [Func<'a>],
+    funcs: &'funcs [Func<'src>],
     expected_return_type: Type,
 }
 
-impl<'a, 'b> TypeChecker<'a, 'b> {
+impl<'src, 'funcs> TypeChecker<'src, 'funcs> {
     fn check_funcs(&mut self) {
         for func in self.funcs {
             self.expected_return_type = func
@@ -98,7 +99,7 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
         self.expected_return_type = Type::Nothing;
     }
 
-    fn check_stmt(&mut self, stmt: &Stmt<'a>) {
+    fn check_stmt(&mut self, stmt: &Stmt<'src>) {
         match stmt {
             Stmt::VarDecl(VarDecl {
                 def_id,
@@ -222,7 +223,7 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
         }
     }
 
-    fn check_stmts(&mut self, stmts: &[Stmt<'a>]) {
+    fn check_stmts(&mut self, stmts: &[Stmt<'src>]) {
         for stmt in stmts {
             self.check_stmt(stmt);
         }
@@ -230,13 +231,21 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
 
     /// Returns the expression's type and whether it can be assigned to.
     /// Expressions can only be assigned to if they are variables.
-    fn check_expr(&mut self, (expr, span): &Spanned<Expr<'a>>) -> (Type, bool) {
+    fn check_expr(&mut self, (expr, span): &Spanned<Expr<'src>>) -> (Type, bool) {
         (
             match expr {
                 Expr::Binary(binary) => self.check_binary((binary, *span)),
                 Expr::Unary(unary) => self.check_unary((unary, *span)),
                 Expr::Call(call) => self.check_call((call, *span)),
+                Expr::EmptyList(EmptyList { element_type }) => element_type.0.clone(),
                 Expr::List(list) => self.check_list((list, *span)),
+                Expr::EmptyMap(EmptyMap {
+                    key_type,
+                    value_type,
+                }) => Type::Map {
+                    key: Box::new(key_type.0.clone()),
+                    value: Box::new(value_type.0.clone()),
+                },
                 Expr::Map(map) => self.check_map((map, *span)),
                 Expr::Index(index) => self.check_index((index, *span)),
                 Expr::Var(def_id) => return (self.defs[*def_id].r#type.clone(), true),
@@ -256,7 +265,7 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
         )
     }
 
-    fn check_binary(&mut self, (binary, span): Spanned<&Binary<'a>>) -> Type {
+    fn check_binary(&mut self, (binary, span): Spanned<&Binary<'src>>) -> Type {
         let (left_type, _) = self.check_expr(&binary.left);
         let (right_type, _) = self.check_expr(&binary.right);
         let or_type = left_type.or(&right_type); // Known if either one is known
@@ -312,7 +321,7 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
         }
     }
 
-    fn check_unary(&mut self, (unary, span): Spanned<&Unary<'a>>) -> Type {
+    fn check_unary(&mut self, (unary, span): Spanned<&Unary<'src>>) -> Type {
         let (expr_type, _) = self.check_expr(&unary.expr);
         if expr_type.is_unknown() {
             return expr_type;
@@ -344,7 +353,7 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
         expr_type
     }
 
-    fn check_call(&mut self, (call, span): Spanned<&Call<'a>>) -> Type {
+    fn check_call(&mut self, (call, span): Spanned<&Call<'src>>) -> Type {
         if call.def_id == PRINT_DEF_ID {
             // print(...) accepts any number of arguments of any type.
             return Type::Nothing;
@@ -402,71 +411,64 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
             .unwrap_or(Type::Nothing)
     }
 
-    fn check_list(&mut self, (list, _): Spanned<&List<'a>>) -> Type {
+    fn check_list(&mut self, (list, span): Spanned<&List<'src>>) -> Type {
         if list.elements.is_empty() {
-            todo!("empty list");
+            self.errors.add(
+                "An empty list must have an element type specified. Example: [<int>]",
+                span,
+            );
+            return Type::UNKNOWN;
         }
         let (first_element_type, _) = self.check_expr(&list.elements[0]);
         for element @ (_, element_span) in &list.elements[1..] {
             let (element_type, _) = self.check_expr(element);
-            if first_element_type.is_known()
-                && element_type.is_known()
-                && first_element_type != element_type
-            {
-                self.errors.add_with_contexts(
+            if types_not_equal(&first_element_type, &element_type) {
+                self.errors.add_with_context(
                     format!(
                         "All list elements should have the same type, but this one has type '{}'",
                         element_type
                     ),
                     *element_span,
-                    vec![(
-                        format!("The first element has type '{}'", first_element_type),
-                        list.elements[0].1,
-                    )],
+                    format!("The first element has type '{}'", first_element_type),
+                    list.elements[0].1,
                 );
             }
         }
         Type::List(Box::new(first_element_type))
     }
 
-    fn check_map(&mut self, (map, _): Spanned<&Map<'a>>) -> Type {
+    fn check_map(&mut self, (map, span): Spanned<&Map<'src>>) -> Type {
         if map.pairs.is_empty() {
-            todo!("empty map");
+            self.errors.add(
+                "An empty map must have a key and value type specified. Example: {<string, int>}",
+                span,
+            );
+            return Type::Map {
+                key: Box::new(Type::UNKNOWN),
+                value: Box::new(Type::UNKNOWN),
+            };
         }
         let (first_key_type, _) = self.check_expr(&map.pairs[0].key);
         let (first_value_type, _) = self.check_expr(&map.pairs[0].value);
         for Pair { key, value } in &map.pairs[1..] {
-            let (key_type, _) = self.check_expr(key);
-            let (value_type, _) = self.check_expr(value);
-            if first_key_type.is_known() && key_type.is_known() && first_key_type != key_type {
-                self.errors.add_with_contexts(
-                    format!(
-                        "All map keys should have the same type, but this one has type '{}'",
-                        key_type
-                    ),
-                    key.1,
-                    vec![(
-                        format!("The first key has type '{}'", first_key_type),
-                        map.pairs[0].key.1,
-                    )],
-                );
+            macro_rules! check {
+                ($first_type:expr, $var:ident, $str:literal) => {{
+                    let (r#type, _) = self.check_expr($var);
+                    if types_not_equal($first_type, &r#type) {
+                        self.errors.add_with_context(
+                            format!(
+                                "All map {}s should have the same type, but this {} has type '{}'",
+                                $str, $str, r#type
+                            ),
+                            $var.1,
+                            format!("The first {} has type '{}'", $str, $first_type),
+                            map.pairs[0].$var.1,
+                        );
+                    }
+                }};
             }
-            if first_value_type.is_known()
-                && value_type.is_known()
-                && first_value_type != value_type
-            {
-                self.errors.add_with_contexts(
-                    format!(
-                        "All map values should have the same type, but this one has type '{}'",
-                        value_type
-                    ),
-                    value.1,
-                    vec![(
-                        format!("The first value has type '{}'", first_value_type),
-                        map.pairs[0].value.1,
-                    )],
-                );
-            }
+            check!(&first_key_type, key, "key");
+            check!(&first_value_type, value, "value");
         }
         Type::Map {
             key: Box::new(first_key_type),
@@ -474,7 +476,7 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
         }
     }
 
-    fn check_index(&mut self, (index, _): Spanned<&Index<'a>>) -> Type {
+    fn check_index(&mut self, (index, _): Spanned<&Index<'src>>) -> Type {
         let (expr_type, _) = self.check_expr(&index.expr);
         let (index_type, _) = self.check_expr(&index.index);
         match expr_type {
@@ -538,4 +540,11 @@ impl<'a, 'b> TypeChecker<'a, 'b> {
         };
         self.errors.add(message, span);
     }
+}
+
+/// Returns `true` if the types are definitively not equal.
+///
+/// This function also returns `false` if either type is unknown.
+fn types_not_equal(left: &Type, right: &Type) -> bool {
+    left.is_known() && right.is_known() && left != right
 }
