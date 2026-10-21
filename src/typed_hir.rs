@@ -6,11 +6,10 @@ pub use crate::hir::{
     While,
 };
 
-pub type Int = i64;
-
 use crate::{
     Error, Span, Spanned,
     hir::{Errors, PRINT_DEF_ID},
+    value::Int,
 };
 
 /// Type-checked high-level intermediate representation.
@@ -121,7 +120,7 @@ impl<'src, 'funcs> TypeChecker<'src, 'funcs> {
                 let (value_type, _) = self.check_expr(value);
                 if !target_is_assignable {
                     self.errors.add(
-                        "The left-hand-side of an assignment must be a variable.",
+                        "The left-hand-side of an assignment must be a variable or list/map element.",
                         target.1,
                     );
                 }
@@ -176,6 +175,7 @@ impl<'src, 'funcs> TypeChecker<'src, 'funcs> {
                 let (iter_type, _) = self.check_expr(iter);
                 let var_type = match iter_type {
                     Type::Range => Type::Int,
+                    Type::String => Type::Char,
                     Type::List(elem_type) => *elem_type,
                     // TODO: iteration over map (key, value) pairs (requires tuples)
                     _ => {
@@ -230,7 +230,7 @@ impl<'src, 'funcs> TypeChecker<'src, 'funcs> {
     }
 
     /// Returns the expression's type and whether it can be assigned to.
-    /// Expressions can only be assigned to if they are variables.
+    /// Expressions can only be assigned to if they are variables or non-empty lists/maps.
     fn check_expr(&mut self, (expr, span): &Spanned<Expr<'src>>) -> (Type, bool) {
         (
             match expr {
@@ -247,7 +247,11 @@ impl<'src, 'funcs> TypeChecker<'src, 'funcs> {
                     value: Box::new(value_type.0.clone()),
                 },
                 Expr::Map(map) => self.check_map((map, *span)),
-                Expr::Index(index) => self.check_index((index, *span)),
+                Expr::Index(index) => {
+                    let is_assignable =
+                        !matches!(index.expr.0, Expr::EmptyList(_) | Expr::EmptyMap(_));
+                    return (self.check_index((index, *span)), is_assignable);
+                }
                 Expr::Var(def_id) => return (self.defs[*def_id].r#type.clone(), true),
                 Expr::Int(int) => {
                     self.check_int((int, *span));
@@ -476,9 +480,21 @@ impl<'src, 'funcs> TypeChecker<'src, 'funcs> {
         }
     }
 
-    fn check_index(&mut self, (index, _): Spanned<&Index<'src>>) -> Type {
+    fn check_index(&mut self, (index, span): Spanned<&Index<'src>>) -> Type {
         let (expr_type, _) = self.check_expr(&index.expr);
         let (index_type, _) = self.check_expr(&index.index);
+        match &index.expr.0 {
+            // TODO: also detect this when index.expr is a variable instead
+            Expr::EmptyList(_) => self.errors.add(
+                format!("Getting an element from an empty list always fails."),
+                span,
+            ),
+            Expr::EmptyMap(_) => self.errors.add(
+                format!("Getting a value from an empty map always fails."),
+                span,
+            ),
+            _ => {}
+        }
         match expr_type {
             Type::String => match index_type {
                 Type::Int => Type::Char,

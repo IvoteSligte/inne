@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
-pub use crate::typed_hir::{DefId, DefInfo, Int};
+pub use crate::typed_hir::{DefId, DefInfo};
 use crate::{
-    Error, TypedHir,
+    Error, TypedHir, Value,
     hir::{Errors, PRINT_DEF_ID},
     typed_hir as thir,
     util::write_comma_separated,
@@ -16,58 +16,6 @@ use crate::{
 // TODO: operator string(x) for value->string
 // TODO: string concatenation
 // TODO: print(...) without trailing newline
-
-// TODO: make string and list slicing cheap
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Value {
-    Nothing,
-    Int(Int),
-    Bool(bool),
-    String(Vec<char>),
-    Char(char),
-    List(Vec<Self>),
-    Map(BTreeMap<Self, Self>),
-    Range { start: Int, end: Int },
-}
-
-impl Value {
-    pub fn print(&self) {
-        match self {
-            Value::Nothing => print!("Nothing"),
-            Value::Int(int) => print!("{}", int),
-            Value::Bool(bool) => print!("{}", bool),
-            Value::String(chars) => {
-                for char in chars {
-                    print!("{}", char);
-                }
-            }
-            Value::Char(char) => print!("{char}"),
-            Value::List(elements) => {
-                print!("[");
-                for (i, elem) in elements.iter().enumerate() {
-                    if i > 0 {
-                        print!(", ");
-                    }
-                    elem.print();
-                }
-                print!("]");
-            }
-            Value::Map(pairs) => {
-                print!("{{");
-                for (i, (key, value)) in pairs.iter().enumerate() {
-                    if i > 0 {
-                        print!(", ");
-                    }
-                    key.print();
-                    print!(": ");
-                    value.print();
-                }
-                print!("}}");
-            }
-            Value::Range { .. } => unreachable!(),
-        }
-    }
-}
 
 pub struct Mir<'a> {
     pub funcs: Vec<Func<'a>>,
@@ -135,7 +83,11 @@ pub enum Branch {
 
 #[derive(Debug, Clone)]
 pub enum Op {
-    Assign { target: LocalId, value: LocalId },
+    Assign {
+        target: LocalId,
+        value: LocalId,
+        index: Option<LocalId>,
+    },
     Add(Binary),
     Sub(Binary),
     Mul(Binary),
@@ -152,14 +104,28 @@ pub enum Op {
     Neg(LocalId),
     Not(LocalId),
     Constant(Value),
-    Call { func_id: FuncId, args: Vec<LocalId> },
+    Call {
+        func_id: FuncId,
+        args: Vec<LocalId>,
+    },
     List(Vec<LocalId>),
     Map(Vec<Pair>),
-    Index { expr: LocalId, index: LocalId },
-    Print { args: Vec<LocalId> },
-    Range { start: LocalId, end: LocalId },
+    Index {
+        expr: LocalId,
+        index: LocalId,
+    },
+    Print {
+        args: Vec<LocalId>,
+    },
+    Range {
+        start: LocalId,
+        end: LocalId,
+    },
     IntoIter(LocalId),
-    Next { target: LocalId, iter: LocalId },
+    Next {
+        target: LocalId,
+        iter: LocalId,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -253,8 +219,13 @@ impl Constructor {
                     self.map_expr(&expr.0, builder);
                 }
                 thir::Stmt::Assign(thir::Assign { op, target, value }) => {
-                    let target_id = match target.0 {
-                        thir::Expr::Var(def_id) => builder.get_local(def_id),
+                    let (target_id, index_id) = match &target.0 {
+                        thir::Expr::Var(def_id) => (builder.get_local(*def_id), None),
+                        thir::Expr::Index(thir::Index { expr, index }) => {
+                            let expr_id = self.map_expr(&expr.0, builder);
+                            let index_id = self.map_expr(&index.0, builder);
+                            (expr_id, Some(index_id))
+                        }
                         _ => unreachable!(),
                     };
                     let mut value_id = self.map_expr(&value.0, builder);
@@ -279,6 +250,7 @@ impl Constructor {
                     builder.push_op(Op::Assign {
                         target: target_id,
                         value: value_id,
+                        index: index_id,
                     });
                 }
                 thir::Stmt::If(thir::If { choices, r#else }) => {
@@ -383,6 +355,7 @@ impl Constructor {
                         builder.push_op(Op::Assign {
                             target: LocalId::RETURN_VALUE,
                             value: value_id,
+                            index: None,
                         });
                     }
                     builder.finish_block(Branch::Return);
@@ -795,8 +768,25 @@ impl std::fmt::Display for Stmt {
                 write!(f, "Print")?;
                 write_tuple(args, f)
             }
-            Assign { target, value } => {
+            Assign {
+                target,
+                value,
+                index: None,
+            } => {
                 write!(f, "Assign({}, {})", target.get(), value.get())
+            }
+            Assign {
+                target,
+                value,
+                index: Some(index),
+            } => {
+                write!(
+                    f,
+                    "AssignIndex({}, {}, {})",
+                    target.get(),
+                    value.get(),
+                    index.get()
+                )
             }
             Add(binary) | Sub(binary) | Mul(binary) | Div(binary) | Mod(binary) | Eq(binary)
             | Neq(binary) | Lt(binary) | Leq(binary) | Gt(binary) | Geq(binary) | And(binary)

@@ -4,6 +4,7 @@ pub mod interpreter;
 pub mod mir;
 pub mod typed_hir;
 mod util;
+pub mod value;
 
 pub use ast::{Ast, ast_from_parse_tree};
 pub use error::*;
@@ -14,6 +15,7 @@ pub use parser::{
     self, Input as _, LexError, ParseError, ParseTree, Parser as _, Rich, Span, Spanned, Token,
 };
 pub use typed_hir::{TypedHir, typed_hir_from_hir};
+pub use value::Value;
 
 pub fn lex(source: &str) -> (Option<Vec<(Token<'_>, Span)>>, Vec<Error>) {
     let (tokens, errors) = parser::create_lexer().parse(source).into_output_errors();

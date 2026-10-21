@@ -1,4 +1,4 @@
-use crate::{Mir, mir::*};
+use crate::{Mir, Value, mir::*, value::Int};
 
 use std::mem::discriminant;
 
@@ -28,6 +28,12 @@ impl<'a> Interpreter<'a> {
     fn get_local(&self, id: LocalId) -> &Value {
         debug_assert_ne!(id, LocalId::RETURN_VALUE);
         &self.stack[self.frame_start + id.get()]
+    }
+
+    /// Assumes that the stack frame is set to the given ID's frame.
+    fn get_local_mut(&mut self, id: LocalId) -> &mut Value {
+        debug_assert_ne!(id, LocalId::RETURN_VALUE);
+        &mut self.stack[self.frame_start + id.get()]
     }
 
     /// Assumes that the stack frame is set to the given ID's frame.
@@ -67,8 +73,36 @@ impl<'a> Interpreter<'a> {
     fn run_stmt(&mut self, stmt: &Stmt) {
         // TODO: arithmetic overflow checks
         let value = match &stmt.op {
-            &Op::Assign { target, value } => {
+            &Op::Assign {
+                target,
+                value,
+                index: None,
+            } => {
                 self.set_local(target, self.get_local(value).clone());
+                Value::Nothing
+            }
+            &Op::Assign {
+                target,
+                value,
+                index: Some(index),
+            } => {
+                let value = self.get_local(value).clone();
+                let index = self.get_local(index).clone();
+                // TODO: out-of-bounds checks
+                match (self.get_local_mut(target), index, value) {
+                    (Value::String(chars), Value::Int(i), Value::Char(c)) => chars[i as usize] = c,
+                    (Value::String(chars), Value::Range { start, end }, Value::String(s)) => {
+                        chars[start as usize..end as usize].copy_from_slice(&s);
+                    }
+                    (Value::List(list), Value::Int(i), value) => list[i as usize] = value,
+                    (Value::List(list), Value::Range { start, end }, Value::List(l)) => {
+                        list[start as usize..end as usize].clone_from_slice(&l);
+                    }
+                    (Value::Map(map), key, value) => {
+                        map.insert(key, value);
+                    }
+                    _ => unreachable!(),
+                }
                 Value::Nothing
             }
             &Op::Add(binary) => self.int_op(binary, |l, r| l + r),
