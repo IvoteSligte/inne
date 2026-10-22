@@ -28,6 +28,9 @@ mod tt {
     pub const TYPE: u32 = 7;
     pub const COMMENT: u32 = 8;
     pub const DELIMITER: u32 = 9;
+    pub const STRUCT: u32 = 10;
+    pub const ENUM: u32 = 11;
+    pub const PROPERTY: u32 = 12;
 }
 
 pub fn position_at_end(source: &str, line: &mut u32, character: &mut u32) -> Position {
@@ -144,6 +147,9 @@ impl LanguageServer for Backend {
                                     SemanticTokenType::TYPE,
                                     SemanticTokenType::COMMENT,
                                     SemanticTokenType::new("delimiter"),
+                                    SemanticTokenType::STRUCT,
+                                    SemanticTokenType::ENUM,
+                                    SemanticTokenType::PROPERTY,
                                 ],
                                 token_modifiers: Vec::new(),
                             },

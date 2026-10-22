@@ -1,6 +1,6 @@
 use crate::{ParseTree, Span, Spanned};
 
-pub use parser::{AssignOp, BinaryOp, Type, UnaryOp};
+pub use parser::{AssignOp, BinaryOp, Name, Type, UnaryOp};
 
 pub struct Ast<'a> {
     pub filename: &'a str,
@@ -9,6 +9,7 @@ pub struct Ast<'a> {
 
 pub enum Stmt<'a> {
     Func(Func<'a>),
+    Struct(Struct<'a>),
     VarDecl(VarDecl<'a>),
     Expr(Spanned<Expr<'a>>),
     Assign(Assign<'a>),
@@ -24,19 +25,29 @@ pub enum Stmt<'a> {
 pub type Block<'a> = Vec<Stmt<'a>>;
 
 pub struct Func<'a> {
-    pub name: Spanned<&'a str>,
+    pub name: Name<'a>,
     pub params: Vec<Param<'a>>,
     pub return_type: Option<Spanned<Type<'a>>>,
     pub body: Block<'a>,
 }
 
 pub struct Param<'a> {
-    pub name: Spanned<&'a str>,
+    pub name: Name<'a>,
+    pub r#type: Spanned<Type<'a>>,
+}
+
+pub struct Struct<'a> {
+    pub name: Name<'a>,
+    pub fields: Vec<Field<'a>>,
+}
+
+pub struct Field<'a> {
+    pub name: Name<'a>,
     pub r#type: Spanned<Type<'a>>,
 }
 
 pub struct VarDecl<'a> {
-    pub name: Spanned<&'a str>,
+    pub name: Name<'a>,
     pub value: Spanned<Expr<'a>>,
 }
 
@@ -193,12 +204,19 @@ fn map_stmt<'a>(stmt: &parser::Stmt<'a>) -> Stmt<'a> {
     match stmt {
         parser::Stmt::Func(name, params, return_type, body) => Stmt::Func(Func {
             name: *name,
-            params: map_to_vec(params, |parser::Param(name, r#type)| Param {
+            params: map_to_vec(params, |(name, r#type)| Param {
                 name: *name,
                 r#type: r#type.clone(),
             }),
             return_type: return_type.clone(),
             body: map_block(body),
+        }),
+        parser::Stmt::Struct(name, fields) => Stmt::Struct(Struct {
+            name: *name,
+            fields: map_to_vec(fields, |(name, r#type)| Field {
+                name: *name,
+                r#type: r#type.clone(),
+            }),
         }),
         parser::Stmt::VarDecl(name, value) => Stmt::VarDecl(VarDecl {
             name: *name,

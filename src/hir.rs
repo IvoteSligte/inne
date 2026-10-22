@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{Error, Span, Spanned, ast, util::write_comma_separated};
 
-pub use crate::ast::{AssignOp, BinaryOp, UnaryOp};
+pub use crate::ast::{AssignOp, BinaryOp, Name, UnaryOp};
 
 // TODO: warn if expression used as statement does not have any side-effects
 // TODO: warn for unused expression return value
@@ -24,6 +24,7 @@ pub struct Hir<'a> {
     /// Essentially `HashMap<DefId, DefInfo>`, but all [DefId]`s are consecutive.
     pub(crate) defs: Vec<DefInfo<'a>>,
     pub(crate) funcs: Vec<Func<'a>>,
+    pub(crate) types: Vec<Struct<'a>>,
     pub(crate) stmts: Vec<Stmt<'a>>,
 }
 
@@ -52,7 +53,7 @@ pub type Block<'a> = Vec<Stmt<'a>>;
 
 pub struct Func<'a> {
     pub def_id: DefId,
-    pub name: Spanned<&'a str>,
+    pub name: Name<'a>,
     pub params: Vec<Param<'a>>,
     pub return_type: Option<Spanned<Type>>,
     pub body: Block<'a>,
@@ -60,15 +61,30 @@ pub struct Func<'a> {
 
 pub struct Param<'a> {
     pub def_id: DefId,
-    pub name: Spanned<&'a str>,
+    pub name: Name<'a>,
     pub r#type: Spanned<Type>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Struct<'a> {
+    pub type_id: TypeId,
+    pub name: Name<'a>,
+    pub fields: Vec<Field<'a>>,
+}
+
+pub struct Field<'a> {
+    pub name: Name<'a>,
+    pub r#type: Spanned<Type>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TypeId(usize);
 
 impl TypeId {
     pub const UNKNOWN: Self = Self(usize::MAX);
+
+    pub fn get(self) -> usize {
+        self.0
+    }
 }
 
 impl std::fmt::Display for TypeId {
@@ -147,7 +163,7 @@ impl std::fmt::Display for Type {
 
 pub struct VarDecl<'a> {
     pub def_id: DefId,
-    pub name: Spanned<&'a str>,
+    pub name: Name<'a>,
     pub value: Spanned<Expr<'a>>,
 }
 
@@ -179,7 +195,7 @@ pub struct Unary<'a> {
 }
 
 pub struct Call<'a> {
-    pub name: Spanned<&'a str>,
+    pub name: Name<'a>,
     pub def_id: DefId,
     pub args: Vec<Spanned<Expr<'a>>>,
 }
@@ -236,7 +252,7 @@ pub struct Choice<'a> {
 pub struct For<'a> {
     /// ID of the for-loop iteration variable.
     pub def_id: DefId,
-    pub var: Spanned<&'a str>,
+    pub var: Name<'a>,
     pub iter: Spanned<Expr<'a>>,
     pub body: Block<'a>,
 }
@@ -310,7 +326,7 @@ impl Errors {
 struct ConstructorDefs<'a>(Vec<DefInfo<'a>>);
 
 impl<'a> ConstructorDefs<'a> {
-    pub fn add(&mut self, (name, span): Spanned<&'a str>) -> DefId {
+    pub fn add(&mut self, (name, span): Name<'a>) -> DefId {
         let id = self.0.len();
         self.0.push(DefInfo { name, span });
         id
@@ -326,8 +342,10 @@ impl<'a> ConstructorDefs<'a> {
 struct Constructor<'a> {
     defs: ConstructorDefs<'a>,
     funcs: Vec<Func<'a>>,
+    types: Vec<Struct<'a>>,
     // TODO: separate VarId and FuncId
-    func_to_def_id: HashMap<&'a str, DefId>,
+    func_map: HashMap<&'a str, DefId>,
+    type_map: HashMap<&'a str, (TypeId, Span)>,
     scopes: Vec<HashMap<&'a str, DefId>>,
     errors: Errors,
 }
@@ -337,28 +355,50 @@ impl<'a> Constructor<'a> {
         let mut _self = Self {
             defs: ConstructorDefs(Vec::new()),
             funcs: Vec::new(),
-            func_to_def_id: HashMap::new(),
+            types: Vec::new(),
+            func_map: HashMap::new(),
+            type_map: HashMap::new(),
             scopes: Vec::new(),
             errors: Errors::new(),
         };
         for stmt in &ast.stmts {
-            let ast::Stmt::Func(func) = stmt else {
-                continue;
-            };
-            if let Some(&prev_func_def_id) = _self.func_to_def_id.get(func.name.0) {
-                _self.errors.add_with_context(
-                    format!(
-                        "Function '{}' was already defined. Functions must have unique names.",
-                        func.name.0
-                    ),
-                    func.name.1,
-                    "Previously defined here:",
-                    _self.defs.get(prev_func_def_id).span,
-                );
-            } else {
-                _self
-                    .func_to_def_id
-                    .insert(func.name.0, _self.defs.add(func.name));
+            match stmt {
+                ast::Stmt::Func(func) => {
+                    let name = func.name;
+                    if let Some(&prev_func_def_id) = _self.func_map.get(name.0) {
+                        _self.errors.add_with_context(
+                            format!(
+                                "Function '{}' was already defined. Functions must have unique names.",
+                                name.0
+                            ),
+                            name.1,
+                            "Previously defined here:",
+                            _self.defs.get(prev_func_def_id).span,
+                        );
+                    } else {
+                        _self.func_map.insert(name.0, _self.defs.add(name));
+                    }
+                }
+                ast::Stmt::Struct(r#struct) => {
+                    let name = r#struct.name;
+                    // TODO: error if user defines type with same name as builtin
+                    //       (unlikely because user-defined types should be PascalCase by convention)
+                    if let Some(&(_, prev_type_span)) = _self.type_map.get(name.0) {
+                        _self.errors.add_with_context(
+                            format!(
+                                "Type '{}' was already defined. Types must have unique names.",
+                                name.0
+                            ),
+                            name.1,
+                            "Previously defined here:",
+                            prev_type_span,
+                        );
+                    } else {
+                        let id = TypeId(_self.type_map.len());
+                        _self.type_map.insert(name.0, (id, name.1));
+                    }
+                }
+                _ => {}
             }
         }
         let stmts = _self.map_scope(&ast.stmts);
@@ -369,6 +409,7 @@ impl<'a> Constructor<'a> {
             filename: ast.filename,
             defs: _self.defs.0,
             funcs: _self.funcs,
+            types: _self.types,
             stmts,
         })
     }
@@ -408,7 +449,15 @@ impl<'a> Constructor<'a> {
                         );
                         continue;
                     }
-                    let def_id = *self.func_to_def_id.get(name.0).unwrap();
+                    for (i, param) in params.iter().enumerate() {
+                        for other_param in &params[i + 1..] {
+                            if param.name.0 == other_param.name.0 {
+                                self.errors.add("This parameter name was already used. Parameters must have unique names.", other_param.name.1);
+                                break;
+                            }
+                        }
+                    }
+                    let def_id = *self.func_map.get(name.0).unwrap();
                     self.in_scope(|_self| {
                         let params = params.iter().map(|param| _self.map_param(param)).collect();
                         let return_type =
@@ -421,6 +470,36 @@ impl<'a> Constructor<'a> {
                             return_type,
                             body,
                         });
+                    });
+                }
+                ast::Stmt::Struct(ast::Struct { name, fields }) => {
+                    if self.scopes.len() > 1 {
+                        // TODO: add outer function as context
+                        self.errors
+                            .add("Types cannot not be defined inside functions.", name.1);
+                        continue;
+                    }
+                    for (i, field) in fields.iter().enumerate() {
+                        for other_field in &fields[i + 1..] {
+                            if field.name.0 == other_field.name.0 {
+                                self.errors.add("This field name was already used. Fields must have unique names.", other_field.name.1);
+                                break;
+                            }
+                        }
+                    }
+                    let (type_id, _) = *self.type_map.get(name.0).unwrap();
+                    let fields = fields
+                        .iter()
+                        .map(|field| Field {
+                            name: field.name,
+                            r#type: self.map_type(&field.r#type),
+                        })
+                        .collect();
+                    debug_assert_eq!(self.types.len(), type_id.get());
+                    self.types.push(Struct {
+                        type_id,
+                        name: *name,
+                        fields,
                     });
                 }
                 ast::Stmt::VarDecl(ast::VarDecl { name, value }) => {
@@ -539,7 +618,7 @@ impl<'a> Constructor<'a> {
                     expr: Box::new(self.map_expr(expr)),
                 }),
                 ast::Expr::Call(ast::Call { name, args }) => {
-                    let def_id = match self.func_to_def_id.get(name.0) {
+                    let def_id = match self.func_map.get(name.0) {
                         Some(&def_id) => def_id,
                         None if name.0 == "print" => PRINT_DEF_ID,
                         None => {
@@ -610,21 +689,21 @@ impl<'a> Constructor<'a> {
 
     fn map_type(&mut self, (r#type, span): &Spanned<ast::Type<'_>>) -> Spanned<Type> {
         let ast::Type { name, generics } = r#type;
-        if matches!(*name, "int" | "char" | "string" | "bool") && !generics.is_empty() {
+        if matches!(name.0, "int" | "char" | "string" | "bool") && !generics.is_empty() {
             self.errors
-                .add(format!("'{name}' takes no generic arguments"), *span);
+                .add(format!("'{}' takes no generic arguments", name.0), *span);
         }
-        if *name == "list" && generics.len() != 1 {
+        if name.0 == "list" && generics.len() != 1 {
             self.errors
                 .add(format!("'list<Element>' takes one generic argument"), *span);
         }
-        if *name == "map" && generics.len() != 2 {
+        if name.0 == "map" && generics.len() != 2 {
             self.errors.add(
                 format!("'map<Key, Value>' takes two generic arguments"),
                 *span,
             );
         }
-        let r#type = match *name {
+        let r#type = match name.0 {
             "int" => Type::Int,
             "string" => Type::String,
             "bool" => Type::Bool,
@@ -645,18 +724,34 @@ impl<'a> Constructor<'a> {
                     .get(1)
                     .map(|r#type| self.map_type(r#type).0)
                     .unwrap_or(Type::UNKNOWN);
+                if generics.len() != 2 {
+                    self.errors.add(
+                        format!(
+                            "'map' takes two generic types, but {} were provided. Example: map<string, int>",
+                            generics.len()
+                        ),
+                        *span,
+                    );
+                }
                 Type::Map {
                     key: Box::new(key),
                     value: Box::new(value),
                 }
             }
-            // NOTE: named type definitions are currently unimplemented
             _ => {
-                for generic in generics {
-                    let _ = self.map_type(generic);
-                }
-                self.errors.add(format!("Unknown type '{}'", name), *span);
-                Type::UNKNOWN
+                let generics = generics
+                    .iter()
+                    .map(|generic| self.map_type(generic).0)
+                    .collect();
+                let id = match self.type_map.get(name.0) {
+                    Some((type_id, _)) => *type_id,
+                    None => {
+                        self.errors
+                            .add(format!("Unknown type '{}'", name.0), name.1);
+                        TypeId::UNKNOWN
+                    }
+                };
+                Type::Named { id, generics }
             }
         };
         (r#type, *span)

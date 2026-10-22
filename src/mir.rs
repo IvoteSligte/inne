@@ -140,7 +140,6 @@ pub struct Pair {
     pub value: LocalId,
 }
 
-// TODO: just add the args to Op, making it a tagged union
 #[derive(Debug)]
 pub struct Stmt {
     pub local_id: LocalId,
@@ -670,6 +669,17 @@ impl std::fmt::Display for Value {
                 f.write_str("}")
             }
             Value::Range { start, end } => write!(f, "{start}..{end}"),
+            Value::Struct { type_id, fields } => {
+                write!(f, "{}", type_id.get())?;
+                f.write_str("{")?;
+                for (i, value) in fields.into_iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    value.fmt(f)?;
+                }
+                f.write_str("}")
+            }
         }
     }
 }

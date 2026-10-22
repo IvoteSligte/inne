@@ -2,8 +2,8 @@ use std::{num::IntErrorKind, ops::Deref};
 
 pub use crate::hir::{
     Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, DefId, EmptyList, EmptyMap, Expr, For,
-    Func, Hir, If, Index, List, Loop, Map, Pair, Param, Range, Stmt, Type, Unary, UnaryOp, VarDecl,
-    While,
+    Func, Hir, If, Index, List, Loop, Map, Pair, Param, Range, Stmt, Struct, Type, Unary, UnaryOp,
+    VarDecl, While,
 };
 
 use crate::{
@@ -19,6 +19,7 @@ pub struct TypedHir<'a> {
     /// Essentially `HashMap<DefId, DefInfo>`, but all [DefId]`s are consecutive.
     pub defs: Vec<DefInfo>,
     pub funcs: Vec<Func<'a>>,
+    pub types: Vec<Struct<'a>>,
     pub stmts: Vec<Stmt<'a>>,
 }
 
@@ -44,10 +45,12 @@ pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error>> 
             errors: Errors::new(),
             defs,
             funcs: &hir.funcs,
+            types: &hir.types,
             expected_return_type: Type::Nothing,
         };
         type_checker.check_stmts(&hir.stmts);
         type_checker.check_funcs();
+        type_checker.check_types();
         (type_checker.errors, type_checker.defs)
     };
     if !errors.is_empty() {
@@ -59,17 +62,19 @@ pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error>> 
         defs,
         stmts: hir.stmts,
         funcs: hir.funcs,
+        types: hir.types,
     })
 }
 
-struct TypeChecker<'src, 'funcs> {
+struct TypeChecker<'src, 'hir> {
     errors: Errors,
     defs: Vec<DefInfo>,
-    funcs: &'funcs [Func<'src>],
+    funcs: &'hir [Func<'src>],
+    types: &'hir [Struct<'src>],
     expected_return_type: Type,
 }
 
-impl<'src, 'funcs> TypeChecker<'src, 'funcs> {
+impl<'src, 'hir> TypeChecker<'src, 'hir> {
     fn check_funcs(&mut self) {
         for func in self.funcs {
             self.expected_return_type = func
@@ -80,6 +85,7 @@ impl<'src, 'funcs> TypeChecker<'src, 'funcs> {
             self.defs[func.def_id].r#type = Type::Function;
 
             for param in &func.params {
+                self.check_type(&param.r#type);
                 self.defs[param.def_id].r#type = param.r#type.0.clone();
             }
             self.check_stmts(&func.body);
@@ -96,6 +102,15 @@ impl<'src, 'funcs> TypeChecker<'src, 'funcs> {
             }
         }
         self.expected_return_type = Type::Nothing;
+    }
+
+    /// Checks the type definitions in the HIR.
+    fn check_types(&mut self) {
+        for r#struct in self.types {
+            for field in &r#struct.fields {
+                self.check_type(&field.r#type);
+            }
+        }
     }
 
     fn check_stmt(&mut self, stmt: &Stmt<'src>) {
@@ -237,15 +252,22 @@ impl<'src, 'funcs> TypeChecker<'src, 'funcs> {
                 Expr::Binary(binary) => self.check_binary((binary, *span)),
                 Expr::Unary(unary) => self.check_unary((unary, *span)),
                 Expr::Call(call) => self.check_call((call, *span)),
-                Expr::EmptyList(EmptyList { element_type }) => element_type.0.clone(),
+                Expr::EmptyList(EmptyList { element_type }) => {
+                    self.check_type(element_type);
+                    element_type.0.clone()
+                }
                 Expr::List(list) => self.check_list((list, *span)),
                 Expr::EmptyMap(EmptyMap {
                     key_type,
                     value_type,
-                }) => Type::Map {
-                    key: Box::new(key_type.0.clone()),
-                    value: Box::new(value_type.0.clone()),
-                },
+                }) => {
+                    self.check_type(key_type);
+                    self.check_type(value_type);
+                    Type::Map {
+                        key: Box::new(key_type.0.clone()),
+                        value: Box::new(value_type.0.clone()),
+                    }
+                }
                 Expr::Map(map) => self.check_map((map, *span)),
                 Expr::Index(index) => {
                     let is_assignable =
@@ -555,6 +577,27 @@ impl<'src, 'funcs> TypeChecker<'src, 'funcs> {
             _ => unimplemented!(),
         };
         self.errors.add(message, span);
+    }
+
+    fn check_type(&mut self, (r#type, span): &Spanned<Type>) {
+        let Type::Named { id, generics } = r#type else {
+            return;
+        };
+        let def = &self.types[id.get()];
+        let def_generics_len = 0;
+        // TODO: add generics to structs
+
+        if generics.len() != def_generics_len {
+            self.errors.add(
+                format!(
+                    "The type '{}' has {} generics, but {} were provided.",
+                    def.name.0,
+                    def_generics_len,
+                    generics.len()
+                ),
+                *span,
+            );
+        }
     }
 }
 

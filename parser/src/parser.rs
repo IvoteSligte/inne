@@ -25,14 +25,17 @@ pub enum AssignOp {
     Mod,
 }
 
+pub type Name<'a> = Spanned<&'a str>;
+
 pub enum Stmt<'a> {
     Func(
-        Spanned<&'a str>,
-        Vec<Param<'a>>,
+        Name<'a>,
+        Vec<(Name<'a>, Spanned<Type<'a>>)>,
         Option<Spanned<Type<'a>>>,
         Block<'a>,
     ),
-    VarDecl(Spanned<&'a str>, Spanned<Expr<'a>>),
+    Struct(Name<'a>, Vec<(Name<'a>, Spanned<Type<'a>>)>),
+    VarDecl(Name<'a>, Spanned<Expr<'a>>),
     Expr(Spanned<Expr<'a>>),
     Assign(Spanned<Expr<'a>>, Spanned<AssignOp>, Spanned<Expr<'a>>),
     If(
@@ -41,7 +44,7 @@ pub enum Stmt<'a> {
         Vec<(Spanned<Expr<'a>>, Block<'a>)>,
         Option<Block<'a>>,
     ),
-    For(Spanned<&'a str>, Spanned<Expr<'a>>, Block<'a>),
+    For(Name<'a>, Spanned<Expr<'a>>, Block<'a>),
     While(Spanned<Expr<'a>>, Block<'a>),
     Loop(Block<'a>),
     Break(Span),
@@ -51,23 +54,22 @@ pub enum Stmt<'a> {
 
 pub type Block<'a> = Vec<Stmt<'a>>;
 
-pub struct Param<'a>(pub Spanned<&'a str>, pub Spanned<Type<'a>>);
-
 #[derive(Clone)]
 pub struct Type<'a> {
-    pub name: &'a str,
+    pub name: Name<'a>,
     pub generics: Vec<Spanned<Self>>,
 }
 
 impl std::fmt::Display for Type<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self { name, generics } = self;
+        f.write_str(name.0)?;
         if !generics.is_empty() {
-            write!(f, "{name}<")?;
+            f.write_str("<")?;
             write_comma_separated(f, generics.iter().map(|(generic, _)| generic))?;
             return f.write_str(">");
         }
-        f.write_str(name)
+        Ok(())
     }
 }
 
@@ -137,10 +139,7 @@ where
 {
     let ident = ident_parser();
     let r#type = type_parser();
-    let param = ident
-        .then_ignore(just(Token::Colon))
-        .then(r#type.clone())
-        .map(|(name, r#type)| Param(name, r#type));
+    let param = ident.then_ignore(just(Token::Colon)).then(r#type.clone());
     recursive(|stmt| {
         let block = stmt
             .repeated()
@@ -241,22 +240,20 @@ where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {
     recursive(|r#type| {
-        select! {
-            Token::Ident(ident) => ident
-        }
-        .then(
-            r#type
-                .separated_by(just(Token::Comma))
-                .allow_trailing()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::Op("<")), just(Token::Op(">")))
-                .or_not(),
-        )
-        .map(|(name, generics)| Type {
-            name,
-            generics: generics.unwrap_or(Vec::new()),
-        })
-        .map_with(with_span)
+        ident_parser()
+            .then(
+                r#type
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::Op("<")), just(Token::Op(">")))
+                    .or_not(),
+            )
+            .map(|(name, generics)| Type {
+                name,
+                generics: generics.unwrap_or(Vec::new()),
+            })
+            .map_with(with_span)
     })
 }
 

@@ -74,6 +74,13 @@ impl Override<'_> {
                     self.stmt(stmt);
                 }
             }
+            parser::Stmt::Struct((_, name_span), fields) => {
+                self.set(tt::STRUCT, *name_span);
+                for ((_, name_span), (_, type_span)) in fields {
+                    self.set(tt::PROPERTY, *name_span);
+                    self.r#type(*type_span);
+                }
+            }
             parser::Stmt::VarDecl((_, name_span), expr) => {
                 self.set(tt::VARIABLE, *name_span);
                 self.expr(expr);
