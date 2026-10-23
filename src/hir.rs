@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{Error, Span, Spanned, ast, util::write_comma_separated};
+use crate::{Error, Span, Spanned, ast, usize_newtype, util::write_comma_separated};
 
 pub use crate::ast::{AssignOp, BinaryOp, Name, UnaryOp};
 
@@ -8,13 +8,19 @@ pub use crate::ast::{AssignOp, BinaryOp, Name, UnaryOp};
 // TODO: warn for unused expression return value
 // TODO: info for variable accessed from a different scope
 
-// TODO: newtype instead of alias
-pub type DefId = usize;
+usize_newtype!(VarId);
+usize_newtype!(FuncId);
 
-pub const UNKNOWN_DEF_ID: DefId = DefId::MAX;
-pub const PRINT_DEF_ID: DefId = DefId::MAX - 1;
+impl VarId {
+    pub const UNKNOWN: Self = Self(usize::MAX);
+}
 
-pub struct DefInfo<'a> {
+impl FuncId {
+    pub const UNKNOWN: Self = Self(usize::MAX);
+    pub const PRINT: Self = Self(usize::MAX - 1);
+}
+
+pub struct VarInfo<'a> {
     pub name: &'a str,
     pub span: Span,
 }
@@ -22,18 +28,10 @@ pub struct DefInfo<'a> {
 pub struct Hir<'a> {
     pub(crate) filename: &'a str,
     /// Essentially `HashMap<DefId, DefInfo>`, but all [DefId]`s are consecutive.
-    pub(crate) defs: Vec<DefInfo<'a>>,
+    pub(crate) vars: Vec<VarInfo<'a>>,
     pub(crate) funcs: Vec<Func<'a>>,
     pub(crate) types: Vec<Struct<'a>>,
     pub(crate) stmts: Vec<Stmt<'a>>,
-}
-
-impl<'a> Hir<'a> {
-    pub fn get_def_info(&self, def_id: DefId) -> &DefInfo<'a> {
-        debug_assert_ne!(def_id, UNKNOWN_DEF_ID);
-        debug_assert_ne!(def_id, PRINT_DEF_ID);
-        &self.defs[def_id]
-    }
 }
 
 pub enum Stmt<'a> {
@@ -52,7 +50,7 @@ pub enum Stmt<'a> {
 pub type Block<'a> = Vec<Stmt<'a>>;
 
 pub struct Func<'a> {
-    pub def_id: DefId,
+    pub id: FuncId,
     pub name: Name<'a>,
     pub params: Vec<Param<'a>>,
     pub return_type: Option<Spanned<Type>>,
@@ -60,7 +58,7 @@ pub struct Func<'a> {
 }
 
 pub struct Param<'a> {
-    pub def_id: DefId,
+    pub var_id: VarId,
     pub name: Name<'a>,
     pub r#type: Spanned<Type>,
 }
@@ -76,21 +74,10 @@ pub struct Field<'a> {
     pub r#type: Spanned<Type>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TypeId(usize);
+usize_newtype!(TypeId);
 
 impl TypeId {
     pub const UNKNOWN: Self = Self(usize::MAX);
-
-    pub fn get(self) -> usize {
-        self.0
-    }
-}
-
-impl std::fmt::Display for TypeId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
 }
 
 // TODO: make cheaper to clone with Rc's
@@ -102,19 +89,11 @@ pub enum Type {
     Bool,
     String,
     Char,
-    /// Typed-HIR-only
-    Function,
     Range,
     List(Box<Self>),
-    Map {
-        key: Box<Self>,
-        value: Box<Self>,
-    },
+    Map { key: Box<Self>, value: Box<Self> },
     // Tuple
-    Named {
-        id: TypeId,
-        generics: Vec<Self>,
-    },
+    Named { id: TypeId, generics: Vec<Self> },
 }
 
 impl Type {
@@ -144,7 +123,6 @@ impl std::fmt::Display for Type {
             Type::Bool => "bool",
             Type::String => "string",
             Type::Char => "char",
-            Type::Function => "function",
             Type::Range => "range",
             Type::List(element) => return write!(f, "List<{element}>"),
             Type::Map { key, value } => return write!(f, "Map<{key}, {value}>"),
@@ -162,7 +140,7 @@ impl std::fmt::Display for Type {
 }
 
 pub struct VarDecl<'a> {
-    pub def_id: DefId,
+    pub var_id: VarId,
     pub name: Name<'a>,
     pub value: Spanned<Expr<'a>>,
 }
@@ -178,7 +156,7 @@ pub enum Expr<'a> {
     StructLiteral(StructLiteral<'a>),
     Index(Index<'a>),
     Range(Range<'a>),
-    Var(DefId),
+    Var(VarId),
     Int(&'a str),
     Bool(bool),
     String(&'a str),
@@ -197,7 +175,7 @@ pub struct Unary<'a> {
 
 pub struct Call<'a> {
     pub name: Name<'a>,
-    pub def_id: DefId,
+    pub func_id: FuncId,
     pub args: Vec<Spanned<Expr<'a>>>,
 }
 
@@ -264,7 +242,7 @@ pub struct Choice<'a> {
 
 pub struct For<'a> {
     /// ID of the for-loop iteration variable.
-    pub def_id: DefId,
+    pub var_id: VarId,
     pub var: Name<'a>,
     pub iter: Spanned<Expr<'a>>,
     pub body: Block<'a>,
@@ -336,37 +314,35 @@ impl Errors {
 
 /// Using a separate type instead of having the fields and methods directly on [Constructor]
 /// to prevent lifetime issues.
-struct ConstructorDefs<'a>(Vec<DefInfo<'a>>);
+struct VarList<'a>(Vec<VarInfo<'a>>);
 
-impl<'a> ConstructorDefs<'a> {
-    pub fn add(&mut self, (name, span): Name<'a>) -> DefId {
-        let id = self.0.len();
-        self.0.push(DefInfo { name, span });
+impl<'a> VarList<'a> {
+    pub fn add(&mut self, (name, span): Name<'a>) -> VarId {
+        let id = VarId(self.0.len());
+        self.0.push(VarInfo { name, span });
         id
     }
 
-    fn get(&self, def_id: DefId) -> &DefInfo<'a> {
-        debug_assert_ne!(def_id, UNKNOWN_DEF_ID);
-        debug_assert_ne!(def_id, PRINT_DEF_ID);
-        &self.0[def_id]
+    fn get(&self, id: VarId) -> &VarInfo<'a> {
+        debug_assert_ne!(id, VarId::UNKNOWN);
+        &self.0[id.get()]
     }
 }
 
 struct Constructor<'a> {
-    defs: ConstructorDefs<'a>,
+    vars: VarList<'a>,
     funcs: Vec<Func<'a>>,
     types: Vec<Struct<'a>>,
-    // TODO: separate VarId and FuncId
-    func_map: HashMap<&'a str, DefId>,
+    func_map: HashMap<&'a str, (FuncId, &'a ast::Func<'a>)>,
     type_map: HashMap<&'a str, (TypeId, &'a ast::Struct<'a>)>,
-    scopes: Vec<HashMap<&'a str, DefId>>,
+    scopes: Vec<HashMap<&'a str, VarId>>,
     errors: Errors,
 }
 
 impl<'a> Constructor<'a> {
     pub fn map_ast(ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error>> {
         let mut _self = Self {
-            defs: ConstructorDefs(Vec::new()),
+            vars: VarList(Vec::new()),
             funcs: Vec::new(),
             types: Vec::new(),
             func_map: HashMap::new(),
@@ -378,7 +354,7 @@ impl<'a> Constructor<'a> {
             match stmt {
                 ast::Stmt::Func(func) => {
                     let name = func.name;
-                    if let Some(&prev_func_def_id) = _self.func_map.get(name.0) {
+                    if let Some(&(_, prev_func_ast)) = _self.func_map.get(name.0) {
                         _self.errors.add_with_context(
                             format!(
                                 "Function '{}' was already defined. Functions must have unique names.",
@@ -386,10 +362,11 @@ impl<'a> Constructor<'a> {
                             ),
                             name.1,
                             "Previously defined here:",
-                            _self.defs.get(prev_func_def_id).span,
+                            prev_func_ast.name.1,
                         );
                     } else {
-                        _self.func_map.insert(name.0, _self.defs.add(name));
+                        let id = FuncId(_self.func_map.len());
+                        _self.func_map.insert(name.0, (id, func));
                     }
                 }
                 ast::Stmt::Struct(r#struct) => {
@@ -420,7 +397,7 @@ impl<'a> Constructor<'a> {
         }
         Ok(Hir {
             filename: ast.filename,
-            defs: _self.defs.0,
+            vars: _self.vars.0,
             funcs: _self.funcs,
             types: _self.types,
             stmts,
@@ -470,14 +447,14 @@ impl<'a> Constructor<'a> {
                             }
                         }
                     }
-                    let def_id = *self.func_map.get(name.0).unwrap();
+                    let (id, _) = *self.func_map.get(name.0).unwrap();
                     self.in_scope(|_self| {
                         let params = params.iter().map(|param| _self.map_param(param)).collect();
                         let return_type =
                             return_type.as_ref().map(|r#type| _self.map_type(&r#type));
                         let body = _self.map_stmts(&body);
                         _self.funcs.push(Func {
-                            def_id,
+                            id,
                             name: *name,
                             params,
                             return_type,
@@ -519,10 +496,10 @@ impl<'a> Constructor<'a> {
                     let value = self.map_expr(value);
                     // The declaration should be added *after* the value is analyzed,
                     // to prevent cyclic variable definitions.
-                    let def_id = self.defs.add(*name);
-                    self.scopes.last_mut().unwrap().insert(name.0, def_id);
+                    let var_id = self.vars.add(*name);
+                    self.scopes.last_mut().unwrap().insert(name.0, var_id);
                     out_stmts.push(Stmt::VarDecl(VarDecl {
-                        def_id,
+                        var_id,
                         name: *name,
                         value,
                     }));
@@ -557,13 +534,13 @@ impl<'a> Constructor<'a> {
                     }))
                 }
                 ast::Stmt::For(ast::For { var, iter, body }) => {
-                    let def_id = self.defs.add(*var);
+                    let var_id = self.vars.add(*var);
                     let iter = self.map_expr(iter);
                     self.in_scope(|_self| {
-                        _self.scopes.last_mut().unwrap().insert(var.0, def_id);
+                        _self.scopes.last_mut().unwrap().insert(var.0, var_id);
                         let body = _self.map_stmts(body);
                         out_stmts.push(Stmt::For(For {
-                            def_id,
+                            var_id,
                             var: *var,
                             iter,
                             body,
@@ -594,9 +571,9 @@ impl<'a> Constructor<'a> {
     where
         'b: 'a,
     {
-        let def_id = self.defs.add(param.name);
-        if let Some(prev_param_def_id) =
-            self.scopes.last_mut().unwrap().insert(param.name.0, def_id)
+        let var_id = self.vars.add(param.name);
+        if let Some(prev_param_var_id) =
+            self.scopes.last_mut().unwrap().insert(param.name.0, var_id)
         {
             self.errors.add_with_context(
                 format!(
@@ -605,11 +582,11 @@ impl<'a> Constructor<'a> {
                 ),
                 param.name.1,
                 format!("Previously defined here:"),
-                self.defs.get(prev_param_def_id).span,
+                self.vars.get(prev_param_var_id).span,
             );
         }
         Param {
-            def_id,
+            var_id,
             name: param.name,
             r#type: self.map_type(&param.r#type),
         }
@@ -631,20 +608,20 @@ impl<'a> Constructor<'a> {
                     expr: Box::new(self.map_expr(expr)),
                 }),
                 ast::Expr::Call(ast::Call { name, args }) => {
-                    let def_id = match self.func_map.get(name.0) {
-                        Some(&def_id) => def_id,
-                        None if name.0 == "print" => PRINT_DEF_ID,
+                    let func_id = match self.func_map.get(name.0) {
+                        Some(&(func_id, _)) => func_id,
+                        None if name.0 == "print" => FuncId::PRINT,
                         None => {
                             // TODO: add context if function is defined as variable
                             // TODO: add similarly named functions as context
                             self.errors
                                 .add(format!("Unknown function '{}'", name.0), name.1);
-                            UNKNOWN_DEF_ID
+                            FuncId::UNKNOWN
                         }
                     };
                     Expr::Call(Call {
                         name: *name,
-                        def_id,
+                        func_id,
                         args: args.iter().map(|arg| self.map_expr(arg)).collect(),
                     })
                 }
@@ -743,13 +720,13 @@ impl<'a> Constructor<'a> {
                 }),
                 ast::Expr::Var(name) => {
                     match self.scopes.iter().rev().find_map(|scope| scope.get(name)) {
-                        Some(&def_id) => Expr::Var(def_id),
+                        Some(&var_id) => Expr::Var(var_id),
                         None => {
                             // TODO: add context if variable is defined as function
                             // TODO: add similarly named variables as context
                             self.errors
                                 .add(format!("Unknown variable '{}'", name), *span);
-                            Expr::Var(UNKNOWN_DEF_ID)
+                            Expr::Var(VarId::UNKNOWN)
                         }
                     }
                 }
@@ -843,26 +820,26 @@ impl std::fmt::Display for Hir<'_> {
         // NOTE: Not sure why it doesn't work without the dyn conversion.
         let f: &mut dyn std::fmt::Write = &mut IndentWriter::new("    ", f);
         writeln!(f, "HIR '{}'", self.filename)?;
-        writeln!(f, "defs: {{{INDENT}")?;
-        for (i, DefInfo { name, span }) in self.defs.iter().enumerate() {
+        writeln!(f, "vars: {{{INDENT}")?;
+        for (i, VarInfo { name, span }) in self.vars.iter().enumerate() {
             writeln!(f, "_{i}: var {name} at {span};")?;
         }
         writeln!(f, "{DEDENT}}}")?;
 
         for Func {
-            def_id,
+            id,
             name: (name, _),
             params,
             return_type,
             body,
         } in &self.funcs
         {
-            write!(f, "func _{} {name}(", def_id)?;
+            write!(f, "func _{} {name}(", id)?;
             for (i, param) in params.iter().enumerate() {
                 if i > 0 {
                     f.write_str(", ")?;
                 }
-                write!(f, "_{} {}: {}", param.def_id, param.name.0, param.r#type.0)?;
+                write!(f, "_{} {}: {}", param.var_id, param.name.0, param.r#type.0)?;
             }
             write!(f, ") ")?;
             if let Some((return_type, _)) = return_type {
@@ -885,11 +862,11 @@ impl<'a> std::fmt::Display for Stmt<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Stmt::VarDecl(VarDecl {
-                def_id,
+                var_id,
                 name: (name, _),
                 value: (value, _),
             }) => {
-                write!(f, "var _{def_id} {name} = {value};")?;
+                write!(f, "var _{var_id} {name} = {value};")?;
             }
             Stmt::Expr((expr, _)) => write!(f, "{expr};")?,
             Stmt::Assign(Assign {
@@ -921,12 +898,12 @@ impl<'a> std::fmt::Display for Stmt<'a> {
                 }
             }
             Stmt::For(For {
-                def_id,
+                var_id,
                 var: (var, _),
                 iter: (iter, _),
                 body,
             }) => {
-                writeln!(f, "for _{def_id} {var} in {iter} {{{INDENT}")?;
+                writeln!(f, "for _{var_id} {var} in {iter} {{{INDENT}")?;
                 for stmt in body {
                     writeln!(f, "{stmt}")?;
                 }
@@ -1009,7 +986,7 @@ impl<'a> std::fmt::Display for Expr<'a> {
                 f.write_str(")")?;
             }
             Expr::Range(Range { start, end }) => write!(f, "{}..{}", start.0, end.0)?,
-            Expr::Var(def_id) => write!(f, "_{def_id}")?,
+            Expr::Var(var_id) => write!(f, "_{var_id}")?,
             Expr::Int(int) => write!(f, "{int}")?,
             Expr::Bool(bool) => write!(f, "{bool}")?,
             Expr::String(string) => write!(f, "{string:?}")?,
@@ -1018,7 +995,7 @@ impl<'a> std::fmt::Display for Expr<'a> {
                 name,
                 fields,
             }) => {
-                write!(f, "_{} {} ", type_id.get(), name.0)?;
+                write!(f, "_{type_id} {} ", name.0)?;
                 f.write_str("{")?;
                 write_comma_separated(f, fields.iter())?;
                 f.write_str("}")?;

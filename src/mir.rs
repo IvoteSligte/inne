@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 
-pub use crate::typed_hir::{DefId, DefInfo};
+pub use crate::typed_hir::{FuncId, TypeId, VarId, VarInfo};
 use crate::{
-    Error, TypedHir, Value,
-    hir::{Errors, PRINT_DEF_ID, TypeId},
-    typed_hir as thir,
+    Error, TypedHir, Value, hir::Errors, typed_hir as thir, usize_newtype,
     util::write_comma_separated,
 };
 
@@ -25,26 +23,8 @@ pub struct Mir<'a> {
     pub blocks: Vec<Block>,
 }
 
-macro_rules! usize_newtype {
-    ($name:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct $name(usize);
-
-        impl $name {
-            pub fn get(self) -> usize {
-                self.0
-            }
-        }
-    };
-}
-
-usize_newtype!(FuncId);
 usize_newtype!(BlockId);
 usize_newtype!(LocalId);
-
-impl FuncId {
-    pub const DEFAULT: Self = Self(usize::MAX);
-}
 
 impl BlockId {
     pub const FINISHED: Self = Self(usize::MAX);
@@ -155,19 +135,12 @@ pub fn mir_from_typed_hir<'a>(typed_hir: &'a TypedHir<'a>) -> Result<Mir<'a>, Ve
 }
 
 struct Constructor {
-    def_to_func: HashMap<DefId, FuncId>,
     errors: Errors,
 }
 
 impl Constructor {
     pub fn map_thir<'a>(typed_hir: &'a TypedHir<'a>) -> Result<Mir<'a>, Vec<Error>> {
         let mut _self = Self {
-            def_to_func: typed_hir
-                .funcs
-                .iter()
-                .enumerate()
-                .map(|(i, func)| (func.def_id, FuncId(i)))
-                .collect(),
             errors: Errors::new(),
         };
         let funcs = typed_hir
@@ -194,7 +167,7 @@ impl Constructor {
         let mut builder = FuncBuilder::new(func.name.0);
         for param in &func.params {
             let local_id = builder.create_local();
-            builder.declare(param.def_id, local_id);
+            builder.declare(param.var_id, local_id);
         }
         self.map_scope(&func.body, None, &mut builder);
         builder.finish_block(Branch::Return);
@@ -211,19 +184,19 @@ impl Constructor {
         for stmt in stmts {
             match stmt {
                 thir::Stmt::VarDecl(thir::VarDecl {
-                    def_id,
+                    var_id,
                     name: _,
                     value,
                 }) => {
                     let value_id = self.map_expr(&value.0, builder);
-                    builder.declare(*def_id, value_id);
+                    builder.declare(*var_id, value_id);
                 }
                 thir::Stmt::Expr(expr) => {
                     self.map_expr(&expr.0, builder);
                 }
                 thir::Stmt::Assign(thir::Assign { op, target, value }) => {
                     let (target_id, index_id) = match &target.0 {
-                        thir::Expr::Var(def_id) => (builder.get_local(*def_id), None),
+                        thir::Expr::Var(var_id) => (builder.get_local(*var_id), None),
                         thir::Expr::Index(thir::Index { expr, index }) => {
                             let expr_id = self.map_expr(&expr.0, builder);
                             let index_id = self.map_expr(&index.0, builder);
@@ -279,7 +252,7 @@ impl Constructor {
                 thir::Stmt::For(thir::For {
                     iter,
                     body,
-                    def_id,
+                    var_id: loop_var_id,
                     var: _,
                 }) => {
                     // blocks:
@@ -294,7 +267,7 @@ impl Constructor {
                     builder.jump_to(next_block_id);
                     // Next block
                     let var_id = builder.push_constant(Value::Nothing);
-                    builder.declare(*def_id, var_id);
+                    builder.declare(*loop_var_id, var_id);
                     let cond_id = builder.push_op(Op::Next {
                         target: var_id,
                         iter: iter_id,
@@ -408,24 +381,23 @@ impl Constructor {
             }
             thir::Expr::Call(thir::Call {
                 name: _,
-                def_id,
+                func_id,
                 args,
             }) => {
                 let arg_ids = args
                     .iter()
                     .map(|arg| self.map_expr(&arg.0, builder))
                     .collect();
-                if *def_id == PRINT_DEF_ID {
+                if *func_id == FuncId::PRINT {
                     builder.push_op(Op::Print { args: arg_ids })
                 } else {
-                    let func_id = *self.def_to_func.get(def_id).unwrap();
                     builder.push_op(Op::Call {
-                        func_id,
+                        func_id: *func_id,
                         args: arg_ids,
                     })
                 }
             }
-            thir::Expr::Var(def_id) => builder.get_local(*def_id),
+            thir::Expr::Var(var_id) => builder.get_local(*var_id),
             thir::Expr::Int(int) => builder.push_constant(Value::Int(int.parse().unwrap())),
             thir::Expr::Bool(bool) => builder.push_constant(Value::Bool(*bool)),
             thir::Expr::String(string) => {
@@ -482,7 +454,7 @@ struct FuncBuilder<'a> {
     /// Function name.
     name: &'a str,
     /// Maps [DefId]s for variable declarations to their [LocalId].
-    def_to_local: HashMap<DefId, LocalId>,
+    var_to_local: HashMap<VarId, LocalId>,
     /// Counter for the number of locals in this function.
     num_locals: usize,
     /// Total number of blocks, including partial ones.
@@ -496,7 +468,7 @@ impl<'a> FuncBuilder<'a> {
     pub fn new(name: &'a str) -> Self {
         Self {
             name,
-            def_to_local: HashMap::new(),
+            var_to_local: HashMap::new(),
             num_locals: 1, // Only the return value exists at the start.
             num_blocks: 1, // Only the current block exists at the start.
             current_block: (BlockId(0), Vec::new()),
@@ -505,18 +477,18 @@ impl<'a> FuncBuilder<'a> {
         }
     }
 
-    pub fn declare(&mut self, def_id: DefId, local_id: LocalId) {
-        self.def_to_local.insert(def_id, local_id);
+    pub fn declare(&mut self, var_id: VarId, local_id: LocalId) {
+        self.var_to_local.insert(var_id, local_id);
     }
 
-    pub fn get_local(&self, def_id: DefId) -> LocalId {
+    pub fn get_local(&self, var_id: VarId) -> LocalId {
         debug_assert!(
-            self.def_to_local.contains_key(&def_id),
-            "def_to_local does not contain def_id {def_id}; def_to_local: {:?}",
-            self.def_to_local
+            self.var_to_local.contains_key(&var_id),
+            "var_to_local does not contain var_id {var_id}; var_to_local: {:?}",
+            self.var_to_local
         );
         // FIXME: this also retrieves globals and maps them to LocalIds, which is incorrect.
-        *self.def_to_local.get(&def_id).unwrap()
+        *self.var_to_local.get(&var_id).unwrap()
     }
 
     /// Creates a local for a statement without requiring a body.
@@ -756,7 +728,7 @@ fn write_tuple(elements: &[LocalId], f: &mut std::fmt::Formatter<'_>) -> std::fm
         if i > 0 {
             write!(f, ", ")?;
         }
-        write!(f, "_{}", element.get())?;
+        write!(f, "_{}", element)?;
     }
     write!(f, ")")
 }
@@ -764,17 +736,17 @@ fn write_tuple(elements: &[LocalId], f: &mut std::fmt::Formatter<'_>) -> std::fm
 impl std::fmt::Display for Stmt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self { local_id, op } = self;
-        write!(f, "var _{} = {op:?}", local_id.get())?;
+        write!(f, "var _{} = {op:?}", local_id)?;
         use Op::*;
         match op {
             Constant(value) => write!(f, "<{}>", value),
             Call { func_id, args } => {
-                write!(f, "<{:?}>", func_id.get())?;
+                write!(f, "<{:?}>", func_id)?;
                 write_tuple(args, f)
             }
             List(elements) => {
                 f.write_str("List(")?;
-                write_comma_separated(f, elements.iter().map(|id| id.get()))?;
+                write_comma_separated(f, elements.iter().map(|id| id))?;
                 f.write_str(")")
             }
             Map(pairs) => {
@@ -790,7 +762,7 @@ impl std::fmt::Display for Stmt {
                 f.write_str(")")
             }
             Index { expr, index } => {
-                write!(f, "Index({}, {})", expr.get(), index.get())
+                write!(f, "Index({}, {})", expr, index)
             }
             Print { args } => {
                 write!(f, "Print")?;
@@ -801,20 +773,14 @@ impl std::fmt::Display for Stmt {
                 value,
                 index: None,
             } => {
-                write!(f, "Assign({}, {})", target.get(), value.get())
+                write!(f, "Assign({}, {})", target, value)
             }
             Assign {
                 target,
                 value,
                 index: Some(index),
             } => {
-                write!(
-                    f,
-                    "AssignIndex({}, {}, {})",
-                    target.get(),
-                    value.get(),
-                    index.get()
-                )
+                write!(f, "AssignIndex({}, {}, {})", target, value, index)
             }
             Add(binary) | Sub(binary) | Mul(binary) | Div(binary) | Mod(binary) | Eq(binary)
             | Neq(binary) | Lt(binary) | Leq(binary) | Gt(binary) | Geq(binary) | And(binary)
@@ -835,17 +801,17 @@ impl std::fmt::Display for Stmt {
                     Or(_) => "Or",
                     _ => unreachable!(),
                 };
-                write!(f, "{}({}, {})", name, binary.left.get(), binary.right.get())
+                write!(f, "{}({}, {})", name, binary.left, binary.right)
             }
-            Neg(value) => write!(f, "Neg({})", value.get()),
-            Not(value) => write!(f, "Not({})", value.get()),
-            Range { start, end } => write!(f, "Range({}, {})", start.get(), end.get()),
-            IntoIter(iter) => write!(f, "IntoIter({})", iter.get()),
-            Next { target, iter } => write!(f, "Next({}, {})", target.get(), iter.get()),
+            Neg(value) => write!(f, "Neg({})", value),
+            Not(value) => write!(f, "Not({})", value),
+            Range { start, end } => write!(f, "Range({}, {})", start, end),
+            IntoIter(iter) => write!(f, "IntoIter({})", iter),
+            Next { target, iter } => write!(f, "Next({}, {})", target, iter),
             Struct { type_id, fields } => {
-                write!(f, "Struct({}", type_id.get())?;
+                write!(f, "Struct({}", type_id)?;
                 for field in fields {
-                    write!(f, ", {}", field.get())?;
+                    write!(f, ", {}", field)?;
                 }
                 write!(f, ")")
             }
@@ -856,7 +822,7 @@ impl std::fmt::Display for Stmt {
 impl std::fmt::Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Branch::Jump(target) => write!(f, "Jump(block {})", target.get()),
+            Branch::Jump(target) => write!(f, "Jump(block {})", target),
             Branch::Cond {
                 cond,
                 true_target,
@@ -865,9 +831,7 @@ impl std::fmt::Display for Branch {
                 write!(
                     f,
                     "Cond(_{}, block {}, block {})",
-                    cond.get(),
-                    true_target.get(),
-                    false_target.get()
+                    cond, true_target, false_target
                 )
             }
             Branch::Return => write!(f, "Return"),

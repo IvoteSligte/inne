@@ -1,49 +1,45 @@
 use std::{num::IntErrorKind, ops::Deref};
 
 pub use crate::hir::{
-    Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, DefId, EmptyList, EmptyMap, Expr, For,
-    Func, Hir, If, Index, List, Loop, Map, Pair, Param, Range, Stmt, Struct, StructLiteral, Type,
-    Unary, UnaryOp, VarDecl, While,
+    Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, EmptyList, EmptyMap, Expr, For, Func,
+    FuncId, Hir, If, Index, List, Loop, Map, Pair, Param, Range, Stmt, Struct, StructLiteral, Type,
+    TypeId, Unary, UnaryOp, VarDecl, VarId, While,
 };
 
-use crate::{
-    Error, Span, Spanned,
-    hir::{Errors, PRINT_DEF_ID},
-    value::Int,
-};
+use crate::{Error, Span, Spanned, hir::Errors, value::Int};
 
 /// Type-checked high-level intermediate representation.
 /// Contains type annotations for all function and variable definitions.
 pub struct TypedHir<'a> {
     pub filename: &'a str,
-    /// Essentially `HashMap<DefId, DefInfo>`, but all [DefId]`s are consecutive.
-    pub defs: Vec<DefInfo>,
+    /// Essentially `HashMap<VarId, VarInfo>`, but all [DefId]`s are consecutive.
+    pub vars: Vec<VarInfo>,
     pub funcs: Vec<Func<'a>>,
     pub types: Vec<Struct<'a>>,
     pub stmts: Vec<Stmt<'a>>,
 }
 
-pub struct DefInfo {
+pub struct VarInfo {
     pub span: Span,
     pub r#type: Type,
 }
 
 // TODO: return (Option<TypedHir<'a>>, Vec<Error>) instead because the TypedHir may be recoverable on error
 pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error>> {
-    let defs = hir
-        .defs
+    let vars = hir
+        .vars
         .into_iter()
-        .map(|def| {
-            DefInfo {
-                span: def.span,
+        .map(|var| {
+            VarInfo {
+                span: var.span,
                 r#type: Type::Nothing, // Default value
             }
         })
         .collect();
-    let (errors, defs) = {
+    let (errors, vars) = {
         let mut type_checker = TypeChecker {
             errors: Errors::new(),
-            defs,
+            vars,
             funcs: &hir.funcs,
             types: &hir.types,
             expected_return_type: Type::Nothing,
@@ -51,15 +47,15 @@ pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error>> 
         type_checker.check_stmts(&hir.stmts);
         type_checker.check_funcs();
         type_checker.check_types();
-        (type_checker.errors, type_checker.defs)
+        (type_checker.errors, type_checker.vars)
     };
     if !errors.is_empty() {
         return Err(errors.into_inner());
     }
-    debug_assert!(defs.iter().all(|def| def.r#type.is_known()));
+    debug_assert!(vars.iter().all(|var| var.r#type.is_known()));
     Ok(TypedHir {
         filename: hir.filename,
-        defs,
+        vars,
         stmts: hir.stmts,
         funcs: hir.funcs,
         types: hir.types,
@@ -68,7 +64,7 @@ pub fn typed_hir_from_hir<'a>(hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error>> 
 
 struct TypeChecker<'src, 'hir> {
     errors: Errors,
-    defs: Vec<DefInfo>,
+    vars: Vec<VarInfo>,
     funcs: &'hir [Func<'src>],
     types: &'hir [Struct<'src>],
     expected_return_type: Type,
@@ -82,11 +78,10 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 .as_ref()
                 .map(|(r#type, _)| r#type.clone())
                 .unwrap_or(Type::Nothing);
-            self.defs[func.def_id].r#type = Type::Function;
 
             for param in &func.params {
                 self.check_type(&param.r#type);
-                self.defs[param.def_id].r#type = param.r#type.0.clone();
+                self.vars[param.var_id.get()].r#type = param.r#type.0.clone();
             }
             self.check_stmts(&func.body);
             if func.name.0 == "main" {
@@ -116,12 +111,12 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
     fn check_stmt(&mut self, stmt: &Stmt<'src>) {
         match stmt {
             Stmt::VarDecl(VarDecl {
-                def_id,
+                var_id,
                 name: _,
                 value,
             }) => {
                 let (r#type, _) = self.check_expr(value);
-                self.defs[*def_id].r#type = r#type;
+                self.vars[var_id.get()].r#type = r#type;
             }
             Stmt::Expr(expr) => {
                 self.check_expr(expr);
@@ -135,7 +130,8 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 let (value_type, _) = self.check_expr(value);
                 if !target_is_assignable {
                     self.errors.add(
-                        "The left-hand-side of an assignment must be a variable or list/map element.",
+                        "The left side of an assignment must be a variable or list/map element.",
+                        // FIXME: this span does not include the .expr part of an index?
                         target.1,
                     );
                 }
@@ -182,7 +178,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 }
             }
             Stmt::For(For {
-                def_id,
+                var_id,
                 var: _,
                 iter,
                 body,
@@ -200,7 +196,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                         Type::UNKNOWN
                     }
                 };
-                self.defs[*def_id].r#type = var_type;
+                self.vars[var_id.get()].r#type = var_type;
                 self.check_stmts(body);
             }
             Stmt::While(While { cond, body }) => {
@@ -274,7 +270,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                         !matches!(index.expr.0, Expr::EmptyList(_) | Expr::EmptyMap(_));
                     return (self.check_index((index, *span)), is_assignable);
                 }
-                Expr::Var(def_id) => return (self.defs[*def_id].r#type.clone(), true),
+                Expr::Var(var_id) => return (self.vars[var_id.get()].r#type.clone(), true),
                 Expr::Int(int) => {
                     self.check_int((int, *span));
                     Type::Int
@@ -408,7 +404,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
     }
 
     fn check_call(&mut self, (call, span): Spanned<&Call<'src>>) -> Type {
-        if call.def_id == PRINT_DEF_ID {
+        if call.func_id == FuncId::PRINT {
             // print(...) accepts any number of arguments of any type.
             return Type::Nothing;
         }
@@ -416,7 +412,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         let func = self
             .funcs
             .iter()
-            .find(|func| func.def_id == call.def_id)
+            .find(|func| func.id == call.func_id)
             .unwrap();
 
         let params = &func.params;

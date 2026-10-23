@@ -4,3 +4,9 @@ var list = [<int>];
 var map = {<string, int>};
 
 
+print(list, map);
+
+list = [0, 1, 2, 3];
+map["hi"] = 10;
+
+print(list, map);

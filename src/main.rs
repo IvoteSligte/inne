@@ -63,17 +63,17 @@ fn main() {
             filename
         );
     }
-    let filename = "filename.inne";
+    let filename = format!("{}", args.file.display());
     let (maybe_tokens, errors) = lex(&source);
-    eprint_errors(&errors, filename, &source, "lexing");
+    eprint_errors(&errors, &filename, &source, "lexing");
     let Some(tokens) = maybe_tokens else {
         return;
     };
     if args.emit == Some(Ir::Tokens) {
         todo!();
     }
-    let (maybe_ast, errors) = parse(&tokens, filename, &source);
-    eprint_errors(&errors, filename, &source, "parsing");
+    let (maybe_ast, errors) = parse(&tokens, &filename, &source);
+    eprint_errors(&errors, &filename, &source, "parsing");
     let Some(ast) = maybe_ast else {
         return;
     };
@@ -83,7 +83,7 @@ fn main() {
     let hir = match hir_from_ast(&ast) {
         Ok(hir) => hir,
         Err(errors) => {
-            eprint_errors(&errors, &source, filename, "symbol resolution");
+            eprint_errors(&errors, &source, &filename, "symbol resolution");
             return;
         }
     };
@@ -94,7 +94,7 @@ fn main() {
     let typed_hir = match typed_hir_from_hir(hir) {
         Ok(typed_hir) => typed_hir,
         Err(errors) => {
-            eprint_errors(&errors, &source, filename, "type checking");
+            eprint_errors(&errors, &source, &filename, "type checking");
             return;
         }
     };
@@ -104,7 +104,7 @@ fn main() {
     let mir = match mir_from_typed_hir(&typed_hir) {
         Ok(mir) => mir,
         Err(errors) => {
-            eprint_errors(&errors, &source, filename, "control-flow analysis");
+            eprint_errors(&errors, &source, &filename, "control-flow analysis");
             return;
         }
     };
