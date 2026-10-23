@@ -38,6 +38,10 @@ where
         .then_ignore(just(Token::Colon))
         .then(r#type.clone())
         .map(|(name, r#type)| Param { name, r#type });
+    let field = ident
+        .then_ignore(just(Token::Colon))
+        .then(r#type.clone())
+        .map(|(name, r#type)| Field { name, r#type });
     recursive(|stmt| {
         let block = stmt
             .repeated()
@@ -63,6 +67,16 @@ where
                     body,
                 })
             });
+        let r#struct = just(Token::Struct)
+            .ignore_then(ident)
+            .then(
+                field
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map(|(name, fields)| Stmt::Struct(Struct { name, fields }));
         let expr = expr_parser();
         let var_decl = just(Token::Var)
             .ignore_then(ident)
@@ -133,6 +147,7 @@ where
             .map(|body| Stmt::Loop(Loop { body }));
         choice((
             func,
+            r#struct,
             var_decl,
             assign,
             if_stmt,
