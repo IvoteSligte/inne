@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 inne = { workspace = true }
 indentify = { workspace = true }
+clap = { workspace = true } # Binary-only

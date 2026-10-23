@@ -362,6 +362,7 @@ dependencies = [
 name = "inne_format"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "indentify",
  "inne",
 ]
