@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use diagnostics::extract_diagnostics;
 use semantic_tokens::extract_semantic_tokens;
 use tokio::sync::RwLock;
-use tower_lsp_server::jsonrpc::Result;
+use tower_lsp_server::jsonrpc::{self, Result};
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
@@ -13,6 +13,8 @@ use inne::*;
 
 mod diagnostics;
 mod semantic_tokens;
+
+// TODO: format-on-save
 
 // NOTE: The LSP protocol uses UTF-16 by default, so care should be taken when counting characters.
 
@@ -156,6 +158,7 @@ impl LanguageServer for Backend {
                         },
                     ),
                 ),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -252,11 +255,39 @@ impl LanguageServer for Backend {
         }))
     }
 
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let guard = self.files.read().await;
+        let Some(file) = guard.get(&params.text_document.uri) else {
+            return Err(jsonrpc::Error::invalid_params("Document not found."));
+        };
+        let mut output = String::with_capacity(file.source.len());
+        match format::format(&file.source, &mut output) {
+            Some(Ok(())) => Ok(Some(vec![TextEdit {
+                // Overwrite the entire file.
+                // TODO: only report changes
+                range: Range {
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: position_at_end(&file.source, &mut 0, &mut 0),
+                },
+                new_text: output,
+            }])),
+            Some(Err(error)) => Err(jsonrpc::Error {
+                message: format!("Failed to write to temporary string. Error: {error}").into(),
+                ..jsonrpc::Error::internal_error()
+            }),
+            None => {
+                eprintln!("Failed to format file '{}' due to parse errors.", file.name);
+                Ok(None)
+            }
+        }
+    }
+
     // TODO: async fn symbol()
 
     // TODO: go-to-definition
-
-    // TODO: async fn formatting
 
     // TODO: inlay hint? probably not
 }

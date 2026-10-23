@@ -17,6 +17,7 @@ struct Args {
     /// The IR to emit for compiler debugging purposes.
     #[arg(long)]
     emit: Option<Ir>,
+    // TODO: fmt command
 }
 
 #[derive(clap::ValueEnum, Clone, PartialEq, Eq)]
