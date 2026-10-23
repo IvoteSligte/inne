@@ -1,38 +1,115 @@
 use std::fmt::{Result, Write};
 
 use indentify::*;
-use inne::{Spanned, ast::*, lex, parse};
+use inne::{Spanned, Token, ast::*, lex, parse};
 
-pub trait Format {
-    fn fmt(&self, f: &mut impl Write) -> Result;
+// TODO: round-trip tests
+
+struct Writer<'src> {
+    tokens: &'src [Spanned<Token<'src>>],
+    output: IndentWriter<'static, String>,
+}
+
+impl Writer<'_> {
+    pub fn into_output(mut self) -> std::result::Result<String, std::fmt::Error> {
+        for token in self.tokens {
+            self.handle_source_token(*token)?;
+        }
+        Ok(self.output.child)
+    }
+
+    fn handle_source_token(&mut self, token: Spanned<Token<'_>>) -> Result {
+        if let (Token::Comment(comment), _) = token {
+            self.output.write_str(comment)?;
+            self.output.write_str("\n")?;
+            // TODO: Determine if an extra newline should be inserted based on the source
+            //       for example, if two comments were in the input with a line in between them.
+        }
+        Ok(())
+    }
+
+    pub fn put(&mut self, token: Token<'_>) -> Result {
+        // Semicolons and commas are not guaranteed to appear in the input.
+        debug_assert_ne!(token, Token::Semi);
+        debug_assert_ne!(token, Token::Comma);
+        let mid = self
+            .tokens
+            .iter()
+            .position(|(other_token, _)| *other_token == token)
+            .unwrap();
+        let (tokens_before, tokens_after) = self.tokens.split_at(mid);
+        self.tokens = tokens_after;
+
+        for token in tokens_before {
+            self.handle_source_token(*token)?;
+        }
+        write!(&mut self.output, "{token}")
+    }
+
+    pub fn indent(&mut self) -> Result {
+        write!(&mut self.output, "{INDENT}")
+    }
+
+    pub fn dedent(&mut self) -> Result {
+        write!(&mut self.output, "{DEDENT}")
+    }
+
+    pub fn put_semi(&mut self) -> Result {
+        // FIXME: a comment may be placed right before a semicolon
+        self.output.write_str(";")
+    }
+
+    pub fn put_comma(&mut self) -> Result {
+        // FIXME: a comment may be placed right before a comma
+        self.output.write_str(",")
+    }
+
+    pub fn put_newline(&mut self) -> Result {
+        self.output.write_str("\n")
+    }
+
+    pub fn put_display(&mut self, display: impl std::fmt::Display) -> Result {
+        write!(&mut self.output, "{display}")
+    }
+
+    pub fn put_space(&mut self) -> Result {
+        self.output.write_str(" ")
+    }
+
+    pub fn put_name(&mut self, (name, _): Spanned<&str>) -> Result {
+        self.put(Token::Ident(name))
+    }
+
+    pub fn put_keyword(&mut self, keyword: Token<'_>) -> Result {
+        self.put(keyword)?;
+        self.put_space()
+    }
+}
+
+trait Format {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result;
 }
 
 impl<T: Format> Format for &T {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         (**self).fmt(f)
     }
 }
 
 impl<T: Format> Format for Spanned<T> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         self.0.fmt(f)
     }
 }
 
-impl Format for &str {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str(self)
-    }
-}
-
-impl Format for bool {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        write!(f, "{self}")
+impl Format for Name<'_> {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_name(*self)
     }
 }
 
 macro_rules! delegate {
-    ($self:ident, $f:ident, $($variant:ident),*; $($variant2:ident($value:ident) => $expr:expr),*) => {
+    ($self:ident, $f:ident, $($variant:ident),*; $($variant2:ident($value:ident) => $expr:expr),* $(,)?) => {
         match $self {
             $($variant(item) => item.fmt($f),)*
             $($variant2($value) => $expr,)*
@@ -41,17 +118,18 @@ macro_rules! delegate {
 }
 
 impl Format for Ast<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         for stmt in &self.stmts {
             stmt.fmt(f)?;
-            f.write_str("\n\n")?;
+            f.put_newline()?;
+            f.put_newline()?;
         }
         Ok(())
     }
 }
 
 impl Format for Stmt<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         use Stmt::*;
         delegate!(self, f,
             Func,
@@ -63,16 +141,25 @@ impl Format for Stmt<'_> {
             For,
             While,
             Loop;
-            Break(_span) => write!(f, "break;"),
-            Continue(_span) => write!(f, "continue;"),
+            Break(_span) => {
+                f.put(Token::Break)?;
+                f.put_semi()
+            },
+            Continue(_span) => {
+                f.put(Token::Continue)?;
+                f.put_semi()
+            },
             Return(value) => {
                 match &value.0 {
                     Some((value, _)) => {
-                        f.write_str("return ")?;
+                        f.put_keyword(Token::Return)?;
                         value.fmt(f)?;
-                        f.write_str(";")
+                        f.put_semi()
                     }
-                    None => f.write_str("return;")
+                    None => {
+                        f.put(Token::Return)?;
+                        f.put_semi()
+                    }
                 }
             }
         )
@@ -80,40 +167,45 @@ impl Format for Stmt<'_> {
 }
 
 impl Format for Block<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         if self.is_empty() {
-            return f.write_str("{}");
+            f.put(Token::LBrace)?;
+            return f.put(Token::RBrace);
         }
-        writeln!(f, "{{{INDENT}")?;
+        f.put(Token::LBrace)?;
+        f.indent()?;
         for stmt in self {
             stmt.fmt(f)?;
-            f.write_str("\n")?;
+            f.put_newline()?;
         }
-        write!(f, "{DEDENT}}}")
+        f.dedent()?;
+        f.put(Token::RBrace)
     }
 }
 
 impl Format for Type<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str(self.name.0)?;
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        self.name.fmt(f)?;
         if !self.generics.is_empty() {
-            f.write_str("<")?;
+            f.put(Token::Op("<"))?;
             write_comma_separated(f, &self.generics)?;
-            f.write_str(">")?;
+            f.put(Token::Op(">"))?;
         }
         Ok(())
     }
 }
 
 impl Format for Func<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str("func ")?;
-        f.write_str(self.name.0)?;
-        f.write_str("(")?;
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_keyword(Token::Func)?;
+        self.name.fmt(f)?;
+        f.put(Token::LParen)?;
         write_comma_separated(f, &self.params)?;
-        f.write_str(") ")?;
+        f.put(Token::RParen)?;
+        f.put_space()?;
         if let Some(r#type) = self.return_type.as_ref() {
-            f.write_str("-> ")?;
+            f.put(Token::Arrow)?;
+            f.put_space()?;
             r#type.fmt(f)?;
         }
         self.body.fmt(f)
@@ -121,50 +213,49 @@ impl Format for Func<'_> {
 }
 
 impl Format for Param<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        self.name.fmt(f)?;
-        f.write_str(": ")?;
-        self.r#type.fmt(f)
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        write_key_value(f, self.name, &self.r#type)
     }
 }
 
 impl Format for Struct<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str("struct ")?;
-        f.write_str(self.name.0)?;
-        if self.fields.is_empty() {
-            f.write_str("{}")
-        } else {
-            writeln!(f, " {{{INDENT}")?;
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_keyword(Token::Struct)?;
+        self.name.fmt(f)?;
+        f.put(Token::LBrace)?;
+        if !self.fields.is_empty() {
+            f.indent()?;
             for field in &self.fields {
                 field.fmt(f)?;
-                writeln!(f, ",")?;
+                f.put_comma()?;
+                f.put_newline()?;
             }
-            write!(f, "{DEDENT}}}")
+            f.dedent()?;
         }
+        f.put(Token::RBrace)
     }
 }
 
 impl Format for Field<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        self.name.fmt(f)?;
-        f.write_str(": ")?;
-        self.r#type.fmt(f)
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        write_key_value(f, self.name, &self.r#type)
     }
 }
 
 impl Format for VarDecl<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str("var ")?;
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_keyword(Token::Var)?;
         self.name.fmt(f)?;
-        f.write_str(" = ")?;
+        f.put_space()?;
+        f.put(Token::Op("="))?;
+        f.put_space()?;
         self.value.fmt(f)?;
-        f.write_str(";")
+        f.put_semi()
     }
 }
 
 impl Format for Expr<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         use Expr::*;
         delegate!(
             self,
@@ -178,11 +269,11 @@ impl Format for Expr<'_> {
             Map,
             StructLiteral,
             Index,
-            Range,
-            Var,
-            Int,
-            Bool,
-            String;
+            Range;
+            Var(var) => f.put(Token::Ident(var)),
+            Int(int) => f.put(Token::Int(int)),
+            Bool(bool) => f.put(Token::Bool(*bool)),
+            String(string) => f.put(Token::String(string)),
         )
     }
 }
@@ -202,7 +293,7 @@ pub fn precedence(op: BinaryOp) -> u8 {
 }
 
 impl Format for Binary<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         let op = self.op.0;
         // All operators are assumed to be left-associative.
         let left_needs_parens = matches!(
@@ -215,23 +306,23 @@ impl Format for Binary<'_> {
         ) || matches!(self.right.0, Expr::Range(_));
         {
             if left_needs_parens {
-                f.write_str("(")?;
+                f.put(Token::LParen)?;
             }
             self.left.fmt(f)?;
             if left_needs_parens {
-                f.write_str(")")?;
+                f.put(Token::RParen)?;
             }
         }
-        f.write_str(" ")?;
+        f.put_space()?;
         self.op.0.fmt(f)?;
-        f.write_str(" ")?;
+        f.put_space()?;
         {
             if right_needs_parens {
-                f.write_str("(")?;
+                f.put(Token::LParen)?;
             }
             self.right.fmt(f)?;
             if right_needs_parens {
-                f.write_str(")")?;
+                f.put(Token::RParen)?;
             }
         }
         Ok(())
@@ -239,146 +330,148 @@ impl Format for Binary<'_> {
 }
 
 impl Format for BinaryOp {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        // Delegate to Display implementation.
-        write!(f, "{self}")
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_display(self)
     }
 }
 
 impl Format for Unary<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         self.op.0.fmt(f)?;
         let needs_parens = matches!(
             &self.expr.0,
             Expr::Binary(_) | Expr::Unary(_) | Expr::Range(_)
         );
         if needs_parens {
-            f.write_str("(")?;
+            f.put(Token::LParen)?;
         }
         self.expr.fmt(f)?;
         if needs_parens {
-            f.write_str(")")?;
+            f.put(Token::RParen)?;
         }
         Ok(())
     }
 }
 
 impl Format for UnaryOp {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        // Delegate to Display implementation.
-        write!(f, "{self}")
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_display(self)
     }
 }
 
 impl Format for Call<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         self.name.fmt(f)?;
-        f.write_str("(")?;
+        f.put(Token::LParen)?;
         write_comma_separated(f, &self.args)?;
-        f.write_str(")")
+        f.put(Token::RParen)
     }
 }
 
 impl Format for EmptyList<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str("[<")?;
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put(Token::LBracket)?;
+        f.put(Token::Op("<"))?;
         self.element_type.fmt(f)?;
-        f.write_str(">]")
+        f.put(Token::Op(">"))?;
+        f.put(Token::RBracket)
     }
 }
 
 impl Format for List<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str("[")?;
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put(Token::LBracket)?;
         write_comma_separated(f, &self.elements)?;
-        f.write_str("]")
+        f.put(Token::RBracket)
     }
 }
 
 impl Format for EmptyMap<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str("{<")?;
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put(Token::LBrace)?;
+        f.put(Token::Op("<"))?;
         self.key_type.fmt(f)?;
-        f.write_str(", ")?;
+        f.put_comma()?;
+        f.put_space()?;
         self.value_type.fmt(f)?;
-        f.write_str(">}")
+        f.put(Token::Op(">"))?;
+        f.put(Token::RBrace)
     }
 }
 
 impl Format for Map<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str("{{")?;
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put(Token::LBrace)?;
         write_comma_separated(f, &self.pairs)?;
-        f.write_str("}}")
+        f.put(Token::RBrace)
     }
 }
 
 impl Format for Pair<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        self.key.fmt(f)?;
-        f.write_str(": ")?;
-        self.value.fmt(f)
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        write_key_value(f, &self.key, &self.value)
     }
 }
 
 impl Format for StructLiteral<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         self.name.fmt(f)?;
-        f.write_str(" {{ ")?;
+        f.put_space()?;
+        f.put(Token::LBrace)?;
+        f.put_space()?;
         write_comma_separated(f, &self.fields)?;
-        f.write_str(" }}")
+        f.put_space()?;
+        f.put(Token::RBrace)
     }
 }
 
 impl Format for FieldLiteral<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        self.name.fmt(f)?;
-        f.write_str(": ")?;
-        self.value.fmt(f)
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        write_key_value(f, self.name, &self.value)
     }
 }
 
 impl Format for Index<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         let needs_parens = matches!(
             self.expr.0,
             Expr::Binary(_) | Expr::Unary(_) | Expr::Range(_)
         );
         if needs_parens {
-            f.write_str("(")?;
+            f.put(Token::LParen)?;
         }
         self.expr.fmt(f)?;
         if needs_parens {
-            f.write_str(")")?;
+            f.put(Token::RParen)?;
         }
-        f.write_str("[")?;
+        f.put(Token::LBracket)?;
         self.index.fmt(f)?;
-        f.write_str("]")
+        f.put(Token::RBracket)
     }
 }
 
 impl Format for Range<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         let start_needs_parens = matches!(self.start.0, Expr::Range(_));
         let end_needs_parens = matches!(self.start.0, Expr::Range(_));
 
         {
             if start_needs_parens {
-                f.write_str("(")?;
+                f.put(Token::LParen)?;
             }
             self.start.fmt(f)?;
             if start_needs_parens {
-                f.write_str(")")?;
+                f.put(Token::RParen)?;
             }
         }
-        f.write_str("..")?;
+        f.put(Token::DotDot)?;
         {
             if end_needs_parens {
-                f.write_str("(")?;
+                f.put(Token::LParen)?;
             }
             self.end.fmt(f)?;
             if end_needs_parens {
-                f.write_str(")")?;
+                f.put(Token::RParen)?;
             }
         }
         Ok(())
@@ -386,37 +479,40 @@ impl Format for Range<'_> {
 }
 
 impl Format for Assign<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
         self.target.fmt(f)?;
-        f.write_str(" ")?;
+        f.put_space()?;
         self.op.fmt(f)?;
-        f.write_str(" ")?;
+        f.put_space()?;
         self.value.fmt(f)?;
-        f.write_str(";")
+        f.put_semi()
     }
 }
 
 impl Format for AssignOp {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        // Delegates to Display implementation.
-        write!(f, "{self}")
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_display(self)
     }
 }
 
 impl Format for If<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str("if ")?;
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_keyword(Token::If)?;
         self.cond.fmt(f)?;
-        f.write_str(" ")?;
+        f.put_space()?;
         self.then.fmt(f)?;
         for (cond, then) in &self.else_ifs {
-            f.write_str(" else if ")?;
+            f.put_space()?;
+            f.put_keyword(Token::Else)?;
+            f.put_keyword(Token::If)?;
             cond.fmt(f)?;
-            f.write_str(" ")?;
+            f.put_space()?;
             then.fmt(f)?;
         }
         if let Some(r#else) = &self.r#else {
-            f.write_str(" else ")?;
+            f.put_space()?;
+            f.put_keyword(Token::Else)?;
+            f.put_space()?;
             r#else.fmt(f)?;
         }
         Ok(())
@@ -424,37 +520,39 @@ impl Format for If<'_> {
 }
 
 impl Format for For<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str("for ")?;
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_keyword(Token::For)?;
         self.var.fmt(f)?;
-        f.write_str(" in ")?;
+        f.put_space()?;
+        f.put(Token::In)?;
+        f.put_space()?;
         self.iter.fmt(f)?;
-        f.write_str(" ")?;
+        f.put_space()?;
         self.body.fmt(f)?;
         Ok(())
     }
 }
 
 impl Format for While<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str("while ")?;
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_keyword(Token::While)?;
         self.cond.fmt(f)?;
-        f.write_str(" ")?;
+        f.put_space()?;
         self.body.fmt(f)?;
         Ok(())
     }
 }
 
 impl Format for Loop<'_> {
-    fn fmt(&self, f: &mut impl Write) -> Result {
-        f.write_str("loop ")?;
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_keyword(Token::Loop)?;
         self.body.fmt(f)?;
         Ok(())
     }
 }
 
 /// Returns `None` on parsing failure and `Some(Err(_))` on write failure.
-pub fn format(source: &str, dest: impl Write) -> Option<Result> {
+pub fn format(source: &str, mut dest: impl Write) -> Option<Result> {
     let (maybe_tokens, errors) = lex(source);
     if !errors.is_empty() {
         return None;
@@ -469,19 +567,39 @@ pub fn format(source: &str, dest: impl Write) -> Option<Result> {
     let Some(ast) = maybe_ast else {
         return None;
     };
-    // TODO: re-insert comments (retokenize the output and match new tokens to old tokens to find out where to place comments)
-    let mut dest = IndentWriter::new("    ", dest);
-    Some(ast.fmt(&mut dest))
+    let output = String::with_capacity(source.len());
+    let mut writer = Writer {
+        tokens: &tokens,
+        output: IndentWriter::new("    ", output),
+    };
+    if let Err(error) = ast.fmt(&mut writer) {
+        return Some(Err(error));
+    }
+    Some(
+        writer
+            .into_output()
+            .and_then(|string| dest.write_str(&string)),
+    )
 }
 
 fn write_comma_separated(
-    f: &mut impl Write,
+    f: &mut Writer<'_>,
     items: impl IntoIterator<Item = impl Format>,
 ) -> Result {
-    Ok(for (i, item) in items.into_iter().enumerate() {
+    for (i, item) in items.into_iter().enumerate() {
         if i > 0 {
-            f.write_str(", ")?;
+            f.put_comma()?;
+            f.put_space()?;
         }
         item.fmt(f)?;
-    })
+    }
+    Ok(())
+}
+
+fn write_key_value(f: &mut Writer<'_>, key: impl Format, value: impl Format) -> Result {
+    key.fmt(f)?;
+    f.put(Token::Colon)?;
+    f.put_space()?;
+    value.fmt(f)?;
+    Ok(())
 }

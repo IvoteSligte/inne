@@ -207,7 +207,6 @@ impl std::fmt::Display for Type<'_> {
     }
 }
 
-
 impl std::fmt::Display for AssignOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
