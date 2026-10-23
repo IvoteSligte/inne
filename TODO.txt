@@ -12,6 +12,7 @@ language:
   - var (x, y) = expr
   - var Enum(x) = expr else ... // low priority
   - match                       // low priority
+- format strings
 
 tooling:
 - autocomplete

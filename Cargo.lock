@@ -359,6 +359,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "inne_format"
+version = "0.1.0"
+dependencies = [
+ "indentify",
+ "inne",
+]
+
+[[package]]
 name = "inne_ls"
 version = "0.1.0"
 dependencies = [

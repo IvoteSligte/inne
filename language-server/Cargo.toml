@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-inne = { path = ".." }
+inne = { workspace = true }
 tokio = { version = "1.53.3", features = ["io-std", "macros", "rt-multi-thread"] }
 tower-lsp-server = "0.23.0"

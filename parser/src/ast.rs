@@ -95,6 +95,7 @@ pub enum BinaryOp {
     Geq,
     And,
     Or,
+    // TODO: make Range a binary operator
 }
 
 pub struct Unary<'a> {
@@ -109,7 +110,7 @@ pub enum UnaryOp {
 }
 
 pub struct Call<'a> {
-    pub name: Spanned<&'a str>,
+    pub name: Name<'a>,
     pub args: Vec<Spanned<Expr<'a>>>,
 }
 
@@ -203,5 +204,48 @@ impl std::fmt::Display for Type<'_> {
             return f.write_str(">");
         }
         Ok(())
+    }
+}
+
+
+impl std::fmt::Display for AssignOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            AssignOp::Assign => "=",
+            AssignOp::Add => "+=",
+            AssignOp::Sub => "-=",
+            AssignOp::Mul => "*=",
+            AssignOp::Div => "/=",
+            AssignOp::Mod => "%=",
+        })
+    }
+}
+
+impl std::fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Mod => "%",
+            BinaryOp::Eq => "==",
+            BinaryOp::NotEq => "!=",
+            BinaryOp::Lt => "<",
+            BinaryOp::Leq => "<=",
+            BinaryOp::Gt => ">",
+            BinaryOp::Geq => ">=",
+            BinaryOp::And => "and",
+            BinaryOp::Or => "or",
+        })
+    }
+}
+
+impl std::fmt::Display for UnaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            UnaryOp::Neg => "-",
+            UnaryOp::Not => "not",
+        })
     }
 }

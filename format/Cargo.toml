@@ -1,0 +1,8 @@
+[package]
+name = "inne_format"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+inne = { workspace = true }
+indentify = { workspace = true }
