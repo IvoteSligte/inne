@@ -22,7 +22,6 @@ struct Args {
 #[derive(clap::ValueEnum, Clone, PartialEq, Eq)]
 enum Ir {
     Tokens,
-    ParseTree,
     Ast,
     Hir,
     TypedHir,
@@ -72,15 +71,11 @@ fn main() {
     if args.emit == Some(Ir::Tokens) {
         todo!();
     }
-    let (maybe_parse_tree, errors) = parse(&tokens, filename, &source);
+    let (maybe_ast, errors) = parse(&tokens, filename, &source);
     eprint_errors(&errors, filename, &source, "parsing");
-    let Some(parse_tree) = maybe_parse_tree else {
+    let Some(ast) = maybe_ast else {
         return;
     };
-    if args.emit == Some(Ir::ParseTree) {
-        todo!();
-    }
-    let ast = ast_from_parse_tree(&parse_tree);
     if args.emit == Some(Ir::Ast) {
         todo!();
     }

@@ -4,117 +4,11 @@ use chumsky::{input::ValueInput, prelude::*};
 // TODO: tuples
 // TODO: list/tuple pattern matching in variable declarations
 
-use crate::{Span, Spanned, util::write_comma_separated};
+use crate::{Span, Spanned, Token, ast::*};
 
 pub type ParseError<'tokens, 'src> = Rich<'tokens, Token<'src>, Span>;
 
 type ParseErrorExtra<'tokens, 'src> = extra::Err<Rich<'tokens, Token<'src>, Span>>;
-
-pub struct ParseTree<'a> {
-    pub filename: &'a str,
-    pub stmts: Vec<Stmt<'a>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AssignOp {
-    Assign,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-}
-
-pub type Name<'a> = Spanned<&'a str>;
-
-pub enum Stmt<'a> {
-    Func(
-        Name<'a>,
-        Vec<(Name<'a>, Spanned<Type<'a>>)>,
-        Option<Spanned<Type<'a>>>,
-        Block<'a>,
-    ),
-    Struct(Name<'a>, Vec<(Name<'a>, Spanned<Type<'a>>)>),
-    VarDecl(Name<'a>, Spanned<Expr<'a>>),
-    Expr(Spanned<Expr<'a>>),
-    Assign(Spanned<Expr<'a>>, Spanned<AssignOp>, Spanned<Expr<'a>>),
-    If(
-        Spanned<Expr<'a>>,
-        Block<'a>,
-        Vec<(Spanned<Expr<'a>>, Block<'a>)>,
-        Option<Block<'a>>,
-    ),
-    For(Name<'a>, Spanned<Expr<'a>>, Block<'a>),
-    While(Spanned<Expr<'a>>, Block<'a>),
-    Loop(Block<'a>),
-    Break(Span),
-    Continue(Span),
-    Return(Spanned<Option<Spanned<Expr<'a>>>>),
-}
-
-pub type Block<'a> = Vec<Stmt<'a>>;
-
-#[derive(Clone)]
-pub struct Type<'a> {
-    pub name: Name<'a>,
-    pub generics: Vec<Spanned<Self>>,
-}
-
-impl std::fmt::Display for Type<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self { name, generics } = self;
-        f.write_str(name.0)?;
-        if !generics.is_empty() {
-            f.write_str("<")?;
-            write_comma_separated(f, generics.iter().map(|(generic, _)| generic))?;
-            return f.write_str(">");
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum BinaryOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    Eq,
-    NotEq,
-    Lt,
-    Gt,
-    Leq,
-    Geq,
-    And,
-    Or,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum UnaryOp {
-    Neg,
-    Not,
-}
-
-pub enum Expr<'src> {
-    Binary(Box<Spanned<Self>>, Spanned<BinaryOp>, Box<Spanned<Self>>),
-    Unary(Spanned<UnaryOp>, Box<Spanned<Self>>),
-    Call(Spanned<&'src str>, Spanned<Vec<Spanned<Self>>>),
-    EmptyList(Spanned<Type<'src>>),
-    List(Vec<Spanned<Self>>),
-    EmptyMap(Spanned<Type<'src>>, Spanned<Type<'src>>),
-    Map(Vec<(Spanned<Self>, Spanned<Self>)>),
-    StructLiteral(Name<'src>, Vec<(Name<'src>, Spanned<Self>)>),
-    Index(Box<Spanned<Self>>, Box<Spanned<Self>>),
-    Var(&'src str),
-    Int(&'src str),
-    Bool(bool),
-    String(&'src str),
-    // TODO: Char(char)
-    Range(Box<Spanned<Self>>, Box<Spanned<Self>>),
-}
-
-use crate::Token;
 
 fn with_span<'src, O, I, E>(o: O, e: &mut chumsky::input::MapExtra<'src, '_, I, E>) -> (O, I::Span)
 where
@@ -140,7 +34,10 @@ where
 {
     let ident = ident_parser();
     let r#type = type_parser();
-    let param = ident.then_ignore(just(Token::Colon)).then(r#type.clone());
+    let param = ident
+        .then_ignore(just(Token::Colon))
+        .then(r#type.clone())
+        .map(|(name, r#type)| Param { name, r#type });
     recursive(|stmt| {
         let block = stmt
             .repeated()
@@ -159,14 +56,19 @@ where
             .then(just(Token::Arrow).ignore_then(r#type).or_not())
             .then(block.clone())
             .map(|(((name, params), return_type), body)| {
-                Stmt::Func(name, params, return_type, body)
+                Stmt::Func(Func {
+                    name,
+                    params,
+                    return_type,
+                    body,
+                })
             });
         let expr = expr_parser();
         let var_decl = just(Token::Var)
             .ignore_then(ident)
             .then_ignore(just(Token::Op("=")))
             .then(expr.clone())
-            .map(|(name, value)| Stmt::VarDecl(name, value));
+            .map(|(name, value)| Stmt::VarDecl(VarDecl { name, value }));
         let assign = expr
             .clone()
             .then(
@@ -181,7 +83,7 @@ where
                 .map_with(with_span),
             )
             .then(expr.clone())
-            .map(|((target, op), value)| Stmt::Assign(target, op, value));
+            .map(|((target, op), value)| Stmt::Assign(Assign { target, op, value }));
         let if_head = just(Token::If)
             .ignore_then(expr.clone())
             .then(block.clone());
@@ -194,8 +96,13 @@ where
                     .collect::<Vec<_>>(),
             ) // else if
             .then(just(Token::Else).ignore_then(block.clone()).or_not()) // else
-            .map(|(((cond, then_block), else_if_blocks), else_block)| {
-                Stmt::If(cond, then_block, else_if_blocks, else_block)
+            .map(|(((cond, then), else_ifs), r#else)| {
+                Stmt::If(If {
+                    cond,
+                    then,
+                    else_ifs,
+                    r#else,
+                })
             });
         let for_stmt = just(Token::For)
             .ignore_then(ident)
@@ -205,17 +112,25 @@ where
                     .then(just(Token::DotDot).ignore_then(expr.clone()).or_not())
                     .map_with(with_span)
                     .map(|((expr, range_end), range_span)| match range_end {
-                        Some(end) => (Expr::Range(Box::new(expr), Box::new(end)), range_span),
+                        Some(end) => (
+                            Expr::Range(Range {
+                                start: Box::new(expr),
+                                end: Box::new(end),
+                            }),
+                            range_span,
+                        ),
                         None => expr,
                     }),
             )
             .then(block.clone())
-            .map(|((var, iter), block)| Stmt::For(var, iter, block));
+            .map(|((var, iter), body)| Stmt::For(For { var, iter, body }));
         let while_stmt = just(Token::While)
             .ignore_then(expr.clone())
             .then(block.clone())
-            .map(|(cond, block)| Stmt::While(cond, block));
-        let loop_stmt = just(Token::Loop).ignore_then(block).map(Stmt::Loop);
+            .map(|(cond, body)| Stmt::While(While { cond, body }));
+        let loop_stmt = just(Token::Loop)
+            .ignore_then(block)
+            .map(|body| Stmt::Loop(Loop { body }));
         choice((
             func,
             var_decl,
@@ -266,6 +181,18 @@ where
     select! { Token::Ident(ident) => ident }.map_with(with_span)
 }
 
+fn expr_binary<'src>(
+    left: Spanned<Expr<'src>>,
+    op: Spanned<BinaryOp>,
+    right: Spanned<Expr<'src>>,
+) -> Expr<'src> {
+    Expr::Binary(Binary {
+        left: Box::new(left),
+        op,
+        right: Box::new(right),
+    })
+}
+
 fn expr_parser<'tokens, 'src: 'tokens, I>()
 -> impl Parser<'tokens, I, Spanned<Expr<'src>>, ParseErrorExtra<'tokens, 'src>> + Clone
 where
@@ -286,10 +213,9 @@ where
                     .separated_by(just(Token::Comma))
                     .allow_trailing()
                     .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LParen), just(Token::RParen))
-                    .map_with(with_span),
+                    .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
-            .map(|(name, args)| Expr::Call(name, args))
+            .map(|(name, args)| Expr::Call(Call { name, args }))
             .map_with(with_span)
             .boxed();
         // TODO: make specifying more than one type instead of [<type>] report a nice error message
@@ -299,7 +225,7 @@ where
             .allow_trailing()
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LBracket), just(Token::RBracket))
-            .map(Expr::List)
+            .map(|elements| Expr::List(List { elements }))
             .or(r#type
                 .clone()
                 .delimited_by(
@@ -308,18 +234,19 @@ where
                     just(Token::LBracket).then(just(Token::Op("<"))),
                     just(Token::Op(">")).then(just(Token::RBracket)),
                 )
-                .map(Expr::EmptyList))
+                .map(|element_type| Expr::EmptyList(EmptyList { element_type })))
             .map_with(with_span);
         // TODO: make specifying only one type instead of {<key, value>} report a nice error message
         let map = expr
             .clone()
             .then_ignore(just(Token::Colon))
             .then(expr.clone())
+            .map(|(key, value)| Pair { key, value })
             .separated_by(just(Token::Comma))
             .allow_trailing()
             .collect::<Vec<_>>()
             .delimited_by(just(Token::LBrace), just(Token::RBrace))
-            .map(Expr::Map)
+            .map(|pairs| Expr::Map(Map { pairs }))
             .or(r#type
                 .clone()
                 .then_ignore(just(Token::Comma))
@@ -330,7 +257,12 @@ where
                     just(Token::LBrace).then(just(Token::Op("<"))),
                     just(Token::Op(">")).then(just(Token::RBrace)),
                 )
-                .map(|(key_type, value_type)| Expr::EmptyMap(key_type, value_type)))
+                .map(|(key_type, value_type)| {
+                    Expr::EmptyMap(EmptyMap {
+                        key_type,
+                        value_type,
+                    })
+                }))
             .map_with(with_span);
 
         // Name { ... } can be ambiguous if a { ... } block follows, such as in an if-statement,
@@ -340,11 +272,12 @@ where
                 ident
                     .then_ignore(just(Token::Colon))
                     .then(expr.clone())
+                    .map(|(name, value)| FieldLiteral { name, value })
                     .separated_by(just(Token::Comma))
                     .collect::<Vec<_>>()
                     .delimited_by(just(Token::LBrace), just(Token::RBrace)),
             )
-            .map(|(name, fields)| Expr::StructLiteral(name, fields))
+            .map(|(name, fields)| Expr::StructLiteral(StructLiteral { name, fields }))
             .map_with(with_span);
 
         // Unambiguous expressions
@@ -368,7 +301,12 @@ where
                 expr.clone()
                     .delimited_by(just(Token::LBracket), just(Token::LBracket)),
             )
-            .map(|(expr, index)| Expr::Index(Box::new(expr), Box::new(index)))
+            .map(|(expr, index)| {
+                Expr::Index(Index {
+                    expr: Box::new(expr),
+                    index: Box::new(index),
+                })
+            })
             .map_with(with_span));
 
         // Product ops (multiply and divide) have equal precedence
@@ -380,7 +318,7 @@ where
         .map_with(with_span);
         let product = index_or_atom.clone().foldl_with(
             op.then(index_or_atom.clone()).repeated(),
-            |a, (op, b), e| (Expr::Binary(Box::new(a), op, Box::new(b)), e.span()),
+            |a, (op, b), e| (expr_binary(a, op, b), e.span()),
         );
 
         // Sum ops (add and subtract) have equal precedence
@@ -391,7 +329,7 @@ where
         let sum = product
             .clone()
             .foldl_with(op.then(product).repeated(), |a, (op, b), e| {
-                (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+                (expr_binary(a, op, b), e.span())
             })
             .boxed();
 
@@ -406,7 +344,7 @@ where
         let ordering = sum
             .clone()
             .foldl_with(op.then(sum).repeated(), |a, (op, b), e| {
-                (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+                (expr_binary(a, op, b), e.span())
             });
 
         // Comparison ops (equal, not-equal) have equal precedence
@@ -417,14 +355,14 @@ where
         let equal = ordering
             .clone()
             .foldl_with(op.then(ordering).repeated(), |a, (op, b), e| {
-                (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+                (expr_binary(a, op, b), e.span())
             });
 
         let op = just(Token::Op("and")).to(BinaryOp::And).map_with(with_span);
         let and = equal
             .clone()
             .foldl_with(op.then(equal).repeated(), |a, (op, b), e| {
-                (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+                (expr_binary(a, op, b), e.span())
             })
             .boxed();
 
@@ -432,7 +370,7 @@ where
         let or = and
             .clone()
             .foldl_with(op.then(and).repeated(), |a, (op, b), e| {
-                (Expr::Binary(Box::new(a), op, Box::new(b)), e.span())
+                (expr_binary(a, op, b), e.span())
             });
 
         let binary = or;
@@ -441,7 +379,12 @@ where
             .or(just(Token::Op("not")).to(UnaryOp::Not))
             .map_with(with_span)
             .then(index_or_atom.clone())
-            .map(|(op, expr)| Expr::Unary(op, Box::new(expr)))
+            .map(|(op, expr)| {
+                Expr::Unary(Unary {
+                    op,
+                    expr: Box::new(expr),
+                })
+            })
             .map_with(with_span);
         choice((binary, unary, index_or_atom))
     })

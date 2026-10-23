@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
 
+use inne::ast::*;
 use inne::*;
-use tower_lsp_server::ls_types::*;
+use tower_lsp_server::ls_types::SemanticToken;
 
 use crate::{File, position_at_end};
 
 use super::tt;
 
-pub fn extract_semantic_tokens(file: &File) -> Option<SemanticTokensResult> {
+pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
     if file.source.is_empty() {
         eprintln!("Semantic tokens: File '{}' is empty.", file.name);
         return None;
@@ -43,10 +44,7 @@ pub fn extract_semantic_tokens(file: &File) -> Option<SemanticTokensResult> {
     }
     let data = to_semantic_tokens(&file.source, semantic_tokens.into_values());
     eprintln!("Semantic tokens (full) provided {} tokens.", data.len());
-    Some(SemanticTokensResult::Tokens(SemanticTokens {
-        result_id: None,
-        data,
-    }))
+    Some(data)
 }
 
 struct Override<'a>(&'a mut BTreeMap<usize, (Span, u32)>);
@@ -59,13 +57,16 @@ impl Override<'_> {
 
     fn stmt(&mut self, stmt: &parser::Stmt) {
         match stmt {
-            parser::Stmt::Func((_, name_span), params, return_type, body) => {
-                self.set(tt::FUNCTION, *name_span);
+            Stmt::Func(Func {
+                name,
+                params,
+                return_type,
+                body,
+            }) => {
+                self.set(tt::FUNCTION, name.1);
                 for param in params {
-                    let (_, name_span) = param.0;
-                    self.set(tt::PARAMETER, name_span);
-                    let (_, type_span) = param.1;
-                    self.set(tt::TYPE, type_span);
+                    self.set(tt::PARAMETER, param.name.1);
+                    self.set(tt::TYPE, param.r#type.1);
                 }
                 if let Some((_, type_span)) = return_type {
                     self.set(tt::TYPE, *type_span);
@@ -74,23 +75,32 @@ impl Override<'_> {
                     self.stmt(stmt);
                 }
             }
-            parser::Stmt::Struct((_, name_span), fields) => {
-                self.set(tt::STRUCT, *name_span);
-                for ((_, name_span), (_, type_span)) in fields {
-                    self.set(tt::PROPERTY, *name_span);
-                    self.r#type(*type_span);
+            Stmt::Struct(Struct { name, fields }) => {
+                self.set(tt::STRUCT, name.1);
+                for Field { name, r#type } in fields {
+                    self.set(tt::PROPERTY, name.1);
+                    self.r#type(r#type.1);
                 }
             }
-            parser::Stmt::VarDecl((_, name_span), expr) => {
-                self.set(tt::VARIABLE, *name_span);
-                self.expr(expr);
+            Stmt::VarDecl(VarDecl { name, value }) => {
+                self.set(tt::VARIABLE, name.1);
+                self.expr(value);
             }
-            parser::Stmt::Expr(expr) => self.expr(expr),
-            parser::Stmt::Assign(target, _, expr) => {
+            Stmt::Expr(expr) => self.expr(expr),
+            Stmt::Assign(Assign {
+                target,
+                op: _,
+                value,
+            }) => {
                 self.expr(target);
-                self.expr(expr);
+                self.expr(value);
             }
-            parser::Stmt::If(cond, then, else_ifs, r#else) => {
+            Stmt::If(If {
+                cond,
+                then,
+                else_ifs,
+                r#else,
+            }) => {
                 self.expr(cond);
                 for stmt in then {
                     self.stmt(stmt);
@@ -107,70 +117,70 @@ impl Override<'_> {
                     }
                 }
             }
-            parser::Stmt::For(_, iter, stmts) => {
+            Stmt::For(For { var: _, iter, body }) => {
                 self.expr(iter);
-                for stmt in stmts {
+                for stmt in body {
                     self.stmt(stmt);
                 }
             }
-            parser::Stmt::While(cond, stmts) => {
+            Stmt::While(While { cond, body }) => {
                 self.expr(cond);
-                for stmt in stmts {
+                for stmt in body {
                     self.stmt(stmt);
                 }
             }
-            parser::Stmt::Loop(stmts) => {
-                for stmt in stmts {
+            Stmt::Loop(Loop { body }) => {
+                for stmt in body {
                     self.stmt(stmt);
                 }
             }
-            parser::Stmt::Return((Some(expr), _)) => {
+            Stmt::Return((Some(expr), _)) => {
                 self.expr(expr);
             }
-            parser::Stmt::Return((None, _)) => {}
-            parser::Stmt::Break(_) => {}
-            parser::Stmt::Continue(_) => {}
+            Stmt::Return((None, _)) => {}
+            Stmt::Break(_) => {}
+            Stmt::Continue(_) => {}
         }
     }
 
-    fn expr(&mut self, (expr, span): &Spanned<parser::Expr>) {
+    fn expr(&mut self, (expr, span): &Spanned<Expr>) {
         match expr {
-            parser::Expr::Binary(left, _, right) => {
+            Expr::Binary(Binary { left, op: _, right }) => {
                 self.expr(&left);
                 self.expr(&right);
             }
-            parser::Expr::Unary(_, value) => self.expr(&value),
-            parser::Expr::Call((_, name_span), (args, _)) => {
-                self.set(tt::FUNCTION, *name_span);
+            Expr::Unary(Unary { op: _, expr }) => self.expr(expr),
+            Expr::Call(Call { name, args }) => {
+                self.set(tt::FUNCTION, name.1);
                 for arg in args {
                     self.expr(arg);
                 }
             }
-            parser::Expr::Var(_) => {} // VARIABLE is the default
-            parser::Expr::Int(_) => {}
-            parser::Expr::Bool(_) => {}
-            parser::Expr::String(_) => {}
-            parser::Expr::Range(start, end) => {
+            Expr::Var(_) => {} // VARIABLE is the default
+            Expr::Int(_) => {}
+            Expr::Bool(_) => {}
+            Expr::String(_) => {}
+            Expr::Range(Range { start, end }) => {
                 self.expr(&start);
                 self.expr(&end);
             }
-            parser::Expr::EmptyList(_) => self.r#type((span.start + 1..span.end + 1).into()),
-            parser::Expr::List(elements) => elements.iter().for_each(|item| self.expr(&item)),
-            parser::Expr::EmptyMap(_, _) => {
+            Expr::EmptyList(_) => self.r#type((span.start + 1..span.end + 1).into()),
+            Expr::List(List { elements }) => elements.iter().for_each(|item| self.expr(&item)),
+            Expr::EmptyMap(_) => {
                 self.r#type((span.start + 1..span.end + 1).into());
             }
-            parser::Expr::Map(pairs) => pairs.iter().for_each(|(key, value)| {
+            Expr::Map(Map { pairs }) => pairs.iter().for_each(|Pair { key, value }| {
                 self.expr(&key);
                 self.expr(&value);
             }),
-            parser::Expr::Index(expr, index) => {
+            Expr::Index(Index { expr, index }) => {
                 self.expr(&expr);
                 self.expr(&index);
             }
-            parser::Expr::StructLiteral((_, name_span), fields) => {
-                self.set(tt::STRUCT, *name_span);
-                for ((_, name_span), value) in fields {
-                    self.set(tt::PROPERTY, *name_span);
+            Expr::StructLiteral(StructLiteral { name, fields }) => {
+                self.set(tt::STRUCT, name.1);
+                for FieldLiteral { name, value } in fields {
+                    self.set(tt::PROPERTY, name.1);
                     self.expr(value);
                 }
             }

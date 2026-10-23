@@ -85,13 +85,11 @@ impl File {
             return all_errors;
         };
         eprintln!("Parsing file '{}'", self.name);
-        let (maybe_parse_tree, errors) = inne::parse(&tokens, &self.source, &self.name);
+        let (maybe_ast, errors) = inne::parse(&tokens, &self.source, &self.name);
         all_errors.extend(errors);
-        let Some(parse_tree) = maybe_parse_tree else {
+        let Some(ast) = maybe_ast else {
             return all_errors;
         };
-        eprintln!("Converting parse-tree to AST for file '{}'", self.name);
-        let ast = inne::ast_from_parse_tree(&parse_tree);
         eprintln!("Converting AST to HIR for file '{}'", self.name);
         let hir = match inne::hir_from_ast(&ast) {
             Ok(hir) => hir,
@@ -246,7 +244,12 @@ impl LanguageServer for Backend {
             eprintln!("Semantic tokens: File '{}' is not open.", uri.as_str());
             return Ok(None); // TODO: file-not-open error
         };
-        Ok(extract_semantic_tokens(file))
+        Ok(extract_semantic_tokens(file).map(|data| {
+            SemanticTokensResult::Tokens(SemanticTokens {
+                result_id: None,
+                data,
+            })
+        }))
     }
 
     // TODO: async fn symbol()
