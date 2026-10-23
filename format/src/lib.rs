@@ -4,6 +4,7 @@ use indentify::*;
 use inne::{Spanned, Token, ast::*, lex, parse};
 
 // TODO: round-trip tests
+// TODO: keep comments written on the same line as a statement on the same line after formatting
 
 struct Writer<'src> {
     tokens: &'src [Spanned<Token<'src>>],
@@ -20,6 +21,9 @@ impl Writer<'_> {
 
     fn handle_source_token(&mut self, token: Spanned<Token<'_>>) -> Result {
         if let (Token::Comment(comment), _) = token {
+            if self.output.child.ends_with(|c: char| !c.is_whitespace()) {
+                self.output.write_str(" ")?;
+            }
             writeln!(self.output, "// {comment}")?;
             // TODO: Determine if an extra newline should be inserted based on the source
             //       for example, if two comments were in the input with a line in between them.
@@ -27,7 +31,7 @@ impl Writer<'_> {
         Ok(())
     }
 
-    pub fn put(&mut self, token: Token<'_>) -> Result {
+    fn skip_to(&mut self, token: Token<'_>) -> Result {
         // Semicolons and commas are not guaranteed to appear in the input.
         debug_assert_ne!(token, Token::Semi);
         debug_assert_ne!(token, Token::Comma);
@@ -42,24 +46,35 @@ impl Writer<'_> {
         for token in tokens_before {
             self.handle_source_token(*token)?;
         }
+        Ok(())
+    }
+
+    fn write(&mut self, token: Token<'_>) -> Result {
         write!(&mut self.output, "{token}")
     }
 
-    pub fn indent(&mut self) -> Result {
-        write!(&mut self.output, "{INDENT}")
+    pub fn put(&mut self, token: Token<'_>) -> Result {
+        self.skip_to(token)?;
+        self.write(token)
     }
 
-    pub fn dedent(&mut self) -> Result {
-        write!(&mut self.output, "{DEDENT}")
+    pub fn put_indent_lbrace(&mut self) -> Result {
+        self.skip_to(Token::LBrace)?;
+        write!(&mut self.output, "{INDENT}")?;
+        self.write(Token::LBrace)
+    }
+
+    pub fn put_dedent_rbrace(&mut self) -> Result {
+        self.skip_to(Token::RBrace)?;
+        write!(&mut self.output, "{DEDENT}")?;
+        self.write(Token::RBrace)
     }
 
     pub fn put_semi(&mut self) -> Result {
-        // FIXME: a comment may be placed right before a semicolon
         self.output.write_str(";")
     }
 
     pub fn put_comma(&mut self) -> Result {
-        // FIXME: a comment may be placed right before a comma
         self.output.write_str(",")
     }
 
@@ -175,15 +190,13 @@ impl Format for Block<'_> {
             f.put(Token::LBrace)?;
             return f.put(Token::RBrace);
         }
-        f.put(Token::LBrace)?;
-        f.indent()?;
+        f.put_indent_lbrace()?;
         f.put_newline()?;
         for stmt in self {
             stmt.fmt(f)?;
             f.put_newline()?;
         }
-        f.dedent()?;
-        f.put(Token::RBrace)
+        f.put_dedent_rbrace()
     }
 }
 
@@ -227,17 +240,18 @@ impl Format for Struct<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         f.put_keyword(Token::Struct)?;
         self.name.fmt(f)?;
-        f.put(Token::LBrace)?;
         if !self.fields.is_empty() {
-            f.indent()?;
+            f.put_indent_lbrace()?;
             for field in &self.fields {
                 field.fmt(f)?;
                 f.put_comma()?;
                 f.put_newline()?;
             }
-            f.dedent()?;
+            f.put_dedent_rbrace()
+        } else {
+            f.put(Token::LBrace)?;
+            f.put(Token::RBrace)
         }
-        f.put(Token::RBrace)
     }
 }
 
