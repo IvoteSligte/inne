@@ -20,8 +20,7 @@ impl Writer<'_> {
 
     fn handle_source_token(&mut self, token: Spanned<Token<'_>>) -> Result {
         if let (Token::Comment(comment), _) = token {
-            self.output.write_str(comment)?;
-            self.output.write_str("\n")?;
+            writeln!(self.output, "// {comment}")?;
             // TODO: Determine if an extra newline should be inserted based on the source
             //       for example, if two comments were in the input with a line in between them.
         }
@@ -119,6 +118,7 @@ macro_rules! delegate {
 
 impl Format for Ast<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_newline()?;
         for stmt in &self.stmts {
             stmt.fmt(f)?;
             f.put_newline()?;
@@ -135,12 +135,15 @@ impl Format for Stmt<'_> {
             Func,
             Struct,
             VarDecl,
-            Expr,
             Assign,
             If,
             For,
             While,
             Loop;
+            Expr(expr) => {
+                expr.fmt(f)?;
+                f.put_semi()
+            },
             Break(_span) => {
                 f.put(Token::Break)?;
                 f.put_semi()
@@ -174,6 +177,7 @@ impl Format for Block<'_> {
         }
         f.put(Token::LBrace)?;
         f.indent()?;
+        f.put_newline()?;
         for stmt in self {
             stmt.fmt(f)?;
             f.put_newline()?;
@@ -207,6 +211,7 @@ impl Format for Func<'_> {
             f.put(Token::Arrow)?;
             f.put_space()?;
             r#type.fmt(f)?;
+            f.put_space()?;
         }
         self.body.fmt(f)
     }
