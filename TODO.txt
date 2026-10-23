@@ -1,0 +1,21 @@
+language:
+- structs
+  - member access
+- enums
+- tuples
+- imports
+- generics
+- move semantics
+- pattern matching
+  - if var Enum(x) = expr
+  - while var Enum(x) = expr
+  - var (x, y) = expr
+  - var Enum(x) = expr else ... // low priority
+  - match                       // low priority
+
+tooling:
+- autocomplete
+- formatter
+- docstrings
+  - LSP: show docs on hover
+- standard library
