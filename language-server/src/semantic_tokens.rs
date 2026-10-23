@@ -167,6 +167,13 @@ impl Override<'_> {
                 self.expr(&expr);
                 self.expr(&index);
             }
+            parser::Expr::StructLiteral((_, name_span), fields) => {
+                self.set(tt::STRUCT, *name_span);
+                for ((_, name_span), value) in fields {
+                    self.set(tt::PROPERTY, *name_span);
+                    self.expr(value);
+                }
+            }
         }
     }
 

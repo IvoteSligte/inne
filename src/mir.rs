@@ -3,7 +3,7 @@ use std::collections::HashMap;
 pub use crate::typed_hir::{DefId, DefInfo};
 use crate::{
     Error, TypedHir, Value,
-    hir::{Errors, PRINT_DEF_ID},
+    hir::{Errors, PRINT_DEF_ID, TypeId},
     typed_hir as thir,
     util::write_comma_separated,
 };
@@ -113,6 +113,10 @@ pub enum Op {
     Index {
         expr: LocalId,
         index: LocalId,
+    },
+    Struct {
+        type_id: TypeId,
+        fields: Vec<LocalId>,
     },
     Print {
         args: Vec<LocalId>,
@@ -455,6 +459,20 @@ impl Constructor {
                 let expr = self.map_expr(&expr.0, builder);
                 let index = self.map_expr(&index.0, builder);
                 builder.push_op(Op::Index { expr, index })
+            }
+            thir::Expr::StructLiteral(thir::StructLiteral {
+                type_id,
+                name: _,
+                fields,
+            }) => {
+                let fields = fields
+                    .iter()
+                    .map(|field| self.map_expr(&field.value.0, builder))
+                    .collect();
+                builder.push_op(Op::Struct {
+                    type_id: *type_id,
+                    fields,
+                })
             }
         }
     }
@@ -824,6 +842,13 @@ impl std::fmt::Display for Stmt {
             Range { start, end } => write!(f, "Range({}, {})", start.get(), end.get()),
             IntoIter(iter) => write!(f, "IntoIter({})", iter.get()),
             Next { target, iter } => write!(f, "Next({}, {})", target.get(), iter.get()),
+            Struct { type_id, fields } => {
+                write!(f, "Struct({}", type_id.get())?;
+                for field in fields {
+                    write!(f, ", {}", field.get())?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }

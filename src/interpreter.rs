@@ -255,6 +255,13 @@ impl<'a> Interpreter<'a> {
                 (Value::Map(map), key) => map[key].clone(),
                 _ => unreachable!(),
             },
+            Op::Struct { type_id, fields } => Value::Struct {
+                type_id: *type_id,
+                fields: fields
+                    .iter()
+                    .map(|local_id| self.get_local(*local_id).clone())
+                    .collect(),
+            },
         };
         self.set_local(stmt.local_id, value);
     }

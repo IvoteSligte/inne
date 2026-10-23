@@ -104,6 +104,7 @@ pub enum Expr<'src> {
     List(Vec<Spanned<Self>>),
     EmptyMap(Spanned<Type<'src>>, Spanned<Type<'src>>),
     Map(Vec<(Spanned<Self>, Spanned<Self>)>),
+    StructLiteral(Name<'src>, Vec<(Name<'src>, Spanned<Self>)>),
     Index(Box<Spanned<Self>>, Box<Spanned<Self>>),
     Var(&'src str),
     Int(&'src str),
@@ -332,6 +333,20 @@ where
                 .map(|(key_type, value_type)| Expr::EmptyMap(key_type, value_type)))
             .map_with(with_span);
 
+        // Name { ... } can be ambiguous if a { ... } block follows, such as in an if-statement,
+        // so we assume that the parser is greedy.
+        let struct_literal = ident
+            .then(
+                ident
+                    .then_ignore(just(Token::Colon))
+                    .then(expr.clone())
+                    .separated_by(just(Token::Comma))
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map(|(name, fields)| Expr::StructLiteral(name, fields))
+            .map_with(with_span);
+
         // Unambiguous expressions
         let atom = choice((
             call,
@@ -341,6 +356,7 @@ where
             int,
             bool,
             string,
+            struct_literal,
             expr.clone()
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
         ))

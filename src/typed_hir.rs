@@ -2,8 +2,8 @@ use std::{num::IntErrorKind, ops::Deref};
 
 pub use crate::hir::{
     Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, DefId, EmptyList, EmptyMap, Expr, For,
-    Func, Hir, If, Index, List, Loop, Map, Pair, Param, Range, Stmt, Struct, Type, Unary, UnaryOp,
-    VarDecl, While,
+    Func, Hir, If, Index, List, Loop, Map, Pair, Param, Range, Stmt, Struct, StructLiteral, Type,
+    Unary, UnaryOp, VarDecl, While,
 };
 
 use crate::{
@@ -285,6 +285,34 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     self.check_expr(start);
                     self.check_expr(end);
                     Type::Range
+                }
+                Expr::StructLiteral(StructLiteral {
+                    type_id,
+                    name: _,
+                    fields,
+                }) => {
+                    let r#struct = &self.types[type_id.get()];
+
+                    // NOTE: this assumes that the field and struct field have been matched in HIR
+                    //       (which may not be true if error recovery is used)
+                    for (field, struct_field) in std::iter::zip(fields, &r#struct.fields) {
+                        let (value_type, _) = self.check_expr(&field.value);
+                        if types_not_equal(&value_type, &struct_field.r#type.0) {
+                            self.errors.add(
+                                format!(
+                                    "The field '{}' has type '{}', but the provided value has type '{}'",
+                                    struct_field.name.0,
+                                    struct_field.r#type.0,
+                                    value_type,
+                                ),
+                                field.value.1,
+                            );
+                        }
+                    }
+                    Type::Named {
+                        id: *type_id,
+                        generics: Vec::new(), // NOTE: currently, structs do not have generics
+                    }
                 }
             },
             false,

@@ -175,6 +175,7 @@ pub enum Expr<'a> {
     List(List<'a>),
     EmptyMap(EmptyMap),
     Map(Map<'a>),
+    StructLiteral(StructLiteral<'a>),
     Index(Index<'a>),
     Range(Range<'a>),
     Var(DefId),
@@ -214,6 +215,18 @@ pub struct EmptyMap {
 
 pub struct Map<'a> {
     pub pairs: Vec<Pair<'a>>,
+}
+
+pub struct StructLiteral<'a> {
+    pub type_id: TypeId,
+    pub name: Name<'a>,
+    /// Fields are in the same order as in the struct definition.
+    pub fields: Vec<FieldLiteral<'a>>,
+}
+
+pub struct FieldLiteral<'a> {
+    pub name: Name<'a>,
+    pub value: Spanned<Expr<'a>>,
 }
 
 pub struct Pair<'a> {
@@ -345,7 +358,7 @@ struct Constructor<'a> {
     types: Vec<Struct<'a>>,
     // TODO: separate VarId and FuncId
     func_map: HashMap<&'a str, DefId>,
-    type_map: HashMap<&'a str, (TypeId, Span)>,
+    type_map: HashMap<&'a str, (TypeId, &'a ast::Struct<'a>)>,
     scopes: Vec<HashMap<&'a str, DefId>>,
     errors: Errors,
 }
@@ -383,7 +396,7 @@ impl<'a> Constructor<'a> {
                     let name = r#struct.name;
                     // TODO: error if user defines type with same name as builtin
                     //       (unlikely because user-defined types should be PascalCase by convention)
-                    if let Some(&(_, prev_type_span)) = _self.type_map.get(name.0) {
+                    if let Some(&(_, prev_type_ast)) = _self.type_map.get(name.0) {
                         _self.errors.add_with_context(
                             format!(
                                 "Type '{}' was already defined. Types must have unique names.",
@@ -391,11 +404,11 @@ impl<'a> Constructor<'a> {
                             ),
                             name.1,
                             "Previously defined here:",
-                            prev_type_span,
+                            prev_type_ast.name.1,
                         );
                     } else {
                         let id = TypeId(_self.type_map.len());
-                        _self.type_map.insert(name.0, (id, name.1));
+                        _self.type_map.insert(name.0, (id, r#struct));
                     }
                 }
                 _ => {}
@@ -659,6 +672,71 @@ impl<'a> Constructor<'a> {
                         })
                         .collect(),
                 }),
+                ast::Expr::StructLiteral(ast::StructLiteral { name, fields }) => {
+                    let mut fields = fields
+                        .iter()
+                        .map(|ast::FieldLiteral { name, value }| FieldLiteral {
+                            name: *name,
+                            value: self.map_expr(value),
+                        })
+                        .collect::<Vec<_>>();
+                    for (i, field) in fields.iter().enumerate() {
+                        for other_field in &fields[i + 1..] {
+                            if field.name.0 == other_field.name.0 {
+                                self.errors.add_with_context(
+                                    format!("Field '{}' was already set", field.name.0),
+                                    field.name.1,
+                                    "Previously set here:",
+                                    other_field.name.1,
+                                );
+                            }
+                        }
+                    }
+                    let type_id = match self.type_map.get(name.0) {
+                        Some((type_id, type_ast)) => {
+                            for type_field in &type_ast.fields {
+                                if !fields
+                                    .iter()
+                                    .find(|field| field.name.0 == type_field.name.0)
+                                    .is_some()
+                                {
+                                    self.errors.add(
+                                        format!("Missing field '{}'", type_field.name.0),
+                                        name.1,
+                                    );
+                                }
+                            }
+                            fields.sort_by_cached_key(|field| {
+                                match type_ast
+                                    .fields
+                                    .iter()
+                                    .position(|type_field| field.name.0 == type_field.name.0)
+                                {
+                                    Some(index) => index,
+                                    None => {
+                                        self.errors.add(
+                                            format!("Unknown field '{}'", field.name.0),
+                                            field.name.1,
+                                        );
+                                        usize::MAX
+                                    }
+                                }
+                            });
+                            *type_id
+                        }
+                        None => {
+                            // TODO: add similar names as contexts
+                            self.errors
+                                .add(format!("Unknown type '{}'", name.0), name.1);
+                            TypeId::UNKNOWN
+                        }
+                    };
+                    Expr::StructLiteral(StructLiteral {
+                        type_id: type_id,
+                        name: *name,
+                        fields,
+                    })
+                }
                 ast::Expr::Index(ast::Index { expr, index }) => Expr::Index(Index {
                     expr: Box::new(self.map_expr(expr)),
                     index: Box::new(self.map_expr(index)),
@@ -935,6 +1013,16 @@ impl<'a> std::fmt::Display for Expr<'a> {
             Expr::Int(int) => write!(f, "{int}")?,
             Expr::Bool(bool) => write!(f, "{bool}")?,
             Expr::String(string) => write!(f, "{string:?}")?,
+            Expr::StructLiteral(StructLiteral {
+                type_id,
+                name,
+                fields,
+            }) => {
+                write!(f, "_{} {} ", type_id.get(), name.0)?;
+                f.write_str("{")?;
+                write_comma_separated(f, fields.iter())?;
+                f.write_str("}")?;
+            }
         }
         Ok(())
     }
@@ -943,6 +1031,14 @@ impl<'a> std::fmt::Display for Expr<'a> {
 impl std::fmt::Display for Pair<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.key.0.fmt(f)?;
+        f.write_str(": ")?;
+        self.value.0.fmt(f)
+    }
+}
+
+impl std::fmt::Display for FieldLiteral<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.name.0.fmt(f)?;
         f.write_str(": ")?;
         self.value.0.fmt(f)
     }

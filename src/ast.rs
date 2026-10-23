@@ -59,6 +59,7 @@ pub enum Expr<'a> {
     List(List<'a>),
     EmptyMap(EmptyMap<'a>),
     Map(Map<'a>),
+    StructLiteral(StructLiteral<'a>),
     Index(Index<'a>),
     Range(Range<'a>),
     Var(&'a str),
@@ -102,6 +103,16 @@ pub struct Map<'a> {
 
 pub struct Pair<'a> {
     pub key: Spanned<Expr<'a>>,
+    pub value: Spanned<Expr<'a>>,
+}
+
+pub struct StructLiteral<'a> {
+    pub name: Name<'a>,
+    pub fields: Vec<FieldLiteral<'a>>,
+}
+
+pub struct FieldLiteral<'a> {
+    pub name: Name<'a>,
     pub value: Spanned<Expr<'a>>,
 }
 
@@ -180,6 +191,13 @@ fn map_expr<'a>((expr, span): &Spanned<parser::Expr<'a>>) -> Spanned<Expr<'a>> {
             parser::Expr::Map(pairs) => Expr::Map(Map {
                 pairs: map_to_vec(pairs, |(key, value)| Pair {
                     key: map_expr(key),
+                    value: map_expr(value),
+                }),
+            }),
+            parser::Expr::StructLiteral(name, fields) => Expr::StructLiteral(StructLiteral {
+                name: *name,
+                fields: map_to_vec(fields, |(name, value)| FieldLiteral {
+                    name: *name,
                     value: map_expr(value),
                 }),
             }),
