@@ -16,7 +16,6 @@ language:
 
 tooling:
 - autocomplete
-- formatter
 - docstrings
   - LSP: show docs on hover
 - standard library
