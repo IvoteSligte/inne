@@ -294,6 +294,7 @@ impl Format for Expr<'_> {
             Int(int) => f.put(Token::Int(int)),
             Bool(bool) => f.put(Token::Bool(*bool)),
             String(string) => f.put(Token::String(string)),
+            Char(char) => f.put(Token::Char(char)),
         )
     }
 }

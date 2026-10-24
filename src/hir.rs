@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, num::IntErrorKind};
 
-use crate::{Error, Span, Spanned, ast, usize_newtype, util::write_comma_separated};
+use crate::{Error, Span, Spanned, ast, usize_newtype, util::write_comma_separated, value::Int};
 
 pub use crate::ast::{AssignOp, BinaryOp, Name, UnaryOp};
 
@@ -158,8 +158,9 @@ pub enum Expr<'a> {
     Member(Member<'a>),
     Range(Range<'a>),
     Var(VarId),
-    Int(&'a str),
+    Int(Int),
     Bool(bool),
+    Char(char),
     String(&'a str),
 }
 
@@ -750,8 +751,9 @@ impl<'a> Constructor<'a> {
                         }
                     }
                 }
-                ast::Expr::Int(int) => Expr::Int(int),
+                ast::Expr::Int(s) => Expr::Int(self.parse_int((*s, *span))),
                 ast::Expr::Bool(bool) => Expr::Bool(*bool),
+                ast::Expr::Char(s) => Expr::Char(self.parse_char((*s, *span))),
                 ast::Expr::String(string) => Expr::String(string),
                 ast::Expr::Range(ast::Range { start, end }) => Expr::Range(Range {
                     start: Box::new(self.map_expr(start)),
@@ -830,6 +832,41 @@ impl<'a> Constructor<'a> {
             }
         };
         (r#type, *span)
+    }
+
+    fn parse_int(&mut self, (input, span): Spanned<&str>) -> Int {
+        let err = match input.parse() {
+            Ok(int) => return int,
+            Err(err) => err,
+        };
+        let message = match err.kind() {
+            IntErrorKind::Empty => unreachable!("Empty integers should be impossible."),
+            IntErrorKind::Zero => unreachable!("Zeroes should be allowed."),
+            IntErrorKind::InvalidDigit => format!(
+                "not a decimal digit: '{}'",
+                input.chars().find(|c| !c.is_digit(10)).unwrap()
+            ),
+            IntErrorKind::PosOverflow => {
+                format!("integer value may not be greater than {}", Int::MAX)
+            }
+            IntErrorKind::NegOverflow => {
+                format!("integer value may not be smaller than {}", Int::MIN)
+            }
+            _ => unimplemented!(),
+        };
+        self.errors.add(message, span);
+        0 // Default value
+    }
+
+    fn parse_char(&mut self, (input, span): Spanned<&str>) -> char {
+        match input.parse() {
+            Ok(char) => char,
+            Err(_) => {
+                self.errors
+                    .add(format!("Invalid character '{input:?}'"), span);
+                '?' // Default value
+            }
+        }
     }
 }
 
@@ -1010,6 +1047,7 @@ impl<'a> std::fmt::Display for Expr<'a> {
             Expr::Int(int) => write!(f, "{int}")?,
             Expr::Bool(bool) => write!(f, "{bool}")?,
             Expr::String(string) => write!(f, "{string:?}")?,
+            Expr::Char(char) => write!(f, "{char:?}")?,
             Expr::StructLiteral(StructLiteral {
                 type_id,
                 name,

@@ -72,6 +72,7 @@ pub enum Expr<'a> {
     Var(&'a str),
     Int(&'a str),
     Bool(bool),
+    Char(&'a str),
     String(&'a str),
 }
 

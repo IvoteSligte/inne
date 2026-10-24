@@ -1,4 +1,4 @@
-use std::{num::IntErrorKind, ops::Deref};
+use std::ops::Deref;
 
 pub use crate::hir::{
     Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, EmptyList, EmptyMap, Expr, For, Func,
@@ -6,7 +6,7 @@ pub use crate::hir::{
     StructLiteral, Type, TypeId, Unary, UnaryOp, VarDecl, VarId, While,
 };
 
-use crate::{Error, Span, Spanned, hir::Errors, value::Int};
+use crate::{Error, Span, Spanned, hir::Errors};
 
 // NOTE: The HIR only needs to be edited to set Member.member_index,
 //       but maybe in the future a whole transformation is better?
@@ -295,12 +295,10 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     return (self.check_member((member, *span)), true);
                 }
                 Expr::Var(var_id) => return (self.vars[var_id.get()].r#type.clone(), true),
-                Expr::Int(int) => {
-                    self.check_int((int, *span));
-                    Type::Int
-                }
+                Expr::Int(_) => Type::Int,
                 Expr::Bool(_) => Type::Bool,
                 Expr::String(_) => Type::String,
+                Expr::Char(_) => Type::Char,
                 Expr::Range(Range { start, end }) => {
                     self.check_expr(start);
                     self.check_expr(end);
@@ -632,28 +630,6 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 Type::UNKNOWN
             }
         }
-    }
-
-    fn check_int(&mut self, (int, span): Spanned<&str>) {
-        let Err(err) = int.parse::<Int>() else {
-            return;
-        };
-        let message = match err.kind() {
-            IntErrorKind::Empty => unreachable!("Empty integers should be impossible."),
-            IntErrorKind::Zero => unreachable!("Zeroes should be allowed."),
-            IntErrorKind::InvalidDigit => format!(
-                "not a decimal digit: '{}'",
-                int.chars().find(|c| !c.is_digit(10)).unwrap()
-            ),
-            IntErrorKind::PosOverflow => {
-                format!("integer value may not be greater than {}", Int::MAX)
-            }
-            IntErrorKind::NegOverflow => {
-                format!("integer value may not be smaller than {}", Int::MIN)
-            }
-            _ => unimplemented!(),
-        };
-        self.errors.add(message, span);
     }
 
     fn check_type(&mut self, (r#type, span): &Spanned<Type>) {

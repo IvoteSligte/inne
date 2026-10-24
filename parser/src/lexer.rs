@@ -28,6 +28,7 @@ pub enum Token<'src> {
     Ident(&'src str),
     Int(&'src str),
     Bool(bool),
+    Char(&'src str),
     String(&'src str),
     // TODO: change Op("<") and Op(">") to explicit Delimiter tokens
     Op(&'src str),
@@ -79,6 +80,8 @@ impl std::fmt::Display for Token<'_> {
             Ident(ident) => ident,
             Bool(bool) => return write!(f, "{bool}"),
             Int(int) => int,
+            // NOTE: does this escape backslashes? since the input may contain \n, we should not escape backslashes.
+            Char(char) => return write!(f, "{char:?}"),
             // NOTE: does this escape backslashes? since the input may contain \n, we should not escape backslashes.
             String(string) => return write!(f, "{string:?}"),
             Op(op) => op,
@@ -133,6 +136,11 @@ pub fn create_lexer<'src>()
         .repeated()
         .to_slice()
         .delimited_by(just('"'), just('"'));
+    let char = none_of("\\\'")
+        .ignored()
+        .or(escape)
+        .to_slice()
+        .delimited_by(just('\''), just('\''));
 
     let operator = choice((
         text::ascii::keyword("and"),
@@ -204,6 +212,7 @@ pub fn create_lexer<'src>()
         operator,
         text::ident().map(Ident),
         text::int(10).map(Int),
+        char.map(Char),
         string.map(String),
     ))
     .map_with(|token, e| (token, e.span()))

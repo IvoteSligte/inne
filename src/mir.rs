@@ -446,11 +446,12 @@ impl Constructor {
                 }
             }
             thir::Expr::Var(var_id) => builder.get_local(*var_id),
-            thir::Expr::Int(int) => builder.push_constant(Value::Int(int.parse().unwrap())),
+            thir::Expr::Int(int) => builder.push_constant(Value::Int(*int)),
             thir::Expr::Bool(bool) => builder.push_constant(Value::Bool(*bool)),
             thir::Expr::String(string) => {
                 builder.push_constant(Value::new_string(string.chars().collect()))
             }
+            thir::Expr::Char(char) => builder.push_constant(Value::Char(*char)),
             thir::Expr::Range(thir::Range { start, end }) => {
                 let start = self.map_expr(&start.0, builder);
                 let end = self.map_expr(&end.0, builder);

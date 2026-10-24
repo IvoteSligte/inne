@@ -217,6 +217,7 @@ where
     let var = select! { Token::Ident(ident) => Expr::Var(ident) }.map_with(with_span);
     let int = select! { Token::Int(int) => Expr::Int(int) }.map_with(with_span);
     let bool = select! { Token::Bool(bool) => Expr::Bool(bool) }.map_with(with_span);
+    let char = select! { Token::Char(char) => Expr::Char(char) }.map_with(with_span);
     let string = select! { Token::String(string) => Expr::String(string) }.map_with(with_span);
     let r#type = type_parser();
 
@@ -303,6 +304,7 @@ where
             var,
             int,
             bool,
+            char,
             string,
             struct_literal,
             expr.clone()

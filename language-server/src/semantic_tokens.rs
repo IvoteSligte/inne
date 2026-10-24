@@ -22,9 +22,8 @@ pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
     let mut semantic_tokens = BTreeMap::from_iter(tokens.iter().filter_map(|(token, span)| {
         let token_type = match token {
             Token::Ident(_) => tt::VARIABLE, // default for identifiers
-            Token::Int(_) => tt::NUMBER,
-            Token::Bool(_) => tt::NUMBER,
-            Token::String(_) => tt::STRING,
+            Token::Int(_) | Token::Bool(_) => tt::NUMBER,
+            Token::String(_) | Token::Char(_) => tt::STRING,
             Token::Op("and") | Token::Op("or") | Token::Op("not") => tt::KEYWORD,
             Token::Op(_) => tt::OPERATOR,
             Token::Comment(_) => tt::COMMENT,
@@ -160,6 +159,7 @@ impl Override<'_> {
             Expr::Int(_) => {}
             Expr::Bool(_) => {}
             Expr::String(_) => {}
+            Expr::Char(_) => {}
             Expr::Range(Range { start, end }) => {
                 self.expr(&start);
                 self.expr(&end);
