@@ -1,7 +1,5 @@
 language:
-- structs
-  - member access
-  - methods // low priority
+- methods // low priority
 - enums
 - tuples
 - imports

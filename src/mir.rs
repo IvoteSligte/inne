@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-pub use crate::typed_hir::{FuncId, TypeId, VarId, VarInfo};
+pub use crate::typed_hir::{FuncId, Struct, TypeId, VarId, VarInfo};
 use crate::{
     Error, TypedHir, Value,
     hir::Errors,
@@ -19,11 +19,19 @@ use crate::{
 // TODO: print(...) without trailing newline
 
 pub struct Mir<'a> {
+    pub types: Vec<TypeInfo<'a>>,
     pub funcs: Vec<Func<'a>>,
     /// Stack space (in number of values) used by the global scope.
     pub stack_space: usize,
     /// Basic blocks in the global scope.
     pub blocks: Vec<Block>,
+}
+
+pub enum TypeInfo<'a> {
+    Struct {
+        name: &'a str,
+        field_names: Vec<&'a str>,
+    },
 }
 
 usize_newtype!(BlockId);
@@ -175,6 +183,14 @@ impl Constructor {
             return Err(_self.errors.into_inner());
         }
         Ok(Mir {
+            types: typed_hir
+                .types
+                .iter()
+                .map(|r#struct| TypeInfo::Struct {
+                    name: r#struct.name.0,
+                    field_names: r#struct.fields.iter().map(|field| field.name.0).collect(),
+                })
+                .collect(),
             funcs,
             stack_space: main_func.stack_space,
             blocks: main_func.blocks,

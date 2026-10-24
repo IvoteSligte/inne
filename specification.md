@@ -140,6 +140,12 @@ The syntax follows Rust's, but uses the `func` keyword instead of `fn`.
 
 Explicit returns (with the `return` keyword) are mandatory.
 
+### Built-in Functions
+
+#### Print
+
+`print(...)` takes any number of arguments of any (mix of) types and prints them with a space in between and followed by a newline.
+
 ## Operators
 
 Boolean operators: `and`, `or`, `not`

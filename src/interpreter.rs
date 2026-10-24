@@ -1,12 +1,13 @@
 use crate::{
     Mir, Value,
     mir::*,
-    value::{Int, ListPointer, Pointer, Struct, create_pointer},
+    value::{self, Int, ListPointer, Pointer, create_pointer},
 };
 
 use std::mem::discriminant;
 
 pub struct Interpreter<'a> {
+    types: &'a [TypeInfo<'a>],
     funcs: &'a [Func<'a>],
     stack: Vec<Value>,
     frame_start: usize,
@@ -16,6 +17,7 @@ pub struct Interpreter<'a> {
 impl<'a> Interpreter<'a> {
     pub fn run(mir: &'a Mir<'a>) {
         let mut _self = Self {
+            types: &mir.types,
             funcs: &mir.funcs,
             stack: Vec::with_capacity(1000),
             frame_start: 0,
@@ -201,7 +203,7 @@ impl<'a> Interpreter<'a> {
                     if i > 0 {
                         print!(" ");
                     }
-                    self.get_local(*arg_id).print();
+                    self.print(self.get_local(*arg_id));
                 }
                 println!();
                 Value::Nothing
@@ -275,7 +277,7 @@ impl<'a> Interpreter<'a> {
                 (Value::Map(ptr), key) => ptr.borrow()[key].clone(),
                 _ => unreachable!(),
             },
-            Op::Struct { type_id, fields } => Value::Struct(create_pointer(Struct {
+            Op::Struct { type_id, fields } => Value::Struct(create_pointer(value::Struct {
                 type_id: *type_id,
                 fields: fields
                     .iter()
@@ -351,13 +353,64 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn deepcopy_list(&self, list: &ListPointer) -> ListPointer {
-        create_pointer(
-            (*list.borrow())
-                .iter()
-                .map(|element| self.deepcopy(element))
-                .collect(),
-        )
+    pub fn print(&self, value: &Value) {
+        match value {
+            Value::Nothing => print!("Nothing"),
+            Value::Int(int) => print!("{}", int),
+            Value::Bool(bool) => print!("{}", bool),
+            Value::String(ptr) => {
+                for char in ptr.borrow().as_slice() {
+                    print!("{}", char);
+                }
+            }
+            Value::Char(char) => print!("{char}"),
+            Value::List(ptr) => {
+                let list = ptr.borrow();
+                print!("[");
+                for (i, elem) in list.iter().enumerate() {
+                    if i > 0 {
+                        print!(", ");
+                    }
+                    self.print(elem);
+                }
+                print!("]");
+            }
+            Value::Map(ptr) => {
+                let map = ptr.borrow();
+                print!("{{");
+                for (i, (key, value)) in map.iter().enumerate() {
+                    if i > 0 {
+                        print!(", ");
+                    }
+                    self.print(key);
+                    print!(": ");
+                    self.print(value);
+                }
+                print!("}}");
+            }
+            Value::Struct(ptr) => {
+                let r#struct = ptr.borrow();
+                let (struct_name, field_names) = match &self.types[r#struct.type_id.get()] {
+                    TypeInfo::Struct { name, field_names } => (name, field_names),
+                };
+                debug_assert_eq!(field_names.len(), r#struct.fields.len());
+                print!("{} {{", struct_name);
+                for (i, (name, value)) in std::iter::zip(field_names, &r#struct.fields).enumerate()
+                {
+                    if i > 0 {
+                        print!(", ");
+                    }
+                    print!("{name}: ");
+                    self.print(value);
+                }
+                print!("}}");
+            }
+            // Ranges currently cannot be used as values, only as for-loop iterator and in slicing operations.
+            Value::Range { .. } => unreachable!(),
+            // Pointer and ListIter are currently not items accessible to the user, so they should never be printed.
+            Value::Pointer(_) => unimplemented!(),
+            Value::ListIter { .. } => unimplemented!(),
+        }
     }
 
     fn deepcopy(&self, value: &Value) -> Value {
@@ -384,7 +437,7 @@ impl<'a> Interpreter<'a> {
             },
             Value::Struct(ptr) => {
                 let r#struct = ptr.borrow();
-                Value::Struct(create_pointer(Struct {
+                Value::Struct(create_pointer(value::Struct {
                     type_id: r#struct.type_id,
                     fields: r#struct
                         .fields
@@ -395,6 +448,15 @@ impl<'a> Interpreter<'a> {
             }
             Value::Pointer(ptr) => self.deepcopy_pointer(ptr),
         }
+    }
+
+    fn deepcopy_list(&self, list: &ListPointer) -> ListPointer {
+        create_pointer(
+            (*list.borrow())
+                .iter()
+                .map(|element| self.deepcopy(element))
+                .collect(),
+        )
     }
 
     fn deepcopy_pointer(&self, pointer: &Pointer) -> Value {
