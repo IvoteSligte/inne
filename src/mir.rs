@@ -296,6 +296,7 @@ impl Constructor {
                         builder.jump_to(end_block_id);
                     }
                 }
+                // TODO: warn about modifying a collection that is being iterated over
                 thir::Stmt::For(thir::For {
                     iter,
                     body,
