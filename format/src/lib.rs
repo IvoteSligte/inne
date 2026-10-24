@@ -288,6 +288,7 @@ impl Format for Expr<'_> {
             Map,
             StructLiteral,
             Index,
+            Member,
             Range;
             Var(var) => f.put(Token::Ident(var)),
             Int(int) => f.put(Token::Int(int)),
@@ -454,7 +455,7 @@ impl Format for Index<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         let needs_parens = matches!(
             self.expr.0,
-            Expr::Binary(_) | Expr::Unary(_) | Expr::Range(_)
+            Expr::Binary(_) | Expr::Unary(_) | Expr::Range(_),
         );
         if needs_parens {
             f.put(Token::LParen)?;
@@ -466,6 +467,24 @@ impl Format for Index<'_> {
         f.put(Token::LBracket)?;
         self.index.fmt(f)?;
         f.put(Token::RBracket)
+    }
+}
+
+impl Format for Member<'_> {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        let needs_parens = matches!(
+            self.expr.0,
+            Expr::Binary(_) | Expr::Unary(_) | Expr::Range(_),
+        );
+        if needs_parens {
+            f.put(Token::LParen)?;
+        }
+        self.expr.fmt(f)?;
+        if needs_parens {
+            f.put(Token::RParen)?;
+        }
+        f.put(Token::Dot)?;
+        self.member.fmt(f)
     }
 }
 

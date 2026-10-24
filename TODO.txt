@@ -1,12 +1,13 @@
 language:
 - structs
   - member access
+  - methods // low priority
 - enums
 - tuples
 - imports
 - generics
 - move semantics
-- pattern matching
+- pattern matching/destructuring
   - if var Enum(x) = expr
   - while var Enum(x) = expr
   - var (x, y) = expr

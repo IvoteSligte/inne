@@ -66,6 +66,7 @@ pub enum Expr<'a> {
     EmptyMap(EmptyMap<'a>),
     Map(Map<'a>),
     StructLiteral(StructLiteral<'a>),
+    Member(Member<'a>),
     Index(Index<'a>),
     Range(Range<'a>),
     Var(&'a str),
@@ -144,6 +145,11 @@ pub struct StructLiteral<'a> {
 pub struct FieldLiteral<'a> {
     pub name: Name<'a>,
     pub value: Spanned<Expr<'a>>,
+}
+
+pub struct Member<'a> {
+    pub expr: Box<Spanned<Expr<'a>>>,
+    pub member: Name<'a>,
 }
 
 pub struct Index<'a> {

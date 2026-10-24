@@ -184,6 +184,10 @@ impl Override<'_> {
                     self.expr(value);
                 }
             }
+            Expr::Member(Member { expr, member }) => {
+                self.expr(expr);
+                self.set(tt::PROPERTY, member.1);
+            }
         }
     }
 

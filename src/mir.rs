@@ -2,8 +2,11 @@ use std::collections::HashMap;
 
 pub use crate::typed_hir::{FuncId, TypeId, VarId, VarInfo};
 use crate::{
-    Error, TypedHir, Value, hir::Errors, typed_hir as thir, usize_newtype,
+    Error, TypedHir, Value,
+    hir::Errors,
+    typed_hir as thir, usize_newtype,
     util::write_comma_separated,
+    value::{self, create_pointer},
 };
 
 // TODO: reachability analysis
@@ -64,10 +67,21 @@ pub enum Branch {
 #[derive(Debug, Clone)]
 pub enum Op {
     Assign {
+        /// Must be a pointer.
         target: LocalId,
         value: LocalId,
-        index: Option<LocalId>,
     },
+    PointToLocal(LocalId),
+    PointToIndex {
+        collection: LocalId,
+        index: LocalId,
+    },
+    PointToField {
+        r#struct: LocalId,
+        field_index: usize,
+    },
+    /// Takes a pointer and makes a copy of the underlying object.
+    Copy(LocalId),
     Add(Binary),
     Sub(Binary),
     Mul(Binary),
@@ -97,6 +111,10 @@ pub enum Op {
     Struct {
         type_id: TypeId,
         fields: Vec<LocalId>,
+    },
+    Member {
+        expr: LocalId,
+        field_index: usize,
     },
     Print {
         args: Vec<LocalId>,
@@ -195,12 +213,29 @@ impl Constructor {
                     self.map_expr(&expr.0, builder);
                 }
                 thir::Stmt::Assign(thir::Assign { op, target, value }) => {
-                    let (target_id, index_id) = match &target.0 {
-                        thir::Expr::Var(var_id) => (builder.get_local(*var_id), None),
+                    // FIXME: just use a pointer to the assignment target
+
+                    let target_id = match &target.0 {
+                        thir::Expr::Var(var_id) => {
+                            let target = builder.get_local(*var_id);
+                            builder.push_op(Op::PointToLocal(target))
+                        }
                         thir::Expr::Index(thir::Index { expr, index }) => {
                             let expr_id = self.map_expr(&expr.0, builder);
                             let index_id = self.map_expr(&index.0, builder);
-                            (expr_id, Some(index_id))
+                            builder.push_op(Op::PointToIndex {
+                                collection: expr_id,
+                                index: index_id,
+                            })
+                        }
+                        thir::Expr::Member(thir::Member {
+                            expr, field_index, ..
+                        }) => {
+                            let expr_id = self.map_expr(&expr.0, builder);
+                            builder.push_op(Op::PointToField {
+                                r#struct: expr_id,
+                                field_index: *field_index,
+                            })
                         }
                         _ => unreachable!(),
                     };
@@ -210,7 +245,7 @@ impl Constructor {
                     if op.0 != Assign {
                         // Rewrite statements such as `x += 1` to `x = x + 1`
                         let args = Binary {
-                            left: target_id,
+                            left: builder.push_op(Op::Copy(target_id)),
                             right: value_id,
                         };
                         let op = match op.0 {
@@ -226,7 +261,6 @@ impl Constructor {
                     builder.push_op(Op::Assign {
                         target: target_id,
                         value: value_id,
-                        index: index_id,
                     });
                 }
                 thir::Stmt::If(thir::If { choices, r#else }) => {
@@ -327,11 +361,11 @@ impl Constructor {
                 },
                 thir::Stmt::Return((value, _)) => {
                     if let Some(value) = value {
+                        let target_id = builder.push_op(Op::PointToLocal(LocalId::RETURN_VALUE));
                         let value_id = self.map_expr(&value.0, builder);
                         builder.push_op(Op::Assign {
-                            target: LocalId::RETURN_VALUE,
+                            target: target_id,
                             value: value_id,
-                            index: None,
                         });
                     }
                     builder.finish_block(Branch::Return);
@@ -401,7 +435,7 @@ impl Constructor {
             thir::Expr::Int(int) => builder.push_constant(Value::Int(int.parse().unwrap())),
             thir::Expr::Bool(bool) => builder.push_constant(Value::Bool(*bool)),
             thir::Expr::String(string) => {
-                builder.push_constant(Value::String(string.chars().collect()))
+                builder.push_constant(Value::String(create_pointer(string.chars().collect())))
             }
             thir::Expr::Range(thir::Range { start, end }) => {
                 let start = self.map_expr(&start.0, builder);
@@ -444,6 +478,18 @@ impl Constructor {
                 builder.push_op(Op::Struct {
                     type_id: *type_id,
                     fields,
+                })
+            }
+            thir::Expr::Member(thir::Member {
+                type_id: _,
+                field_index: member_index,
+                expr,
+                member: _,
+            }) => {
+                let expr_id = self.map_expr(&expr.0, builder);
+                builder.push_op(Op::Member {
+                    expr: expr_id,
+                    field_index: *member_index,
                 })
             }
         }
@@ -632,23 +678,25 @@ impl std::fmt::Display for Value {
             Value::Nothing => f.write_str("Nothing"),
             Value::Int(int) => write!(f, "{int}"),
             Value::Bool(bool) => write!(f, "{bool}"),
-            Value::String(chars) => {
+            Value::String(ptr) => {
                 f.write_str("\"")?;
-                chars
+                ptr.borrow()
                     .iter()
                     .map(|c| write!(f, "{c}"))
                     .collect::<std::fmt::Result>()?;
                 f.write_str("\"")
             }
             Value::Char(char) => write!(f, "{char:?}"),
-            Value::List(elements) => {
+            Value::List(ptr) => {
+                let list = ptr.borrow();
                 f.write_str("[")?;
-                write_comma_separated(f, elements)?;
+                write_comma_separated(f, list.iter())?;
                 f.write_str("]")
             }
-            Value::Map(pairs) => {
+            Value::Map(ptr) => {
+                let map = ptr.borrow();
                 f.write_str("{")?;
-                for (i, pair) in pairs.into_iter().enumerate() {
+                for (i, pair) in map.iter().enumerate() {
                     if i > 0 {
                         f.write_str(", ")?;
                     }
@@ -659,16 +707,51 @@ impl std::fmt::Display for Value {
                 f.write_str("}")
             }
             Value::Range { start, end } => write!(f, "{start}..{end}"),
-            Value::Struct { type_id, fields } => {
-                write!(f, "{}", type_id.get())?;
+            Value::Struct(ptr) => {
+                let r#struct = ptr.borrow();
+                write!(f, "{}", r#struct.type_id.get())?;
                 f.write_str("{")?;
-                for (i, value) in fields.into_iter().enumerate() {
+                for (i, value) in r#struct.fields.iter().enumerate() {
                     if i > 0 {
                         f.write_str(", ")?;
                     }
                     value.fmt(f)?;
                 }
                 f.write_str("}")
+            }
+            // Pointers and ListIters are currently not used as constants so this should be unreachable.
+            Value::Pointer(_) => unimplemented!(),
+            Value::ListIter { .. } => unimplemented!(),
+        }
+    }
+}
+
+impl std::fmt::Display for value::Pointer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            value::Pointer::Local(local_id) => {
+                write!(f, "LocalPtr(_{local_id})")
+            }
+            value::Pointer::Field {
+                r#struct,
+                field_index,
+            } => {
+                write!(f, "FieldPtr({:p}, {})", r#struct.as_ptr(), field_index)
+            }
+            value::Pointer::Slice { list, start, end } => {
+                write!(f, "Slice({:p}, {}, {})", list.as_ptr(), start, end)
+            }
+            value::Pointer::ListIndex { list, index } => {
+                write!(f, "ListIndex({:p}, {})", list.as_ptr(), index)
+            }
+            value::Pointer::MapValue { map, key } => {
+                write!(f, "MapValue({:p}, {})", map.as_ptr(), key)
+            }
+            value::Pointer::StringSlice { string, start, end } => {
+                write!(f, "StringSlice({:p}, {}, {})", string.as_ptr(), start, end)
+            }
+            value::Pointer::StringIndex { string, index } => {
+                write!(f, "StringIndex({:p}, {})", string.as_ptr(), index)
             }
         }
     }
@@ -736,12 +819,12 @@ fn write_tuple(elements: &[LocalId], f: &mut std::fmt::Formatter<'_>) -> std::fm
 impl std::fmt::Display for Stmt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self { local_id, op } = self;
-        write!(f, "var _{} = {op:?}", local_id)?;
+        write!(f, "var _{} = ", local_id)?;
         use Op::*;
         match op {
-            Constant(value) => write!(f, "<{}>", value),
+            Constant(value) => write!(f, "Constant({})", value),
             Call { func_id, args } => {
-                write!(f, "<{:?}>", func_id)?;
+                write!(f, "Call<{:?}>", func_id)?;
                 write_tuple(args, f)
             }
             List(elements) => {
@@ -755,32 +838,19 @@ impl std::fmt::Display for Stmt {
                     if i > 0 {
                         f.write_str(", ")?;
                     }
-                    pair.key.0.fmt(f)?;
-                    f.write_str(": ")?;
-                    pair.value.0.fmt(f)?;
+                    write!(f, "_{}: _{}", pair.key.0, pair.value.0)?;
                 }
                 f.write_str(")")
             }
             Index { expr, index } => {
-                write!(f, "Index({}, {})", expr, index)
+                write!(f, "Index(_{}, _{})", expr, index)
             }
             Print { args } => {
                 write!(f, "Print")?;
                 write_tuple(args, f)
             }
-            Assign {
-                target,
-                value,
-                index: None,
-            } => {
-                write!(f, "Assign({}, {})", target, value)
-            }
-            Assign {
-                target,
-                value,
-                index: Some(index),
-            } => {
-                write!(f, "AssignIndex({}, {}, {})", target, value, index)
+            Assign { target, value } => {
+                write!(f, "Assign(_{}, _{})", target, value)
             }
             Add(binary) | Sub(binary) | Mul(binary) | Div(binary) | Mod(binary) | Eq(binary)
             | Neq(binary) | Lt(binary) | Leq(binary) | Gt(binary) | Geq(binary) | And(binary)
@@ -801,20 +871,30 @@ impl std::fmt::Display for Stmt {
                     Or(_) => "Or",
                     _ => unreachable!(),
                 };
-                write!(f, "{}({}, {})", name, binary.left, binary.right)
+                write!(f, "{}(_{}, _{})", name, binary.left, binary.right)
             }
-            Neg(value) => write!(f, "Neg({})", value),
-            Not(value) => write!(f, "Not({})", value),
-            Range { start, end } => write!(f, "Range({}, {})", start, end),
-            IntoIter(iter) => write!(f, "IntoIter({})", iter),
-            Next { target, iter } => write!(f, "Next({}, {})", target, iter),
+            Neg(value) => write!(f, "Neg(_{})", value),
+            Not(value) => write!(f, "Not(_{})", value),
+            Range { start, end } => write!(f, "Range(_{}, _{})", start, end),
+            IntoIter(iter) => write!(f, "IntoIter(_{})", iter),
+            Next { target, iter } => write!(f, "Next(_{}, _{})", target, iter),
             Struct { type_id, fields } => {
-                write!(f, "Struct({}", type_id)?;
+                write!(f, "Struct(type {}", type_id)?;
                 for field in fields {
                     write!(f, ", {}", field)?;
                 }
                 write!(f, ")")
             }
+            PointToLocal(local_id) => write!(f, "PointToLocal(_{local_id})"),
+            PointToIndex { collection, index } => {
+                write!(f, "PointToIndex(_{collection}, _{index})")
+            }
+            PointToField {
+                r#struct,
+                field_index,
+            } => write!(f, "PointToField(_{struct}, _{field_index})"),
+            Copy(local_id) => write!(f, "Copy(_{local_id})"),
+            Member { expr, field_index } => write!(f, "Member(_{expr}, _{field_index})"),
         }
     }
 }

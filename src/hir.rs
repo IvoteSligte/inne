@@ -155,6 +155,7 @@ pub enum Expr<'a> {
     Map(Map<'a>),
     StructLiteral(StructLiteral<'a>),
     Index(Index<'a>),
+    Member(Member<'a>),
     Range(Range<'a>),
     Var(VarId),
     Int(&'a str),
@@ -215,6 +216,16 @@ pub struct Pair<'a> {
 pub struct Index<'a> {
     pub expr: Box<Spanned<Expr<'a>>>,
     pub index: Box<Spanned<Expr<'a>>>,
+}
+
+pub struct Member<'a> {
+    /// Set in Typed-HIR stage.
+    pub type_id: TypeId,
+    /// Set in Typed-HIR stage.
+    pub field_index: usize,
+
+    pub expr: Box<Spanned<Expr<'a>>>,
+    pub member: Name<'a>,
 }
 
 pub struct Range<'a> {
@@ -718,6 +729,15 @@ impl<'a> Constructor<'a> {
                     expr: Box::new(self.map_expr(expr)),
                     index: Box::new(self.map_expr(index)),
                 }),
+                ast::Expr::Member(ast::Member { expr, member }) => Expr::Member(Member {
+                    expr: Box::new(self.map_expr(expr)),
+                    // Can't link the member to the actual struct field
+                    // because we do not yet know which type/struct expr is.
+                    member: *member,
+                    // Default values
+                    type_id: TypeId::UNKNOWN,
+                    field_index: usize::MAX,
+                }),
                 ast::Expr::Var(name) => {
                     match self.scopes.iter().rev().find_map(|scope| scope.get(name)) {
                         Some(&var_id) => Expr::Var(var_id),
@@ -999,6 +1019,9 @@ impl<'a> std::fmt::Display for Expr<'a> {
                 f.write_str("{")?;
                 write_comma_separated(f, fields.iter())?;
                 f.write_str("}")?;
+            }
+            Expr::Member(Member { expr, member, .. }) => {
+                write!(f, "({}).{}", expr.0, member.0)?;
             }
         }
         Ok(())
