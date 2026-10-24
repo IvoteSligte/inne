@@ -65,7 +65,7 @@ fn main() {
     }
     let filename = format!("{}", args.file.display());
     let (maybe_tokens, errors) = lex(&source);
-    eprint_errors(&errors, &filename, &source, "lexing");
+    eprint_errors(&errors, &source, &filename, "lexing");
     let Some(tokens) = maybe_tokens else {
         return;
     };
@@ -77,7 +77,7 @@ fn main() {
         return;
     }
     let (maybe_ast, errors) = parse(&tokens, &filename, &source);
-    eprint_errors(&errors, &filename, &source, "parsing");
+    eprint_errors(&errors, &source, &filename, "parsing");
     let Some(ast) = maybe_ast else {
         return;
     };

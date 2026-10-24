@@ -135,9 +135,9 @@ pub fn create_lexer<'src>()
         .delimited_by(just('"'), just('"'));
 
     let operator = choice((
-        just("and"),
-        just("or"),
-        just("not"),
+        text::ascii::keyword("and"),
+        text::ascii::keyword("or"),
+        text::ascii::keyword("not"),
         just("=="),
         just("!="),
         just("<="),

@@ -8,11 +8,11 @@ fn eprint_errors(errors: &[Error], source: &str, filename: &str, stage: &str) {
 
 fn run(filename: &str, source: &str) {
     let (maybe_tokens, errors) = lex(&source);
-    eprint_errors(&errors, &filename, &source, "lexing");
+    eprint_errors(&errors, &source, &filename, "lexing");
 
     let tokens = maybe_tokens.expect("Failed to lex source");
     let (maybe_ast, errors) = parse(&tokens, &filename, &source);
-    eprint_errors(&errors, &filename, &source, "parsing");
+    eprint_errors(&errors, &source, &filename, "parsing");
 
     let ast = maybe_ast.expect("Failed to parse source");
     let hir = hir_from_ast(&ast).unwrap_or_else(|errors| {
