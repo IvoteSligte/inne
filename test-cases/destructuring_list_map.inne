@@ -1,0 +1,6 @@
+// Python-style destructuring for lists and maps.
+// The exact map destructuring form is not detailed in the specification.
+var [first, second, third] = [1, 2, 3];
+print(first, second, third);
+var {"a": alpha, "b": beta} = {"a": 10, "b": 20};
+print(alpha, beta);

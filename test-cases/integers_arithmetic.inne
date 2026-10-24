@@ -1,0 +1,7 @@
+// Signed 64-bit integers and arithmetic operators.
+var a = 20;
+var b = 6;
+print(a + b);
+print(a - b);
+print(a * b);
+print(a / b);

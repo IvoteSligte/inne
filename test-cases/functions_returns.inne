@@ -1,0 +1,6 @@
+// Function declaration, explicit return, and call.
+func add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+print(add(2, 3));

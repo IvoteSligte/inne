@@ -1,0 +1,4 @@
+// Import syntax smoke test.
+// Place a sibling module named helper.inne beside this file for this test.
+import helper;
+print(helper::value);

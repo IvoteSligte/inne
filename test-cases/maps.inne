@@ -1,0 +1,6 @@
+// Typed maps, lookup, and assignment.
+var empty = {string, i64};
+var scores = {"Ada": 10, "Lin": 20};
+print(scores["Ada"]);
+scores["Ada"] = 15;
+print(scores["Ada"]);

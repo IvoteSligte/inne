@@ -1,0 +1,11 @@
+// Functions can access and update top-level variables.
+var counter = 0;
+
+func increment() {
+    counter += 1;
+    return;
+}
+
+increment();
+increment();
+print(counter);

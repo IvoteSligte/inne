@@ -1,0 +1,2 @@
+// Helper module for imports.inne.
+var value = 123;

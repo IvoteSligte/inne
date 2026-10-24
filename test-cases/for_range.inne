@@ -1,0 +1,4 @@
+// Integer ranges have an exclusive end.
+for i in 0..4 {
+    print(i);
+}

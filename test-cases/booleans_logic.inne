@@ -1,0 +1,6 @@
+// Boolean operators.
+var yes = true;
+var no = false;
+print(yes and not no);
+print(yes or no);
+print(not yes);

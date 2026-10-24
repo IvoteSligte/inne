@@ -1,0 +1,4 @@
+// Tuple values and destructuring.
+var pair = (7, "seven");
+var (number, word) = pair;
+print(number, word);

@@ -1,0 +1,5 @@
+// UTF-8 strings and interpolation.
+var name = "Inne";
+print("Hello, {name}!");
+print("Escaped braces: {{ and }}");
+print("Line one\nLine two\tTabbed");

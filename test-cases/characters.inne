@@ -1,0 +1,5 @@
+// UTF-32 character literals and escapes.
+var letter = 'd';
+var newline = '\n';
+print(letter);
+print(newline);

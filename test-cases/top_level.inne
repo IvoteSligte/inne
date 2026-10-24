@@ -1,0 +1,4 @@
+// Basic top-level execution and print.
+print("Hello, world!");
+var answer = 42;
+print(answer);

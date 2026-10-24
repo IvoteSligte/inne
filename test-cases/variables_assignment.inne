@@ -1,0 +1,8 @@
+// Variable definition, reassignment, and compound assignments.
+var count = 10;
+count = 12;
+count += 3;
+count -= 2;
+count *= 2;
+count /= 2;
+print(count);

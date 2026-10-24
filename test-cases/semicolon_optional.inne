@@ -1,0 +1,4 @@
+// Semicolons are optional.
+var first = 1
+var second = 2
+print(first + second)

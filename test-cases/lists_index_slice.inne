@@ -1,0 +1,7 @@
+// Typed empty lists, indexing, slicing, and indexed assignment.
+var empty = [i64];
+var numbers = [10, 20, 30, 40];
+print(numbers[0]);
+print(numbers[1..3]);
+numbers[2] = 99;
+print(numbers[2]);

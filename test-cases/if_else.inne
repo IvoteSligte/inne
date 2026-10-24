@@ -1,0 +1,9 @@
+// if, else if, and else branches.
+var value = 7;
+if value < 3 {
+    print("small");
+} else if value < 10 {
+    print("medium");
+} else {
+    print("large");
+}
