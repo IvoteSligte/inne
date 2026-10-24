@@ -24,6 +24,9 @@ pub enum Token<'src> {
     In,
     Import,
     Struct,
+    Ref,
+    Copy,
+    ShallowCopy,
     // Tokens with stored data
     Ident(&'src str),
     Int(&'src str),
@@ -77,6 +80,9 @@ impl std::fmt::Display for Token<'_> {
             In => "in",
             Import => "import",
             Struct => "struct",
+            Ref => "ref",
+            Copy => "copy",
+            ShallowCopy => "shallow_copy",
             Ident(ident) => ident,
             Bool(bool) => return write!(f, "{bool}"),
             Int(int) => int,
@@ -181,6 +187,9 @@ pub fn create_lexer<'src>()
         text::ascii::keyword("struct").to(Struct),
         text::ascii::keyword("true").to(Bool(true)),
         text::ascii::keyword("false").to(Bool(false)),
+        text::ascii::keyword("ref").to(Ref),
+        text::ascii::keyword("copy").to(Copy),
+        text::ascii::keyword("shallow_copy").to(ShallowCopy),
     ));
     let symbol = choice((
         just('{').to(LBrace),
