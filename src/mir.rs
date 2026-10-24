@@ -2,11 +2,8 @@ use std::collections::HashMap;
 
 pub use crate::typed_hir::{FuncId, Struct, TypeId, VarId, VarInfo};
 use crate::{
-    Error, TypedHir, Value,
-    hir::Errors,
-    typed_hir as thir, usize_newtype,
+    Error, TypedHir, Value, hir::Errors, typed_hir as thir, usize_newtype,
     util::write_comma_separated,
-    value::{self, create_pointer},
 };
 
 // TODO: reachability analysis
@@ -451,7 +448,7 @@ impl Constructor {
             thir::Expr::Int(int) => builder.push_constant(Value::Int(int.parse().unwrap())),
             thir::Expr::Bool(bool) => builder.push_constant(Value::Bool(*bool)),
             thir::Expr::String(string) => {
-                builder.push_constant(Value::String(create_pointer(string.chars().collect())))
+                builder.push_constant(Value::new_string(string.chars().collect()))
             }
             thir::Expr::Range(thir::Range { start, end }) => {
                 let start = self.map_expr(&start.0, builder);
@@ -694,17 +691,17 @@ impl std::fmt::Display for Value {
             Value::Nothing => f.write_str("Nothing"),
             Value::Int(int) => write!(f, "{int}"),
             Value::Bool(bool) => write!(f, "{bool}"),
-            Value::String(ptr) => {
+            Value::String { ptr, start, end } => {
                 f.write_str("\"")?;
-                ptr.borrow()
+                ptr.borrow()[*start..*end]
                     .iter()
                     .map(|c| write!(f, "{c}"))
                     .collect::<std::fmt::Result>()?;
                 f.write_str("\"")
             }
             Value::Char(char) => write!(f, "{char:?}"),
-            Value::List(ptr) => {
-                let list = ptr.borrow();
+            Value::List { ptr, start, end } => {
+                let list = &ptr.borrow()[*start..*end];
                 f.write_str("[")?;
                 write_comma_separated(f, list.iter())?;
                 f.write_str("]")
@@ -735,40 +732,12 @@ impl std::fmt::Display for Value {
                 }
                 f.write_str("}")
             }
-            // Pointers and ListIters are currently not used as constants so this should be unreachable.
-            Value::Pointer(_) => unimplemented!(),
-            Value::ListIter { .. } => unimplemented!(),
-        }
-    }
-}
-
-impl std::fmt::Display for value::Pointer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            value::Pointer::Local(local_id) => {
-                write!(f, "LocalPtr(_{local_id})")
-            }
-            value::Pointer::Field {
-                r#struct,
-                field_index,
-            } => {
-                write!(f, "FieldPtr({:p}, {})", r#struct.as_ptr(), field_index)
-            }
-            value::Pointer::Slice { list, start, end } => {
-                write!(f, "Slice({:p}, {}, {})", list.as_ptr(), start, end)
-            }
-            value::Pointer::ListIndex { list, index } => {
-                write!(f, "ListIndex({:p}, {})", list.as_ptr(), index)
-            }
-            value::Pointer::MapValue { map, key } => {
-                write!(f, "MapValue({:p}, {})", map.as_ptr(), key)
-            }
-            value::Pointer::StringSlice { string, start, end } => {
-                write!(f, "StringSlice({:p}, {}, {})", string.as_ptr(), start, end)
-            }
-            value::Pointer::StringIndex { string, index } => {
-                write!(f, "StringIndex({:p}, {})", string.as_ptr(), index)
-            }
+            // Pointers are currently not used as constants so they should be unreachable.
+            Value::LocalPointer(_)
+            | Value::FieldPointer { .. }
+            | Value::ListIndexPointer { .. }
+            | Value::StringIndexPointer { .. }
+            | Value::MapValuePointer { .. } => unimplemented!(),
         }
     }
 }

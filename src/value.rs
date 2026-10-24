@@ -10,14 +10,59 @@ pub enum Value {
     Nothing,
     Int(Int),
     Bool(bool),
-    String(StringPointer),
+    String {
+        ptr: StringPointer,
+        start: usize,
+        end: usize,
+    },
     Char(char),
-    List(ListPointer),
-    ListIter { list: ListPointer, index: usize },
+    List {
+        ptr: ListPointer,
+        start: usize,
+        end: usize,
+    },
     Map(MapPointer),
-    Range { start: Int, end: Int },
+    Range {
+        start: Int,
+        end: Int,
+    },
     Struct(StructPointer),
-    Pointer(Pointer),
+    /// Pointer to a local value. Only valid for the duration of the current function.
+    LocalPointer(LocalId),
+    FieldPointer {
+        ptr: StructPointer,
+        field_index: usize,
+    },
+    ListIndexPointer {
+        ptr: ListPointer,
+        index: usize,
+    },
+    StringIndexPointer {
+        ptr: StringPointer,
+        index: usize,
+    },
+    MapValuePointer {
+        ptr: MapPointer,
+        key: Box<Value>,
+    },
+}
+
+impl Value {
+    pub fn new_list(elements: Vec<Value>) -> Self {
+        Self::List {
+            start: 0,
+            end: elements.len(),
+            ptr: create_pointer(elements),
+        }
+    }
+
+    pub fn new_string(chars: Vec<char>) -> Self {
+        Self::String {
+            start: 0,
+            end: chars.len(),
+            ptr: create_pointer(chars),
+        }
+    }
 }
 
 pub type String = Vec<char>;
@@ -38,38 +83,6 @@ pub type StructPointer = Rc<RefCell<Struct>>;
 pub struct Struct {
     pub type_id: TypeId,
     pub fields: Vec<Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Pointer {
-    /// Pointer to a local value. Only valid for the duration of the current function.
-    Local(LocalId),
-    Field {
-        r#struct: StructPointer,
-        field_index: usize,
-    },
-    Slice {
-        list: ListPointer,
-        start: usize,
-        end: usize,
-    },
-    ListIndex {
-        list: ListPointer,
-        index: usize,
-    },
-    StringSlice {
-        string: StringPointer,
-        start: usize,
-        end: usize,
-    },
-    StringIndex {
-        string: StringPointer,
-        index: usize,
-    },
-    MapValue {
-        map: MapPointer,
-        key: Box<Value>,
-    },
 }
 
 pub fn create_pointer<T>(value: T) -> Rc<RefCell<T>> {

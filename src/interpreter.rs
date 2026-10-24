@@ -1,7 +1,7 @@
 use crate::{
     Mir, Value,
     mir::*,
-    value::{self, Int, ListPointer, Pointer, create_pointer},
+    value::{self, Int, create_pointer},
 };
 
 use std::mem::discriminant;
@@ -83,43 +83,42 @@ impl<'a> Interpreter<'a> {
             &Op::Assign { target, value } => {
                 let value = self.get_local(value).clone();
                 // TODO: out-of-bounds checks
-                let Value::Pointer(pointer) = self.get_local(target) else {
-                    unreachable!();
-                };
-                match pointer {
-                    Pointer::Local(local_id) => self.set_local(*local_id, value),
-                    Pointer::Field {
-                        r#struct,
-                        field_index,
-                    } => {
-                        r#struct.borrow_mut().fields[*field_index] = value;
+                match self.get_local(target) {
+                    Value::LocalPointer(local_id) => self.set_local(*local_id, value),
+                    Value::FieldPointer { ptr, field_index } => {
+                        ptr.borrow_mut().fields[*field_index] = value;
                     }
-                    Pointer::Slice { list, start, end } => {
-                        let dest = &mut list.borrow_mut()[*start..*end];
+                    Value::List { ptr, start, end } => {
+                        let dst = &mut ptr.borrow_mut()[*start..*end];
                         match value {
-                            Value::List(ptr) => dest.clone_from_slice(ptr.borrow().as_slice()),
+                            Value::List { ptr, start, end } => {
+                                dst.clone_from_slice(&ptr.borrow()[start..end])
+                            }
                             // TOOD: also allow copying from Pointer::Slice and Value::String (if list element type is char)
                             _ => unreachable!(),
                         }
                     }
-                    Pointer::ListIndex { list, index } => list.borrow_mut()[*index] = value,
-                    Pointer::StringSlice { string, start, end } => {
-                        let dest = &mut string.borrow_mut()[*start..*end];
+                    Value::String { ptr, start, end } => {
+                        let dst = &mut ptr.borrow_mut()[*start..*end];
                         match value {
-                            Value::String(ptr) => dest.copy_from_slice(&ptr.borrow()),
+                            Value::String { ptr, start, end } => {
+                                dst.copy_from_slice(&ptr.borrow()[start..end])
+                            }
                             // TOOD: also allow copying from Pointer::StringSlice and List(char)
                             _ => unreachable!(),
                         }
                     }
-                    Pointer::StringIndex { string, index } => {
+                    Value::ListIndexPointer { ptr, index } => ptr.borrow_mut()[*index] = value,
+                    Value::StringIndexPointer { ptr: string, index } => {
                         string.borrow_mut()[*index] = match value {
                             Value::Char(char) => char,
                             _ => unreachable!(),
                         };
                     }
-                    Pointer::MapValue { map, key } => {
-                        map.borrow_mut().insert((**key).clone(), value);
+                    Value::MapValuePointer { ptr, key } => {
+                        ptr.borrow_mut().insert((**key).clone(), value);
                     }
+                    _ => unreachable!(),
                 };
                 Value::Nothing
             }
@@ -214,11 +213,12 @@ impl<'a> Interpreter<'a> {
             },
             &Op::IntoIter(iter) => match self.get_local(iter) {
                 &Value::Range { start, end } => Value::Range { start, end },
-                // TODO: more efficient list iterator (should probably still be a "copy" of the original list, though,
-                //       because shooting yourself in the foot by modifying the original list is way too easy)
-                Value::List(ptr) => Value::ListIter {
-                    list: ptr.clone(),
-                    index: 0,
+                // TODO: should probably be a "copy" of the original list,
+                //       because shooting yourself in the foot by modifying the original list is way too easy
+                Value::List { ptr, start, end } => Value::List {
+                    ptr: ptr.clone(),
+                    start: *start,
+                    end: *end,
                 },
                 _ => unreachable!(),
             },
@@ -232,25 +232,23 @@ impl<'a> Interpreter<'a> {
                     }
                     Value::Bool(is_not_empty)
                 }
-                Value::ListIter { list: ptr, index } => {
-                    let list = ptr.borrow();
-                    let is_empty = list.is_empty();
+                Value::List { ptr, start, end } => {
+                    let is_empty = start >= end;
                     if !is_empty {
-                        let value = list[*index].clone();
-                        drop(list); // Explicitly drop list to resolve lifetime issues
-                        *index += 1;
+                        let value = ptr.borrow()[*start].clone();
+                        *start += 1;
                         self.set_local(target, value);
                     }
                     Value::Bool(is_empty)
                 }
                 _ => unreachable!(),
             },
-            Op::List(local_ids) => Value::List(create_pointer(
+            Op::List(local_ids) => Value::new_list(
                 local_ids
                     .iter()
                     .map(|&local_id| self.get_local(local_id).clone())
                     .collect(),
-            )),
+            ),
             Op::Map(pairs) => Value::Map(create_pointer(
                 pairs
                     .iter()
@@ -265,14 +263,34 @@ impl<'a> Interpreter<'a> {
             // TODO: require that the user explicitly specifies copy/ref instead of doing these expensive copies by default
             &Op::Index { expr, index } => match (self.get_local(expr), self.get_local(index)) {
                 // TODO: out-of-bounds checks
-                (Value::String(ptr), &Value::Int(i)) => Value::Char(ptr.borrow()[i as usize]),
-                (Value::String(ptr), &Value::Range { start, end }) => Value::String(
-                    create_pointer(ptr.borrow()[start as usize..end as usize].to_vec()),
-                ),
-                (Value::List(ptr), &Value::Int(i)) => ptr.borrow()[i as usize].clone(),
-                (Value::List(ptr), &Value::Range { start, end }) => Value::List(create_pointer(
-                    ptr.borrow()[start as usize..end as usize].to_vec(),
-                )),
+                (Value::String { ptr, start, end: _ }, &Value::Int(i)) => {
+                    Value::Char(ptr.borrow()[*start + i as usize])
+                }
+                (
+                    Value::String { ptr, start, end: _ },
+                    &Value::Range {
+                        start: range_start,
+                        end: range_end,
+                    },
+                ) => Value::String {
+                    ptr: ptr.clone(),
+                    start: *start + range_start as usize,
+                    end: *start + range_end as usize,
+                },
+                (Value::List { ptr, start, end: _ }, &Value::Int(i)) => {
+                    ptr.borrow()[*start + i as usize].clone()
+                }
+                (
+                    Value::List { ptr, start, end: _ },
+                    &Value::Range {
+                        start: range_start,
+                        end: range_end,
+                    },
+                ) => Value::List {
+                    ptr: ptr.clone(),
+                    start: *start + range_start as usize,
+                    end: *start + range_end as usize,
+                },
                 // TODO: "key not in map" check
                 (Value::Map(ptr), key) => ptr.borrow()[key].clone(),
                 _ => unreachable!(),
@@ -288,49 +306,63 @@ impl<'a> Interpreter<'a> {
                 Value::Struct(ptr) => ptr.borrow().fields[*field_index].clone(),
                 _ => unreachable!(),
             },
-            Op::PointToLocal(local_id) => Value::Pointer(Pointer::Local(*local_id)),
+            Op::PointToLocal(local_id) => Value::LocalPointer(*local_id),
             Op::PointToField {
                 r#struct,
                 field_index,
-            } => Value::Pointer(Pointer::Field {
-                r#struct: match self.get_local(*r#struct) {
+            } => Value::FieldPointer {
+                ptr: match self.get_local(*r#struct) {
                     Value::Struct(ptr) => ptr.clone(),
                     _ => unreachable!(),
                 },
                 field_index: *field_index,
-            }),
-            Op::PointToIndex { collection, index } => Value::Pointer(
-                // TODO: check Int->usize casts and out-of-bounds
+            },
+            Op::PointToIndex { collection, index } =>
+            // TODO: check Int->usize casts and out-of-bounds
+            {
                 match (self.get_local(*collection), self.get_local(*index)) {
-                    (Value::String(ptr), &Value::Int(index)) => Pointer::StringIndex {
-                        string: ptr.clone(),
-                        index: index as _,
+                    (Value::String { ptr, start, end: _ }, &Value::Int(index)) => {
+                        Value::StringIndexPointer {
+                            ptr: ptr.clone(),
+                            index: *start + index as usize,
+                        }
+                    }
+                    (
+                        Value::String { ptr, start, end: _ },
+                        &Value::Range {
+                            start: range_start,
+                            end: range_end,
+                        },
+                    ) => Value::String {
+                        ptr: ptr.clone(),
+                        start: *start + range_start as usize,
+                        end: *start + range_end as usize,
                     },
-                    (Value::String(ptr), &Value::Range { start, end }) => Pointer::StringSlice {
-                        string: ptr.clone(),
-                        start: start as _,
-                        end: end as _,
+                    (Value::List { ptr, start, end: _ }, &Value::Int(index)) => {
+                        Value::ListIndexPointer {
+                            ptr: ptr.clone(),
+                            index: *start + index as usize,
+                        }
+                    }
+                    (
+                        Value::List { ptr, start, end: _ },
+                        &Value::Range {
+                            start: range_start,
+                            end: range_end,
+                        },
+                    ) => Value::List {
+                        ptr: ptr.clone(),
+                        start: *start + range_start as usize,
+                        end: *start + range_end as usize,
                     },
-                    (Value::List(ptr), &Value::Int(index)) => Pointer::ListIndex {
-                        list: ptr.clone(),
-                        index: index as _,
-                    },
-                    (Value::List(ptr), &Value::Range { start, end }) => Pointer::Slice {
-                        list: ptr.clone(),
-                        start: start as _,
-                        end: end as _,
-                    },
-                    (Value::Map(ptr), key) => Pointer::MapValue {
-                        map: ptr.clone(),
+                    (Value::Map(ptr), key) => Value::MapValuePointer {
+                        ptr: ptr.clone(),
                         key: Box::new(key.clone()),
                     },
                     _ => unreachable!(),
-                },
-            ),
-            Op::Copy(local_id) => match self.get_local(*local_id) {
-                Value::Pointer(ptr) => self.deepcopy_pointer(ptr),
-                _ => unreachable!(),
-            },
+                }
+            }
+            Op::Copy(local_id) => self.deepcopy(self.get_local(*local_id)),
         };
         self.set_local(stmt.local_id, value);
     }
@@ -358,14 +390,14 @@ impl<'a> Interpreter<'a> {
             Value::Nothing => print!("Nothing"),
             Value::Int(int) => print!("{}", int),
             Value::Bool(bool) => print!("{}", bool),
-            Value::String(ptr) => {
-                for char in ptr.borrow().as_slice() {
+            Value::String { ptr, start, end } => {
+                for char in &ptr.borrow()[*start..*end] {
                     print!("{}", char);
                 }
             }
             Value::Char(char) => print!("{char}"),
-            Value::List(ptr) => {
-                let list = ptr.borrow();
+            Value::List { ptr, start, end } => {
+                let list = &ptr.borrow()[*start..*end];
                 print!("[");
                 for (i, elem) in list.iter().enumerate() {
                     if i > 0 {
@@ -407,9 +439,12 @@ impl<'a> Interpreter<'a> {
             }
             // Ranges currently cannot be used as values, only as for-loop iterator and in slicing operations.
             Value::Range { .. } => unreachable!(),
-            // Pointer and ListIter are currently not items accessible to the user, so they should never be printed.
-            Value::Pointer(_) => unimplemented!(),
-            Value::ListIter { .. } => unimplemented!(),
+            // Pointers are currently not accessible to the user, so they are never printed.
+            Value::LocalPointer(_)
+            | Value::FieldPointer { .. }
+            | Value::ListIndexPointer { .. }
+            | Value::StringIndexPointer { .. }
+            | Value::MapValuePointer { .. } => unimplemented!(),
         }
     }
 
@@ -418,13 +453,16 @@ impl<'a> Interpreter<'a> {
             Value::Nothing => Value::Nothing,
             Value::Int(int) => Value::Int(*int),
             Value::Bool(bool) => Value::Bool(*bool),
-            Value::String(string) => Value::String(create_pointer((*string.borrow()).clone())),
+            Value::String { ptr, start, end } => {
+                Value::new_string(ptr.borrow()[*start..*end].to_vec())
+            }
             Value::Char(char) => Value::Char(*char),
-            Value::List(list) => Value::List(self.deepcopy_list(list)),
-            Value::ListIter { list, index } => Value::ListIter {
-                list: self.deepcopy_list(list),
-                index: *index,
-            },
+            Value::List { ptr, start, end } => Value::new_list(
+                ptr.borrow()[*start..*end]
+                    .iter()
+                    .map(|element| self.deepcopy(element))
+                    .collect(),
+            ),
             Value::Map(map) => Value::Map(create_pointer(
                 (*map.borrow())
                     .iter()
@@ -446,38 +484,13 @@ impl<'a> Interpreter<'a> {
                         .collect(),
                 }))
             }
-            Value::Pointer(ptr) => self.deepcopy_pointer(ptr),
-        }
-    }
-
-    fn deepcopy_list(&self, list: &ListPointer) -> ListPointer {
-        create_pointer(
-            (*list.borrow())
-                .iter()
-                .map(|element| self.deepcopy(element))
-                .collect(),
-        )
-    }
-
-    fn deepcopy_pointer(&self, pointer: &Pointer) -> Value {
-        match pointer {
-            Pointer::Local(local_id) => self.deepcopy(self.get_local(*local_id)),
-            Pointer::Field {
-                r#struct,
-                field_index,
-            } => self.deepcopy(&r#struct.borrow().fields[*field_index]),
-            Pointer::Slice { list, start, end } => Value::List(create_pointer(
-                list.borrow()[*start..*end]
-                    .iter()
-                    .map(|element| self.deepcopy(element))
-                    .collect(),
-            )),
-            Pointer::ListIndex { list, index } => self.deepcopy(&list.borrow()[*index]),
-            Pointer::StringSlice { string, start, end } => {
-                Value::String(create_pointer(string.borrow()[*start..*end].to_vec()))
+            Value::LocalPointer(local_id) => self.deepcopy(self.get_local(*local_id)),
+            Value::FieldPointer { ptr, field_index } => {
+                self.deepcopy(&ptr.borrow().fields[*field_index])
             }
-            Pointer::StringIndex { string, index } => Value::Char(string.borrow()[*index]),
-            Pointer::MapValue { map, key } => self.deepcopy(&map.borrow()[key]),
+            Value::ListIndexPointer { ptr, index } => self.deepcopy(&ptr.borrow()[*index]),
+            Value::StringIndexPointer { ptr, index } => Value::Char(ptr.borrow()[*index]),
+            Value::MapValuePointer { ptr, key } => self.deepcopy(&ptr.borrow()[key]),
         }
     }
 }
