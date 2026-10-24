@@ -70,7 +70,11 @@ fn main() {
         return;
     };
     if args.emit == Some(Ir::Tokens) {
-        todo!();
+        eprintln!("Tokens for file '{filename}':");
+        for (token, span) in &tokens {
+            println!("{:<30} at {span}", format!("{:?}", token));
+        }
+        return;
     }
     let (maybe_ast, errors) = parse(&tokens, &filename, &source);
     eprint_errors(&errors, &filename, &source, "parsing");
