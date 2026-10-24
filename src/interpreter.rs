@@ -202,7 +202,7 @@ impl<'a> Interpreter<'a> {
                     if i > 0 {
                         print!(" ");
                     }
-                    self.print(self.get_local(*arg_id));
+                    self.print(self.get_local(*arg_id), false);
                 }
                 println!();
                 Value::Nothing
@@ -211,55 +211,68 @@ impl<'a> Interpreter<'a> {
                 (&Value::Int(start), &Value::Int(end)) => Value::Range { start, end },
                 _ => unreachable!(),
             },
+            // TODO: this should (deep)copy the original list/map, because shooting yourself
+            // in the foot by modifying the original collection is way too easy
             &Op::IntoIter(iter) => match self.get_local(iter) {
                 &Value::Range { start, end } => Value::Range { start, end },
-                // TODO: should probably be a "copy" of the original list,
-                //       because shooting yourself in the foot by modifying the original list is way too easy
                 Value::List { ptr, start, end } => Value::List {
                     ptr: ptr.clone(),
                     start: *start,
                     end: *end,
                 },
-                _ => unreachable!(),
-            },
-            &Op::Next { target, iter } => match self.get_local_mut(iter) {
-                Value::Range { start, end } => {
-                    let is_not_empty = *start < *end;
-                    if is_not_empty {
-                        let value = *start;
-                        *start += 1;
-                        self.set_local(target, Value::Int(value));
-                    }
-                    Value::Bool(is_not_empty)
-                }
-                Value::List { ptr, start, end } => {
-                    let is_empty = start >= end;
-                    if !is_empty {
-                        let value = ptr.borrow()[*start].clone();
-                        *start += 1;
-                        self.set_local(target, value);
-                    }
-                    Value::Bool(is_empty)
+                Value::Map(ptr) => {
+                    Value::MapIter(value::MapIter(value::Map::into_iter(ptr.borrow().clone())))
                 }
                 _ => unreachable!(),
             },
+            &Op::Next { target, iter } => {
+                let is_not_empty = match self.get_local_mut(iter) {
+                    Value::Range { start, end } => {
+                        let is_not_empty = *start < *end;
+                        if is_not_empty {
+                            let value = *start;
+                            *start += 1;
+                            self.set_local(target, Value::Int(value));
+                        }
+                        is_not_empty
+                    }
+                    Value::List { ptr, start, end } => {
+                        let is_not_empty = start < end;
+                        if is_not_empty {
+                            let value = ptr.borrow()[*start].clone();
+                            *start += 1;
+                            self.set_local(target, value);
+                        }
+                        is_not_empty
+                    }
+                    Value::MapIter(iter) => {
+                        let maybe_pair = iter.0.next();
+                        let is_not_empty = maybe_pair.is_some();
+                        if let Some((key, value)) = maybe_pair {
+                            self.set_local(target, Value::new_tuple([key, value]));
+                        }
+                        is_not_empty
+                    }
+                    _ => unreachable!(),
+                };
+                Value::Bool(is_not_empty)
+            }
             Op::List(local_ids) => Value::new_list(
                 local_ids
                     .iter()
-                    .map(|&local_id| self.get_local(local_id).clone())
-                    .collect(),
+                    .map(|&local_id| self.get_local(local_id).clone()),
             ),
-            Op::Map(pairs) => Value::Map(create_pointer(
-                pairs
+            Op::Map(pairs) => Value::new_map(pairs.iter().map(|&pair| {
+                (
+                    self.get_local(pair.key).clone(),
+                    self.get_local(pair.value).clone(),
+                )
+            })),
+            Op::Tuple(local_ids) => Value::new_tuple(
+                local_ids
                     .iter()
-                    .map(|&pair| {
-                        (
-                            self.get_local(pair.key).clone(),
-                            self.get_local(pair.value).clone(),
-                        )
-                    })
-                    .collect(),
-            )),
+                    .map(|&local_id| self.get_local(local_id).clone()),
+            ),
             // TODO: require that the user explicitly specifies copy/ref instead of doing these expensive copies by default
             &Op::Index { expr, index } => match (self.get_local(expr), self.get_local(index)) {
                 // TODO: out-of-bounds checks
@@ -385,14 +398,23 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    pub fn print(&self, value: &Value) {
+    pub fn print(&self, value: &Value, is_nested: bool) {
         match value {
             Value::Nothing => print!("Nothing"),
             Value::Int(int) => print!("{}", int),
             Value::Bool(bool) => print!("{}", bool),
             Value::String { ptr, start, end } => {
-                for char in &ptr.borrow()[*start..*end] {
-                    print!("{}", char);
+                let string = &ptr.borrow()[*start..*end];
+                if is_nested {
+                    print!("\"");
+                    for char in string {
+                        print!("{}", char.escape_default());
+                    }
+                    print!("\"");
+                } else {
+                    for char in string {
+                        print!("{}", char);
+                    }
                 }
             }
             Value::Char(char) => print!("{char}"),
@@ -403,7 +425,7 @@ impl<'a> Interpreter<'a> {
                     if i > 0 {
                         print!(", ");
                     }
-                    self.print(elem);
+                    self.print(elem, true);
                 }
                 print!("]");
             }
@@ -414,11 +436,22 @@ impl<'a> Interpreter<'a> {
                     if i > 0 {
                         print!(", ");
                     }
-                    self.print(key);
+                    self.print(key, true);
                     print!(": ");
-                    self.print(value);
+                    self.print(value, true);
                 }
                 print!("}}");
+            }
+            Value::Tuple(ptr) => {
+                let tuple = ptr.borrow();
+                print!("(");
+                for (i, elem) in tuple.iter().enumerate() {
+                    if i > 0 {
+                        print!(", ");
+                    }
+                    self.print(elem, true);
+                }
+                print!(")");
             }
             Value::Struct(ptr) => {
                 let r#struct = ptr.borrow();
@@ -433,7 +466,7 @@ impl<'a> Interpreter<'a> {
                         print!(", ");
                     }
                     print!("{name}: ");
-                    self.print(value);
+                    self.print(value, true);
                 }
                 print!("}}");
             }
@@ -445,6 +478,8 @@ impl<'a> Interpreter<'a> {
             | Value::ListIndexPointer { .. }
             | Value::StringIndexPointer { .. }
             | Value::MapValuePointer { .. } => unimplemented!(),
+            // MapIter is not exposed to the user and therefore never printed.
+            Value::MapIter(_) => unimplemented!(),
         }
     }
 
@@ -454,21 +489,22 @@ impl<'a> Interpreter<'a> {
             Value::Int(int) => Value::Int(*int),
             Value::Bool(bool) => Value::Bool(*bool),
             Value::String { ptr, start, end } => {
-                Value::new_string(ptr.borrow()[*start..*end].to_vec())
+                Value::new_string(ptr.borrow()[*start..*end].iter().copied())
             }
             Value::Char(char) => Value::Char(*char),
             Value::List { ptr, start, end } => Value::new_list(
                 ptr.borrow()[*start..*end]
                     .iter()
-                    .map(|element| self.deepcopy(element))
-                    .collect(),
+                    .map(|element| self.deepcopy(element)),
             ),
-            Value::Map(map) => Value::Map(create_pointer(
+            Value::Map(map) => Value::new_map(
                 (*map.borrow())
                     .iter()
-                    .map(|(key, value)| (self.deepcopy(key), self.deepcopy(value)))
-                    .collect(),
-            )),
+                    .map(|(key, value)| (self.deepcopy(key), self.deepcopy(value))),
+            ),
+            Value::Tuple(tuple) => {
+                Value::new_tuple((*tuple).borrow().iter().map(|elem| self.deepcopy(elem)))
+            }
             Value::Range { start, end } => Value::Range {
                 start: *start,
                 end: *end,
@@ -491,6 +527,7 @@ impl<'a> Interpreter<'a> {
             Value::ListIndexPointer { ptr, index } => self.deepcopy(&ptr.borrow()[*index]),
             Value::StringIndexPointer { ptr, index } => Value::Char(ptr.borrow()[*index]),
             Value::MapValuePointer { ptr, key } => self.deepcopy(&ptr.borrow()[key]),
+            Value::MapIter(_) => unimplemented!("Map iterators should not be copied"),
         }
     }
 }

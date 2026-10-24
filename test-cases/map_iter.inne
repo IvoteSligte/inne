@@ -1,0 +1,6 @@
+
+var map = {0: "Hey", 1: "Hi", 2: "How is it going?"}
+
+for pair in map {
+    print(pair)
+}

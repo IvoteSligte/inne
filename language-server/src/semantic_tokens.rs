@@ -145,8 +145,8 @@ impl Override<'_> {
     fn expr(&mut self, (expr, span): &Spanned<Expr>) {
         match expr {
             Expr::Binary(Binary { left, op: _, right }) => {
-                self.expr(&left);
-                self.expr(&right);
+                self.expr(left);
+                self.expr(right);
             }
             Expr::Unary(Unary { op: _, expr }) => self.expr(expr),
             Expr::Call(Call { name, args }) => {
@@ -161,8 +161,8 @@ impl Override<'_> {
             Expr::String(_) => {}
             Expr::Char(_) => {}
             Expr::Range(Range { start, end }) => {
-                self.expr(&start);
-                self.expr(&end);
+                self.expr(start);
+                self.expr(end);
             }
             Expr::EmptyList(_) => self.r#type((span.start + 1..span.end + 1).into()),
             Expr::List(List { elements }) => elements.iter().for_each(|item| self.expr(&item)),
@@ -170,9 +170,10 @@ impl Override<'_> {
                 self.r#type((span.start + 1..span.end + 1).into());
             }
             Expr::Map(Map { pairs }) => pairs.iter().for_each(|Pair { key, value }| {
-                self.expr(&key);
-                self.expr(&value);
+                self.expr(key);
+                self.expr(value);
             }),
+            Expr::Tuple(Tuple { elements }) => elements.iter().for_each(|elem| self.expr(elem)),
             Expr::Index(Index { expr, index }) => {
                 self.expr(&expr);
                 self.expr(&index);

@@ -26,6 +26,7 @@ pub type Block<'a> = Vec<Stmt<'a>>;
 
 #[derive(Clone)]
 pub struct Type<'a> {
+    /// Uses `%tuple` to indicate tuple types.
     pub name: Name<'a>,
     pub generics: Vec<Spanned<Self>>,
 }
@@ -65,6 +66,7 @@ pub enum Expr<'a> {
     List(List<'a>),
     EmptyMap(EmptyMap<'a>),
     Map(Map<'a>),
+    Tuple(Tuple<'a>),
     StructLiteral(StructLiteral<'a>),
     Member(Member<'a>),
     Index(Index<'a>),
@@ -136,6 +138,10 @@ pub struct Map<'a> {
 pub struct Pair<'a> {
     pub key: Spanned<Expr<'a>>,
     pub value: Spanned<Expr<'a>>,
+}
+
+pub struct Tuple<'a> {
+    pub elements: Vec<Spanned<Expr<'a>>>,
 }
 
 pub struct StructLiteral<'a> {

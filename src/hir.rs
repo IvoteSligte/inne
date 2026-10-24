@@ -85,14 +85,14 @@ impl TypeId {
 pub enum Type {
     Nothing,
     Int,
-    // Float
+    // TODO: Float
     Bool,
     String,
     Char,
     Range,
     List(Box<Self>),
     Map { key: Box<Self>, value: Box<Self> },
-    // Tuple
+    Tuple(Vec<Self>),
     Named { id: TypeId, generics: Vec<Self> },
 }
 
@@ -115,30 +115,6 @@ impl Type {
     }
 }
 
-impl std::fmt::Display for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Type::Nothing => "nothing",
-            Type::Int => "int",
-            Type::Bool => "bool",
-            Type::String => "string",
-            Type::Char => "char",
-            Type::Range => "range",
-            Type::List(element) => return write!(f, "List<{element}>"),
-            Type::Map { key, value } => return write!(f, "Map<{key}, {value}>"),
-            Type::Named { id, generics } => {
-                write!(f, "{id}")?;
-                if !generics.is_empty() {
-                    f.write_str("<")?;
-                    write_comma_separated(f, generics)?;
-                    f.write_str(">")?;
-                }
-                return Ok(());
-            }
-        })
-    }
-}
-
 pub struct VarDecl<'a> {
     pub var_id: VarId,
     pub name: Name<'a>,
@@ -153,6 +129,7 @@ pub enum Expr<'a> {
     List(List<'a>),
     EmptyMap(EmptyMap),
     Map(Map<'a>),
+    Tuple(Tuple<'a>),
     StructLiteral(StructLiteral<'a>),
     Index(Index<'a>),
     Member(Member<'a>),
@@ -188,6 +165,7 @@ pub struct EmptyList {
 pub struct List<'a> {
     pub elements: Vec<Spanned<Expr<'a>>>,
 }
+
 pub struct EmptyMap {
     pub key_type: Spanned<Type>,
     pub value_type: Spanned<Type>,
@@ -195,6 +173,10 @@ pub struct EmptyMap {
 
 pub struct Map<'a> {
     pub pairs: Vec<Pair<'a>>,
+}
+
+pub struct Tuple<'a> {
+    pub elements: Vec<Spanned<Expr<'a>>>,
 }
 
 pub struct StructLiteral<'a> {
@@ -423,17 +405,11 @@ impl<'a> Constructor<'a> {
         value
     }
 
-    fn map_scope<'b>(&mut self, stmts: &[ast::Stmt<'b>]) -> Vec<Stmt<'b>>
-    where
-        'b: 'a,
-    {
+    fn map_scope<'b: 'a>(&mut self, stmts: &[ast::Stmt<'b>]) -> Vec<Stmt<'b>> {
         self.in_scope(|_self| _self.map_stmts(stmts))
     }
 
-    fn map_stmts<'b>(&mut self, stmts: &[ast::Stmt<'b>]) -> Vec<Stmt<'b>>
-    where
-        'b: 'a,
-    {
+    fn map_stmts<'b: 'a>(&mut self, stmts: &[ast::Stmt<'b>]) -> Vec<Stmt<'b>> {
         let mut out_stmts = Vec::with_capacity(stmts.len());
         for stmt in stmts {
             match stmt {
@@ -579,10 +555,7 @@ impl<'a> Constructor<'a> {
         out_stmts
     }
 
-    fn map_param<'b>(&mut self, param: &ast::Param<'b>) -> Param<'b>
-    where
-        'b: 'a,
-    {
+    fn map_param<'b: 'a>(&mut self, param: &ast::Param<'b>) -> Param<'b> {
         let var_id = self.vars.add(param.name);
         if let Some(prev_param_var_id) =
             self.scopes.last_mut().unwrap().insert(param.name.0, var_id)
@@ -604,10 +577,7 @@ impl<'a> Constructor<'a> {
         }
     }
 
-    fn map_expr<'b>(&mut self, (expr, span): &Spanned<ast::Expr<'b>>) -> Spanned<Expr<'b>>
-    where
-        'b: 'a,
-    {
+    fn map_expr<'b: 'a>(&mut self, (expr, span): &Spanned<ast::Expr<'b>>) -> Spanned<Expr<'b>> {
         (
             match expr {
                 ast::Expr::Binary(ast::Binary { op, left, right }) => Expr::Binary(Binary {
@@ -634,7 +604,7 @@ impl<'a> Constructor<'a> {
                     Expr::Call(Call {
                         name: *name,
                         func_id,
-                        args: args.iter().map(|arg| self.map_expr(arg)).collect(),
+                        args: self.map_exprs(args),
                     })
                 }
                 ast::Expr::EmptyList(ast::EmptyList { element_type }) => {
@@ -643,7 +613,7 @@ impl<'a> Constructor<'a> {
                     })
                 }
                 ast::Expr::List(ast::List { elements }) => Expr::List(List {
-                    elements: elements.iter().map(|elem| self.map_expr(elem)).collect(),
+                    elements: self.map_exprs(elements),
                 }),
                 ast::Expr::EmptyMap(ast::EmptyMap {
                     key_type,
@@ -660,6 +630,9 @@ impl<'a> Constructor<'a> {
                             value: self.map_expr(&pair.value),
                         })
                         .collect(),
+                }),
+                ast::Expr::Tuple(ast::Tuple { elements }) => Expr::Tuple(Tuple {
+                    elements: self.map_exprs(elements),
                 }),
                 ast::Expr::StructLiteral(ast::StructLiteral { name, fields }) => {
                     let mut fields = fields
@@ -764,6 +737,10 @@ impl<'a> Constructor<'a> {
         )
     }
 
+    fn map_exprs<'b: 'a>(&mut self, exprs: &[Spanned<ast::Expr<'b>>]) -> Vec<Spanned<Expr<'b>>> {
+        exprs.iter().map(|elem| self.map_expr(elem)).collect()
+    }
+
     fn map_type(&mut self, (r#type, span): &Spanned<ast::Type<'_>>) -> Spanned<Type> {
         let ast::Type { name, generics } = r#type;
         if matches!(name.0, "int" | "char" | "string" | "bool") && !generics.is_empty() {
@@ -780,32 +757,38 @@ impl<'a> Constructor<'a> {
                 *span,
             );
         }
+        let generics = generics
+            .iter()
+            .map(|generic| self.map_type(generic).0)
+            .collect::<Vec<_>>();
+        let num_generics = generics.len();
         let r#type = match name.0 {
             "int" => Type::Int,
             "string" => Type::String,
             "bool" => Type::Bool,
             "char" => Type::Char,
             "list" => {
-                let element = generics
-                    .get(0)
-                    .map(|r#type| self.map_type(r#type).0)
-                    .unwrap_or(Type::UNKNOWN);
+                let element = generics.into_iter().next().unwrap_or(Type::UNKNOWN);
+                if num_generics != 1 {
+                    self.errors.add(
+                        format!(
+                            "'list' takes a generic type, but {} were provided. Example: list<int>",
+                            num_generics
+                        ),
+                        *span,
+                    );
+                }
                 Type::List(Box::new(element))
             }
             "map" => {
-                let key = generics
-                    .get(0)
-                    .map(|r#type| self.map_type(r#type).0)
-                    .unwrap_or(Type::UNKNOWN);
-                let value = generics
-                    .get(1)
-                    .map(|r#type| self.map_type(r#type).0)
-                    .unwrap_or(Type::UNKNOWN);
-                if generics.len() != 2 {
+                let mut iter = generics.into_iter();
+                let key = iter.next().unwrap_or(Type::UNKNOWN);
+                let value = iter.next().unwrap_or(Type::UNKNOWN);
+                if num_generics != 2 {
                     self.errors.add(
                         format!(
                             "'map' takes two generic types, but {} were provided. Example: map<string, int>",
-                            generics.len()
+                            num_generics
                         ),
                         *span,
                     );
@@ -815,11 +798,8 @@ impl<'a> Constructor<'a> {
                     value: Box::new(value),
                 }
             }
+            "%tuple" => Type::Tuple(generics),
             _ => {
-                let generics = generics
-                    .iter()
-                    .map(|generic| self.map_type(generic).0)
-                    .collect();
                 let id = match self.type_map.get(name.0) {
                     Some((type_id, _)) => *type_id,
                     None => {
@@ -872,6 +852,35 @@ impl<'a> Constructor<'a> {
 
 use indentify::*;
 
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Type::Nothing => "nothing",
+            Type::Int => "int",
+            Type::Bool => "bool",
+            Type::String => "string",
+            Type::Char => "char",
+            Type::Range => "range",
+            Type::List(element) => return write!(f, "List<{element}>"),
+            Type::Map { key, value } => return write!(f, "Map<{key}, {value}>"),
+            Type::Tuple(elements) => {
+                f.write_str("(")?;
+                write_comma_separated(f, elements)?;
+                return f.write_str(")");
+            }
+            Type::Named { id, generics } => {
+                write!(f, "{id}")?;
+                if !generics.is_empty() {
+                    f.write_str("<")?;
+                    write_comma_separated(f, generics)?;
+                    f.write_str(">")?;
+                }
+                return Ok(());
+            }
+        })
+    }
+}
+
 impl std::fmt::Display for Hir<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // NOTE: Not sure why it doesn't work without the dyn conversion.
@@ -915,7 +924,7 @@ impl std::fmt::Display for Hir<'_> {
     }
 }
 
-impl<'a> std::fmt::Display for Stmt<'a> {
+impl std::fmt::Display for Stmt<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Stmt::VarDecl(VarDecl {
@@ -1033,6 +1042,11 @@ impl<'a> std::fmt::Display for Expr<'a> {
                 f.write_str("{")?;
                 write_comma_separated(f, pairs.iter())?;
                 f.write_str("}")?;
+            }
+            Expr::Tuple(Tuple { elements }) => {
+                f.write_str("(")?;
+                write_comma_separated(f, elements.iter().map(|(elem, _)| elem))?;
+                f.write_str(")")?;
             }
             Expr::Index(Index { expr, index }) => {
                 f.write_str("(")?;

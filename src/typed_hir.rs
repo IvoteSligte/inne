@@ -3,7 +3,7 @@ use std::ops::Deref;
 pub use crate::hir::{
     Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, EmptyList, EmptyMap, Expr, For, Func,
     FuncId, Hir, If, Index, List, Loop, Map, Member, Name, Pair, Param, Range, Stmt, Struct,
-    StructLiteral, Type, TypeId, Unary, UnaryOp, VarDecl, VarId, While,
+    StructLiteral, Tuple, Type, TypeId, Unary, UnaryOp, VarDecl, VarId, While,
 };
 
 use crate::{Error, Span, Spanned, hir::Errors};
@@ -209,7 +209,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     Type::Range => Type::Int,
                     Type::String => Type::Char,
                     Type::List(elem_type) => *elem_type,
-                    // TODO: iteration over map (key, value) pairs (requires tuples)
+                    Type::Map { key, value } => Type::Tuple(vec![*key, *value]),
                     _ => {
                         // TODO: add "Did you mean to use a range?" as context if iter_type==Type::Int
                         self.errors
@@ -286,6 +286,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     }
                 }
                 Expr::Map(map) => self.check_map((map, *span)),
+                Expr::Tuple(tuple) => self.check_tuple((tuple, *span)),
                 Expr::Index(index) => {
                     let is_assignable =
                         !matches!(index.expr.0, Expr::EmptyList(_) | Expr::EmptyMap(_));
@@ -539,6 +540,15 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             key: Box::new(first_key_type),
             value: Box::new(first_value_type),
         }
+    }
+
+    fn check_tuple(&mut self, (tuple, _): Spanned<&mut Tuple<'src>>) -> Type {
+        let elements = tuple
+            .elements
+            .iter_mut()
+            .map(|elem| self.check_expr(elem).0)
+            .collect();
+        Type::Tuple(elements)
     }
 
     fn check_index(&mut self, (index, span): Spanned<&mut Index<'src>>) -> Type {

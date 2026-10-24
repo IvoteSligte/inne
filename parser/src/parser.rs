@@ -171,12 +171,15 @@ where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {
     recursive(|r#type| {
-        ident_parser()
+        let comma_separated_types = r#type
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>();
+
+        let named = ident_parser()
             .then(
-                r#type
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing()
-                    .collect::<Vec<_>>()
+                comma_separated_types
+                    .clone()
                     .delimited_by(just(Token::Op("<")), just(Token::Op(">")))
                     .or_not(),
             )
@@ -184,7 +187,17 @@ where
                 name,
                 generics: generics.unwrap_or(Vec::new()),
             })
-            .map_with(with_span)
+            .map_with(with_span);
+
+        let tuple = comma_separated_types
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map(|elements| Type {
+                name: ("%tuple", (0..0).into()),
+                generics: elements,
+            })
+            .map_with(with_span);
+
+        named.or(tuple)
     })
 }
 
@@ -222,24 +235,25 @@ where
     let r#type = type_parser();
 
     recursive(|expr| {
+        let comma_separated_exprs = expr
+            .clone()
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .collect::<Vec<_>>();
+
         // Function calls have very high precedence so we prioritise them
         let call = ident
             .then(
-                expr.clone()
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing()
-                    .collect::<Vec<_>>()
+                comma_separated_exprs
+                    .clone()
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
             .map(|(name, args)| Expr::Call(Call { name, args }))
             .map_with(with_span)
             .boxed();
         // TODO: make specifying more than one type instead of [<type>] report a nice error message
-        let list = expr
+        let list = comma_separated_exprs
             .clone()
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<_>>()
             .delimited_by(just(Token::LBracket), just(Token::RBracket))
             .map(|elements| Expr::List(List { elements }))
             .or(r#type
@@ -280,6 +294,12 @@ where
                     })
                 }))
             .map_with(with_span);
+        // NOTE: f() can be ambiguously interpreted as f; () or a function call, since semi-colons are optional.
+        //       We therefore assume that the parser is greedy.
+        let tuple = comma_separated_exprs
+            .delimited_by(just(Token::LParen), just(Token::RParen))
+            .map(|elements| Expr::Tuple(Tuple { elements }))
+            .map_with(with_span);
 
         // Name { ... } can be ambiguous if a { ... } block follows, such as in an if-statement,
         // so we assume that the parser is greedy.
@@ -301,6 +321,7 @@ where
             call,
             list,
             map,
+            tuple,
             var,
             int,
             bool,
