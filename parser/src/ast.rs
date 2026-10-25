@@ -34,6 +34,7 @@ pub struct Type<'a> {
 
 pub struct Func<'a> {
     pub name: Name<'a>,
+    pub generics: Vec<Name<'a>>,
     pub params: Vec<Param<'a>>,
     pub return_type: Option<Spanned<Type<'a>>>,
     pub body: Block<'a>,

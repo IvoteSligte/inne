@@ -54,6 +54,7 @@ pub type Block<'a> = Vec<Stmt<'a>>;
 pub struct Func<'a> {
     pub id: FuncId,
     pub name: Name<'a>,
+    pub generics: Vec<Name<'a>>,
     pub params: Vec<Param<'a>>,
     pub return_type: Option<Spanned<Type>>,
     pub body: Block<'a>,
@@ -107,13 +108,14 @@ pub struct Variant<'a> {
 }
 
 usize_newtype!(TypeId);
+usize_newtype!(GenericId);
 
 impl TypeId {
     pub const UNKNOWN: Self = Self(usize::MAX);
 }
 
 // TODO: make cheaper to clone with Rc's
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Nothing,
     Int,
@@ -125,6 +127,7 @@ pub enum Type {
     List(Box<Self>),
     Map { key: Box<Self>, value: Box<Self> },
     Named { id: TypeId, generics: Vec<Self> },
+    Generic(GenericId),
 }
 
 impl Type {
@@ -134,15 +137,11 @@ impl Type {
     };
 
     pub fn is_known(&self) -> bool {
-        *self != Type::UNKNOWN
-    }
-
-    pub fn is_unknown(&self) -> bool {
-        *self == Type::UNKNOWN
+        *self != Type::UNKNOWN && !matches!(self, Type::Generic(_))
     }
 
     pub fn or<'a>(&'a self, other: &'a Self) -> &'a Type {
-        if *self == Type::UNKNOWN { other } else { self }
+        if self.is_known() { self } else { other }
     }
 }
 
@@ -314,6 +313,7 @@ struct Constructor<'a> {
     types: Vec<TypeDef<'a>>,
     func_map: HashMap<&'a str, (FuncId, &'a ast::Func<'a>)>,
     type_map: HashMap<&'a str, (TypeId, Span, AstTypeDef<'a>)>,
+    generics: &'a [Name<'a>],
     scopes: Vec<HashMap<&'a str, VarId>>,
     errors: Errors,
 }
@@ -326,6 +326,7 @@ impl<'a> Constructor<'a> {
             types: Vec::new(),
             func_map: HashMap::new(),
             type_map: HashMap::new(),
+            generics: &[],
             scopes: Vec::new(),
             errors: Errors::new(),
         };
@@ -396,16 +397,17 @@ impl<'a> Constructor<'a> {
         value
     }
 
-    fn map_scope<'b: 'a>(&mut self, stmts: &[ast::Stmt<'b>]) -> Vec<Stmt<'b>> {
+    fn map_scope<'b: 'a>(&mut self, stmts: &'a [ast::Stmt<'b>]) -> Vec<Stmt<'b>> {
         self.in_scope(|_self| _self.map_stmts(stmts))
     }
 
-    fn map_stmts<'b: 'a>(&mut self, stmts: &[ast::Stmt<'b>]) -> Vec<Stmt<'b>> {
+    fn map_stmts<'b: 'a>(&mut self, stmts: &'a [ast::Stmt<'b>]) -> Vec<Stmt<'b>> {
         let mut out_stmts = Vec::with_capacity(stmts.len());
         for stmt in stmts {
             match stmt {
                 ast::Stmt::Func(ast::Func {
                     name,
+                    generics,
                     params,
                     return_type,
                     body,
@@ -428,6 +430,8 @@ impl<'a> Constructor<'a> {
                     }
                     let (id, _) = *self.func_map.get(name.0).unwrap();
                     self.in_scope(|_self| {
+                        // TODO: warn about unused generics
+                        _self.generics = generics.as_slice();
                         let params = params.iter().map(|param| _self.map_param(param)).collect();
                         let return_type =
                             return_type.as_ref().map(|r#type| _self.map_type(&r#type));
@@ -435,10 +439,12 @@ impl<'a> Constructor<'a> {
                         _self.funcs.push(Func {
                             id,
                             name: *name,
+                            generics: generics.clone(),
                             params,
                             return_type,
                             body,
                         });
+                        _self.generics = &[];
                     });
                 }
                 ast::Stmt::Struct(ast::Struct { name, fields }) => {
@@ -717,7 +723,7 @@ impl<'a> Constructor<'a> {
                             TypeId::UNKNOWN
                         }
                         None => {
-                            // TODO: add similar names as contexts
+                            // TODO: add similar type/generic/function names as contexts
                             self.errors
                                 .add(format!("Unknown type '{}'", name.0), name.1);
                             TypeId::UNKNOWN
@@ -762,7 +768,7 @@ impl<'a> Constructor<'a> {
                             (TypeId::UNKNOWN, usize::MAX)
                         }
                         None => {
-                            // TODO: add similar names as contexts
+                            // TODO: add similar type/function/generic names as contexts
                             self.errors
                                 .add(format!("Unknown type '{}'", name.0), name.1);
                             (TypeId::UNKNOWN, usize::MAX)
@@ -878,15 +884,26 @@ impl<'a> Constructor<'a> {
                     value: Box::new(value),
                 }
             }
+            _ if let Some(generic_index) =
+                self.generics.iter().position(|generic| generic.0 == name.0) =>
+            {
+                if num_generics != 0 {
+                    self.errors
+                        .add("A generic parameter cannot take generic arguments", *span);
+                }
+                Type::Generic(GenericId(generic_index))
+            }
             _ => {
                 let id = match self.type_map.get(name.0) {
                     Some((type_id, _, _)) => *type_id,
                     None => {
+                        // TODO: add similarly named types/functions/generics as contexts
                         self.errors
                             .add(format!("Unknown type '{}'", name.0), name.1);
                         TypeId::UNKNOWN
                     }
                 };
+                // TODO: check that number of generics matches
                 Type::Named { id, generics }
             }
         };
@@ -943,7 +960,7 @@ impl std::fmt::Display for Type {
             Type::List(element) => return write!(f, "List<{element}>"),
             Type::Map { key, value } => return write!(f, "Map<{key}, {value}>"),
             Type::Named { id, generics } => {
-                write!(f, "{id}")?;
+                write!(f, "_{id}")?;
                 if !generics.is_empty() {
                     f.write_str("<")?;
                     write_comma_separated(f, generics)?;
@@ -951,6 +968,7 @@ impl std::fmt::Display for Type {
                 }
                 return Ok(());
             }
+            Type::Generic(id) => return write!(f, "_{id}"),
         })
     }
 }
@@ -969,12 +987,24 @@ impl std::fmt::Display for Hir<'_> {
         for Func {
             id,
             name: (name, _),
+            generics,
             params,
             return_type,
             body,
         } in &self.funcs
         {
-            write!(f, "func _{} {name}(", id)?;
+            write!(f, "func _{} {name}", id)?;
+            if !generics.is_empty() {
+                f.write_str("<")?;
+                for (i, generic) in generics.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{}", generic.0)?;
+                }
+                f.write_str(">")?;
+            }
+            f.write_str("(")?;
             for (i, param) in params.iter().enumerate() {
                 if i > 0 {
                     f.write_str(", ")?;

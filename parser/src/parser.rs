@@ -49,6 +49,13 @@ where
                 .or_not(),
         )
         .map(|(name, payload)| Variant { name, payload });
+    let generics = ident
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LBrace), just(Token::RBrace))
+        .or_not()
+        .map(|maybe_generics| maybe_generics.unwrap_or(Vec::new()));
     recursive(|stmt| {
         let block = stmt
             .repeated()
@@ -57,6 +64,7 @@ where
         // TODO: generic functions
         let func = just(Token::Func)
             .ignore_then(ident)
+            .then(generics)
             .then(
                 param
                     .separated_by(just(Token::Comma))
@@ -66,9 +74,10 @@ where
             )
             .then(just(Token::Arrow).ignore_then(r#type).or_not())
             .then(block.clone())
-            .map(|(((name, params), return_type), body)| {
+            .map(|((((name, generics), params), return_type), body)| {
                 Stmt::Func(Func {
                     name,
+                    generics,
                     params,
                     return_type,
                     body,

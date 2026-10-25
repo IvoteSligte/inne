@@ -1,9 +1,10 @@
-use std::ops::Deref;
+use std::{collections::HashMap, ops::Deref};
 
 pub use crate::hir::{
     Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, EmptyList, EmptyMap, Expr, For, Func,
-    FuncId, Hir, If, Index, List, Loop, Map, Member, Name, Pair, Param, Range, Stmt, Struct,
-    StructLiteral, Type, TypeDef, TypeId, Unary, UnaryOp, VarDecl, VarId, VariantLiteral, While,
+    FuncId, GenericId, Hir, If, Index, List, Loop, Map, Member, Name, Pair, Param, Range, Stmt,
+    Struct, StructLiteral, Type, TypeDef, TypeId, Unary, UnaryOp, VarDecl, VarId, VariantLiteral,
+    While,
 };
 
 use crate::{Error, Errors, Span, Spanned};
@@ -27,6 +28,13 @@ pub struct VarInfo {
     pub r#type: Type,
 }
 
+struct FuncSignature<'hir, 'src> {
+    name: Name<'src>,
+    generics: &'hir [Name<'src>],
+    params: &'hir [Param<'src>],
+    return_type: &'hir Type,
+}
+
 // TODO: return (Option<TypedHir<'a>>, Vec<Error>) instead because the TypedHir may be recoverable on error
 pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error>> {
     let vars = hir
@@ -47,14 +55,16 @@ pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Erro
             .iter_mut()
             .map(|func| {
                 (
-                    (
-                        func.name,
-                        func.params.as_slice(),
-                        func.return_type
+                    FuncSignature {
+                        name: func.name,
+                        generics: func.generics.as_slice(),
+                        params: func.params.as_slice(),
+                        return_type: func
+                            .return_type
                             .as_ref()
                             .map(|(r#type, _)| r#type)
                             .unwrap_or(&Type::Nothing),
-                    ),
+                    },
                     &mut func.body,
                 )
             })
@@ -66,13 +76,13 @@ pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Erro
             types: &hir.types,
             expected_return_type: &Type::Nothing,
         };
-        for (name, params, return_type) in &func_signatures {
-            type_checker.check_func_signature(*name, params, return_type);
+        for signature in &func_signatures {
+            type_checker.check_func_signature(signature);
         }
         type_checker.check_stmts(&mut hir.stmts);
         type_checker.check_types();
-        for ((_, _, func_return_type), func_body) in std::iter::zip(&func_signatures, func_bodies) {
-            type_checker.expected_return_type = func_return_type;
+        for (func_signature, func_body) in std::iter::zip(&func_signatures, func_bodies) {
+            type_checker.expected_return_type = func_signature.return_type;
             type_checker.check_stmts(func_body);
         }
         (type_checker.errors, type_checker.vars)
@@ -93,18 +103,19 @@ pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Erro
 struct TypeChecker<'src, 'hir> {
     errors: Errors,
     vars: Vec<VarInfo>,
-    func_signatures: &'hir [(Name<'src>, &'hir [Param<'src>], &'hir Type)],
+    func_signatures: &'hir [FuncSignature<'hir, 'src>],
     types: &'hir [TypeDef<'src>],
     expected_return_type: &'hir Type,
 }
 
 impl<'src, 'hir> TypeChecker<'src, 'hir> {
-    fn check_func_signature(
-        &mut self,
-        name: Name<'src>,
-        params: &'hir [Param<'src>],
-        return_type: &'hir Type,
-    ) {
+    fn check_func_signature(&mut self, func: &'hir FuncSignature<'hir, 'src>) {
+        let FuncSignature {
+            name,
+            generics: _,
+            params,
+            return_type,
+        } = *func;
         for param in params {
             self.check_type(&param.r#type);
             self.vars[param.var_id.get()].r#type = param.r#type.0.clone();
@@ -456,12 +467,9 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
 
     fn check_unary(&mut self, (unary, span): Spanned<&mut Unary<'src>>) -> Type {
         let (expr_type, _) = self.check_expr(&mut unary.expr);
-        if expr_type.is_unknown() {
-            return expr_type;
-        }
         match unary.op.0 {
             UnaryOp::Neg => {
-                if expr_type != Type::Int {
+                if expr_type.is_known() && expr_type != Type::Int {
                     self.errors.add(
                         format!(
                             "Only integers can be negated. Cannot negate '{}'.",
@@ -472,7 +480,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 }
             }
             UnaryOp::Not => {
-                if expr_type != Type::Bool {
+                if expr_type.is_known() && expr_type != Type::Bool {
                     self.errors.add(
                         format!(
                             "Only booleans can be inverted. Cannot invert '{}'.",
@@ -487,11 +495,18 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
     }
 
     fn check_call(&mut self, (call, span): Spanned<&mut Call<'src>>) -> Type {
+        // FIXME: match generics if the called function has them (and check if all of the same-named ones have the same concrete type)
+
         if call.func_id == FuncId::PRINT {
             // print(...) accepts any number of arguments of any type.
             return Type::Nothing;
         }
-        let (_, params, return_type) = self.func_signatures[call.func_id.get()];
+        let &FuncSignature {
+            name: func_name,
+            generics,
+            params,
+            return_type,
+        } = &self.func_signatures[call.func_id.get()];
         let args = &mut call.args;
         if params.len() > args.len() {
             let closing_paren_span = Span {
@@ -520,15 +535,69 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             );
             self.errors.add(message, after_params_span);
         }
+        let mut generic_constraints = HashMap::new();
         for (arg, param) in std::iter::zip(args, params) {
             let (arg_type, _) = self.check_expr(arg);
             let (param_type, _) = &param.r#type;
-            if arg_type.is_known() && arg_type != *param_type {
+            if types_not_equal(&arg_type, param_type) {
                 let message = format!(
                     "Expected a value of type '{}' but found a value of type '{}'",
                     arg_type, param_type
                 );
                 self.errors.add(message, arg.1);
+            } else if !generics.is_empty() {
+                extract_generic_constraints(
+                    &arg_type,
+                    arg.1,
+                    param_type,
+                    param.name.1,
+                    &mut generic_constraints,
+                );
+            }
+        }
+
+        // --- Check that generics with the same name are equal ---
+
+        for (generic_id, pairs) in generic_constraints {
+            if pairs.len() <= 1 {
+                continue;
+            }
+            let (first_type, first_span) = &pairs[0];
+            for (r#type, span) in &pairs[1..] {
+                if r#type == first_type {
+                    continue;
+                }
+                let generic = generics[generic_id.get()];
+                if span == first_span {
+                    self.errors.add_with_context(
+                            format!(
+                                "This argument requires that generic '{}' of function '{}' is both '{}' and '{}'",
+                                generic.0,
+                                func_name.0,
+                                first_type,
+                                r#type,
+                            ),
+                            *span,
+                            "Generic defined here:",
+                            generic.1,
+                        );
+                } else {
+                    self.errors.add_with_contexts(
+                            format!(
+                                "This argument requires that generic '{}' of function '{}' is '{}', but another requires that it is '{}'",
+                                generic.0,
+                                func_name.0,
+                                first_type,
+                                r#type,
+                            ),
+                            *first_span,
+                            vec![
+                                ("The other argument:".to_string(), *span),
+                                ("Generic defined here:".to_string(), generic.1)
+                            ],
+                        );
+                }
+                break;
             }
         }
         return_type.clone()
@@ -726,4 +795,76 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
 /// This function also returns `false` if either type is unknown.
 fn types_not_equal(left: &Type, right: &Type) -> bool {
     left.is_known() && right.is_known() && left != right
+}
+
+fn extract_generic_constraints(
+    left: &Type,
+    left_span: Span,
+    right: &Type,
+    right_span: Span,
+    constraints: &mut HashMap<GenericId, Vec<(Type, Span)>>,
+) {
+    match (left, right) {
+        (Type::Generic(generic_id), _) if *right != Type::UNKNOWN => {
+            constraints
+                .entry(*generic_id)
+                .or_default()
+                .push((right.clone(), right_span));
+        }
+        (_, Type::Generic(generic_id)) if *left != Type::UNKNOWN => {
+            constraints
+                .entry(*generic_id)
+                .or_default()
+                .push((left.clone(), left_span));
+        }
+        (Type::List(left_element), Type::List(right_element)) => {
+            extract_generic_constraints(
+                left_element,
+                left_span,
+                right_element,
+                right_span,
+                constraints,
+            );
+        }
+        (
+            Type::Map {
+                key: left_key,
+                value: left_value,
+            },
+            Type::Map {
+                key: right_key,
+                value: right_value,
+            },
+        ) => {
+            extract_generic_constraints(left_key, left_span, right_key, right_span, constraints);
+            extract_generic_constraints(
+                left_value,
+                left_span,
+                right_value,
+                right_span,
+                constraints,
+            );
+        }
+        (
+            Type::Named {
+                id: left_id,
+                generics: left_generics,
+            },
+            Type::Named {
+                id: right_id,
+                generics: right_generics,
+            },
+        ) if *left_id != TypeId::UNKNOWN && left_id == right_id => {
+            for (left_generic, right_generic) in std::iter::zip(left_generics, right_generics) {
+                extract_generic_constraints(
+                    left_generic,
+                    left_span,
+                    right_generic,
+                    right_span,
+                    constraints,
+                );
+            }
+        }
+        _ => {}
+    }
 }

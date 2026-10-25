@@ -58,11 +58,15 @@ impl Override<'_> {
         match stmt {
             Stmt::Func(Func {
                 name,
+                generics,
                 params,
                 return_type,
                 body,
             }) => {
                 self.set(tt::FUNCTION, name.1);
+                for generic in generics {
+                    self.set(tt::TYPE, generic.1);
+                }
                 for param in params {
                     self.set(tt::PARAMETER, param.name.1);
                     self.set(tt::TYPE, param.r#type.1);

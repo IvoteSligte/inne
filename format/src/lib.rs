@@ -217,6 +217,11 @@ impl Format for Func<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         f.put_keyword(Token::Func)?;
         self.name.fmt(f)?;
+        if !self.generics.is_empty() {
+            f.put(Token::Op("<"))?;
+            write_comma_separated(f, &self.generics)?;
+            f.put(Token::Op(">"))?;
+        }
         f.put(Token::LParen)?;
         write_comma_separated(f, &self.params)?;
         f.put(Token::RParen)?;
