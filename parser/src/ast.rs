@@ -77,7 +77,6 @@ pub enum Expr<'a> {
     List(List<'a>),
     EmptyMap(EmptyMap<'a>),
     Map(Map<'a>),
-    Tuple(Tuple<'a>),
     StructLiteral(StructLiteral<'a>),
     VariantLiteral(VariantLiteral<'a>),
     Member(Member<'a>),
@@ -150,10 +149,6 @@ pub struct Map<'a> {
 pub struct Pair<'a> {
     pub key: Spanned<Expr<'a>>,
     pub value: Spanned<Expr<'a>>,
-}
-
-pub struct Tuple<'a> {
-    pub elements: Vec<Spanned<Expr<'a>>>,
 }
 
 pub struct StructLiteral<'a> {

@@ -113,7 +113,6 @@ pub enum Op {
     },
     List(Vec<LocalId>),
     Map(Vec<Pair>),
-    Tuple(Vec<LocalId>),
     Index {
         expr: LocalId,
         index: LocalId,
@@ -495,13 +494,6 @@ impl Constructor {
                     .collect();
                 builder.push_op(Op::Map(pairs))
             }
-            thir::Expr::Tuple(thir::Tuple { elements }) => {
-                let elements = elements
-                    .iter()
-                    .map(|elem| self.map_expr(&elem.0, builder))
-                    .collect();
-                builder.push_op(Op::Tuple(elements))
-            }
             thir::Expr::Index(thir::Index { expr, index }) => {
                 let expr = self.map_expr(&expr.0, builder);
                 let index = self.map_expr(&index.0, builder);
@@ -763,12 +755,6 @@ impl std::fmt::Display for Value {
                 }
                 f.write_str("}")
             }
-            Value::Tuple(ptr) => {
-                let tuple = ptr.borrow();
-                f.write_str("(")?;
-                write_comma_separated(f, tuple.iter())?;
-                f.write_str(")")
-            }
             Value::Range { start, end } => write!(f, "{start}..{end}"),
             Value::Struct(ptr) => {
                 let r#struct = ptr.borrow();
@@ -888,11 +874,6 @@ impl std::fmt::Display for Stmt {
                     }
                     write!(f, "_{}: _{}", pair.key.0, pair.value.0)?;
                 }
-                f.write_str(")")
-            }
-            Tuple(elements) => {
-                f.write_str("Tuple(")?;
-                write_comma_separated(f, elements.iter().map(|id| id))?;
                 f.write_str(")")
             }
             Index { expr, index } => {

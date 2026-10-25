@@ -221,7 +221,7 @@ impl<'a> Interpreter<'a> {
                     end: *end,
                 },
                 Value::Map(ptr) => {
-                    Value::MapIter(value::MapIter(value::Map::into_iter(ptr.borrow().clone())))
+                    Value::MapIter(value::MapIter(value::Map::into_keys(ptr.borrow().clone())))
                 }
                 _ => unreachable!(),
             },
@@ -246,10 +246,10 @@ impl<'a> Interpreter<'a> {
                         is_not_empty
                     }
                     Value::MapIter(iter) => {
-                        let maybe_pair = iter.0.next();
-                        let is_not_empty = maybe_pair.is_some();
-                        if let Some((key, value)) = maybe_pair {
-                            self.set_local(target, Value::new_tuple([key, value]));
+                        let maybe_key = iter.0.next();
+                        let is_not_empty = maybe_key.is_some();
+                        if let Some(key) = maybe_key {
+                            self.set_local(target, key);
                         }
                         is_not_empty
                     }
@@ -268,11 +268,6 @@ impl<'a> Interpreter<'a> {
                     self.get_local(pair.value).clone(),
                 )
             })),
-            Op::Tuple(local_ids) => Value::new_tuple(
-                local_ids
-                    .iter()
-                    .map(|&local_id| self.get_local(local_id).clone()),
-            ),
             // TODO: require that the user explicitly specifies copy/ref instead of doing these expensive copies by default
             &Op::Index { expr, index } => match (self.get_local(expr), self.get_local(index)) {
                 // TODO: out-of-bounds checks
@@ -451,17 +446,6 @@ impl<'a> Interpreter<'a> {
                 }
                 print!("}}");
             }
-            Value::Tuple(ptr) => {
-                let tuple = ptr.borrow();
-                print!("(");
-                for (i, elem) in tuple.iter().enumerate() {
-                    if i > 0 {
-                        print!(", ");
-                    }
-                    self.print(elem, true);
-                }
-                print!(")");
-            }
             Value::Struct(ptr) => {
                 let r#struct = ptr.borrow();
                 let TypeInfo::Struct { name, field_names } = &self.types[r#struct.type_id.get()]
@@ -529,9 +513,6 @@ impl<'a> Interpreter<'a> {
                     .iter()
                     .map(|(key, value)| (self.deepcopy(key), self.deepcopy(value))),
             ),
-            Value::Tuple(tuple) => {
-                Value::new_tuple((*tuple).borrow().iter().map(|elem| self.deepcopy(elem)))
-            }
             Value::Range { start, end } => Value::Range {
                 start: *start,
                 end: *end,

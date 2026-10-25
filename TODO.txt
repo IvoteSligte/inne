@@ -5,8 +5,7 @@ language:
 - move semantics
 - pattern matching/destructuring
   - if var Enum(x) = expr
-  - while var Enum(x) = expr
-  - var (x, y) = expr
+  - while var Enum(x) = expr    // low priority
   - var Enum(x) = expr else ... // low priority
   - match                       // low priority
 - format strings

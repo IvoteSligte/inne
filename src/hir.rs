@@ -124,7 +124,6 @@ pub enum Type {
     Range,
     List(Box<Self>),
     Map { key: Box<Self>, value: Box<Self> },
-    Tuple(Vec<Self>),
     Named { id: TypeId, generics: Vec<Self> },
 }
 
@@ -161,7 +160,6 @@ pub enum Expr<'a> {
     List(List<'a>),
     EmptyMap(EmptyMap),
     Map(Map<'a>),
-    Tuple(Tuple<'a>),
     StructLiteral(StructLiteral<'a>),
     VariantLiteral(VariantLiteral<'a>),
     Index(Index<'a>),
@@ -206,10 +204,6 @@ pub struct EmptyMap {
 
 pub struct Map<'a> {
     pub pairs: Vec<Pair<'a>>,
-}
-
-pub struct Tuple<'a> {
-    pub elements: Vec<Spanned<Expr<'a>>>,
 }
 
 pub struct StructLiteral<'a> {
@@ -661,9 +655,6 @@ impl<'a> Constructor<'a> {
                         })
                         .collect(),
                 }),
-                ast::Expr::Tuple(ast::Tuple { elements }) => Expr::Tuple(Tuple {
-                    elements: self.map_exprs(elements),
-                }),
                 ast::Expr::StructLiteral(ast::StructLiteral { name, fields }) => {
                     let mut fields = fields
                         .iter()
@@ -887,7 +878,6 @@ impl<'a> Constructor<'a> {
                     value: Box::new(value),
                 }
             }
-            "%tuple" => Type::Tuple(generics),
             _ => {
                 let id = match self.type_map.get(name.0) {
                     Some((type_id, _, _)) => *type_id,
@@ -952,11 +942,6 @@ impl std::fmt::Display for Type {
             Type::Range => "range",
             Type::List(element) => return write!(f, "List<{element}>"),
             Type::Map { key, value } => return write!(f, "Map<{key}, {value}>"),
-            Type::Tuple(elements) => {
-                f.write_str("(")?;
-                write_comma_separated(f, elements)?;
-                return f.write_str(")");
-            }
             Type::Named { id, generics } => {
                 write!(f, "{id}")?;
                 if !generics.is_empty() {
@@ -1131,11 +1116,6 @@ impl<'a> std::fmt::Display for Expr<'a> {
                 f.write_str("{")?;
                 write_comma_separated(f, pairs.iter())?;
                 f.write_str("}")?;
-            }
-            Expr::Tuple(Tuple { elements }) => {
-                f.write_str("(")?;
-                write_comma_separated(f, elements.iter().map(|(elem, _)| elem))?;
-                f.write_str(")")?;
             }
             Expr::Index(Index { expr, index }) => {
                 f.write_str("(")?;

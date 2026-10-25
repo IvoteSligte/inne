@@ -76,10 +76,6 @@ This means that all map values have known types and do not require type inferenc
 
 Any type can be used as a key or value (e.g. `map[key]`).
 
-### Tuples
-
-Rust tuples.
-
 ### Structs
 
 Rust C-style structs.
@@ -187,6 +183,8 @@ Braces are mandatory for each kind of control-flow statement, unlike in C.
 `for value in iterator { ... }` as in Rust.
 
 Only ranges, lists, and maps can be used as iterators.
+
+Using a range as iterator yields integers, using a list yields its elements, and using a map yields its keys.
 
 ### While-loops
 

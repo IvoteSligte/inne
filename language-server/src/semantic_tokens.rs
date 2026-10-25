@@ -182,7 +182,6 @@ impl Override<'_> {
                 self.expr(key);
                 self.expr(value);
             }),
-            Expr::Tuple(Tuple { elements }) => elements.iter().for_each(|elem| self.expr(elem)),
             Expr::Index(Index { expr, index }) => {
                 self.expr(&expr);
                 self.expr(&index);

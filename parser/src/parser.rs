@@ -1,8 +1,7 @@
 use chumsky::{input::ValueInput, prelude::*};
 
 // TODO: error recovery
-// TODO: tuples
-// TODO: list/tuple pattern matching in variable declarations
+// TODO: list/map/struct/enum pattern matching in variable declarations
 
 use crate::{Span, Spanned, Token, ast::*};
 
@@ -195,7 +194,7 @@ where
             .allow_trailing()
             .collect::<Vec<_>>();
 
-        let named = ident_parser()
+        ident_parser()
             .then(
                 comma_separated_types
                     .clone()
@@ -206,17 +205,7 @@ where
                 name,
                 generics: generics.unwrap_or(Vec::new()),
             })
-            .map_with(with_span);
-
-        let tuple = comma_separated_types
-            .delimited_by(just(Token::LParen), just(Token::RParen))
-            .map(|elements| Type {
-                name: ("%tuple", (0..0).into()),
-                generics: elements,
-            })
-            .map_with(with_span);
-
-        named.or(tuple)
+            .map_with(with_span)
     })
 }
 
@@ -313,12 +302,6 @@ where
                     })
                 }))
             .map_with(with_span);
-        // NOTE: f() can be ambiguously interpreted as f; () or a function call, since semi-colons are optional.
-        //       We therefore assume that the parser is greedy.
-        let tuple = comma_separated_exprs
-            .delimited_by(just(Token::LParen), just(Token::RParen))
-            .map(|elements| Expr::Tuple(Tuple { elements }))
-            .map_with(with_span);
 
         // Name { ... } can be ambiguous if a { ... } block follows, such as in an if-statement,
         // so we assume that the parser is greedy.
@@ -356,7 +339,6 @@ where
             call,
             list,
             map,
-            tuple,
             var,
             int,
             bool,

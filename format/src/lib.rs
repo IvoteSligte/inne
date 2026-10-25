@@ -318,7 +318,6 @@ impl Format for Expr<'_> {
             List,
             EmptyMap,
             Map,
-            Tuple,
             StructLiteral,
             VariantLiteral,
             Index,
@@ -459,14 +458,6 @@ impl Format for Map<'_> {
         f.put(Token::LBrace)?;
         write_comma_separated(f, &self.pairs)?;
         f.put(Token::RBrace)
-    }
-}
-
-impl Format for Tuple<'_> {
-    fn fmt(&self, f: &mut Writer<'_>) -> Result {
-        f.put(Token::LParen)?;
-        write_comma_separated(f, &self.elements)?;
-        f.put(Token::RParen)
     }
 }
 

@@ -22,7 +22,6 @@ pub enum Value {
         end: usize,
     },
     Map(Ptr<Map>),
-    Tuple(Ptr<Tuple>),
     Range {
         start: Int,
         end: Int,
@@ -73,10 +72,6 @@ impl Value {
         Self::Map(create_pointer(pairs.into_iter().collect()))
     }
 
-    pub fn new_tuple(elements: impl IntoIterator<Item = Value>) -> Self {
-        Self::Tuple(create_pointer(elements.into_iter().collect()))
-    }
-
     pub fn new_struct(r#struct: Struct) -> Self {
         Self::Struct(create_pointer(r#struct))
     }
@@ -91,7 +86,6 @@ type Ptr<T> = Rc<RefCell<T>>;
 pub type String = Vec<char>;
 pub type List = Vec<Value>;
 pub type Map = BTreeMap<Value, Value>;
-pub type Tuple = Vec<Value>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Struct {
@@ -109,7 +103,7 @@ pub struct Enum {
 /// Wrapper around a [BTreeMap] iterator that implements traits that all [Value]s must have.
 /// These traits should not be used, however.
 #[derive(Debug)]
-pub struct MapIter(pub std::collections::btree_map::IntoIter<Value, Value>);
+pub struct MapIter(pub std::collections::btree_map::IntoKeys<Value, Value>);
 
 impl Clone for MapIter {
     fn clone(&self) -> Self {
