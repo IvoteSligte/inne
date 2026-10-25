@@ -11,41 +11,40 @@ pub enum Value {
     Int(Int),
     Bool(bool),
     String {
-        ptr: StringPointer,
+        ptr: Ptr<String>,
         start: usize,
         end: usize,
     },
     Char(char),
     List {
-        ptr: ListPointer,
+        ptr: Ptr<List>,
         start: usize,
         end: usize,
     },
-    Map(MapPointer),
-    /// Tuple does not use a pointer as it is currently impossible to take a pointer
-    /// to any of its elements.
-    Tuple(TuplePointer),
+    Map(Ptr<Map>),
+    Tuple(Ptr<Tuple>),
     Range {
         start: Int,
         end: Int,
     },
-    Struct(StructPointer),
+    Struct(Ptr<Struct>),
+    Enum(Ptr<Enum>),
     /// Pointer to a local value. Only valid for the duration of the current function.
     LocalPointer(LocalId),
     FieldPointer {
-        ptr: StructPointer,
+        ptr: Ptr<Struct>,
         field_index: usize,
     },
     ListIndexPointer {
-        ptr: ListPointer,
+        ptr: Ptr<List>,
         index: usize,
     },
     StringIndexPointer {
-        ptr: StringPointer,
+        ptr: Ptr<String>,
         index: usize,
     },
     MapValuePointer {
-        ptr: MapPointer,
+        ptr: Ptr<Map>,
         key: Box<Value>,
     },
     MapIter(MapIter),
@@ -77,26 +76,34 @@ impl Value {
     pub fn new_tuple(elements: impl IntoIterator<Item = Value>) -> Self {
         Self::Tuple(create_pointer(elements.into_iter().collect()))
     }
+
+    pub fn new_struct(r#struct: Struct) -> Self {
+        Self::Struct(create_pointer(r#struct))
+    }
+
+    pub fn new_enum(r#enum: Enum) -> Self {
+        Self::Enum(create_pointer(r#enum))
+    }
 }
 
+type Ptr<T> = Rc<RefCell<T>>;
+
 pub type String = Vec<char>;
-pub type StringPointer = Rc<RefCell<String>>;
-
 pub type List = Vec<Value>;
-pub type ListPointer = Rc<RefCell<List>>;
-
 pub type Map = BTreeMap<Value, Value>;
-pub type MapPointer = Rc<RefCell<Map>>;
-
 pub type Tuple = Vec<Value>;
-pub type TuplePointer = Rc<RefCell<Tuple>>;
-
-pub type StructPointer = Rc<RefCell<Struct>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Struct {
     pub type_id: TypeId,
     pub fields: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Enum {
+    pub type_id: TypeId,
+    pub variant_index: usize,
+    pub payload: Option<Value>,
 }
 
 /// Wrapper around a [BTreeMap] iterator that implements traits that all [Value]s must have.
@@ -130,6 +137,6 @@ impl Ord for MapIter {
     }
 }
 
-pub fn create_pointer<T>(value: T) -> Rc<RefCell<T>> {
+pub fn create_pointer<T>(value: T) -> Ptr<T> {
     Rc::new(RefCell::new(value))
 }

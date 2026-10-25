@@ -149,6 +149,7 @@ impl Format for Stmt<'_> {
         delegate!(self, f,
             Func,
             Struct,
+            Enum,
             VarDecl,
             Assign,
             If,
@@ -261,6 +262,37 @@ impl Format for Field<'_> {
     }
 }
 
+impl Format for Enum<'_> {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_keyword(Token::Enum)?;
+        self.name.fmt(f)?;
+        if !self.variants.is_empty() {
+            f.put_indent_lbrace()?;
+            for variant in &self.variants {
+                variant.fmt(f)?;
+                f.put_comma()?;
+                f.put_newline()?;
+            }
+            f.put_dedent_rbrace()
+        } else {
+            f.put(Token::LBrace)?;
+            f.put(Token::RBrace)
+        }
+    }
+}
+
+impl Format for Variant<'_> {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        self.name.fmt(f)?;
+        if let Some(payload) = self.payload.as_ref() {
+            f.put(Token::LParen)?;
+            payload.fmt(f)?;
+            f.put(Token::RParen)?;
+        }
+        Ok(())
+    }
+}
+
 impl Format for VarDecl<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         f.put_keyword(Token::Var)?;
@@ -288,6 +320,7 @@ impl Format for Expr<'_> {
             Map,
             Tuple,
             StructLiteral,
+            VariantLiteral,
             Index,
             Member,
             Range;
@@ -458,6 +491,20 @@ impl Format for StructLiteral<'_> {
 impl Format for FieldLiteral<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         write_key_value(f, self.name, &self.value)
+    }
+}
+
+impl Format for VariantLiteral<'_> {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        self.enum_name.fmt(f)?;
+        f.put(Token::ColonColon)?;
+        self.name.fmt(f)?;
+        if let Some(payload) = self.payload.as_ref() {
+            f.put(Token::LParen)?;
+            payload.fmt(f)?;
+            f.put(Token::RParen)?;
+        }
+        Ok(())
     }
 }
 

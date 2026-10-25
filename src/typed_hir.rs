@@ -3,10 +3,11 @@ use std::ops::Deref;
 pub use crate::hir::{
     Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, EmptyList, EmptyMap, Expr, For, Func,
     FuncId, Hir, If, Index, List, Loop, Map, Member, Name, Pair, Param, Range, Stmt, Struct,
-    StructLiteral, Tuple, Type, TypeId, Unary, UnaryOp, VarDecl, VarId, While,
+    StructLiteral, Tuple, Type, TypeDef, TypeId, Unary, UnaryOp, VarDecl, VarId, VariantLiteral,
+    While,
 };
 
-use crate::{Error, Span, Spanned, hir::Errors};
+use crate::{Error, Errors, Span, Spanned};
 
 // NOTE: The HIR only needs to be edited to set Member.member_index,
 //       but maybe in the future a whole transformation is better?
@@ -18,7 +19,7 @@ pub struct TypedHir<'a> {
     /// Essentially `HashMap<VarId, VarInfo>`, but all [DefId]`s are consecutive.
     pub vars: Vec<VarInfo>,
     pub funcs: Vec<Func<'a>>,
-    pub types: Vec<Struct<'a>>,
+    pub types: Vec<TypeDef<'a>>,
     pub stmts: Vec<Stmt<'a>>,
 }
 
@@ -94,7 +95,7 @@ struct TypeChecker<'src, 'hir> {
     errors: Errors,
     vars: Vec<VarInfo>,
     func_signatures: &'hir [(Name<'src>, &'hir [Param<'src>], &'hir Type)],
-    types: &'hir [Struct<'src>],
+    types: &'hir [TypeDef<'src>],
     expected_return_type: &'hir Type,
 }
 
@@ -122,9 +123,20 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
 
     /// Checks the type definitions in the HIR.
     fn check_types(&mut self) {
-        for r#struct in self.types {
-            for field in &r#struct.fields {
-                self.check_type(&field.r#type);
+        for type_def in self.types {
+            match type_def {
+                TypeDef::Struct(r#struct) => {
+                    for field in &r#struct.fields {
+                        self.check_type(&field.r#type);
+                    }
+                }
+                TypeDef::Enum(r#enum) => {
+                    for variant in &r#enum.variants {
+                        if let Some(payload) = &variant.payload {
+                            self.check_type(payload);
+                        }
+                    }
+                }
             }
         }
     }
@@ -310,8 +322,9 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     name: _,
                     fields,
                 }) => {
-                    let r#struct = &self.types[type_id.get()];
-
+                    let TypeDef::Struct(r#struct) = &self.types[type_id.get()] else {
+                        unreachable!();
+                    };
                     // NOTE: this assumes that the field and struct field have been matched in HIR
                     //       (which may not be true if error recovery is used)
                     for (field, struct_field) in std::iter::zip(fields, &r#struct.fields) {
@@ -331,6 +344,55 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     Type::Named {
                         id: *type_id,
                         generics: Vec::new(), // NOTE: currently, structs do not have generics
+                    }
+                }
+                Expr::VariantLiteral(VariantLiteral {
+                    type_id,
+                    variant_index,
+                    enum_name: _,
+                    name: _,
+                    payload,
+                }) => {
+                    let TypeDef::Enum(r#enum) = &self.types[type_id.get()] else {
+                        unreachable!();
+                    };
+                    let expected_payload_type = r#enum.variants[*variant_index]
+                        .payload
+                        .as_ref()
+                        .map(|(r#type, _)| r#type);
+                    let payload_type = payload
+                        .as_mut()
+                        .map(|payload| (self.check_expr(payload).0, payload.1));
+                    match (expected_payload_type, payload_type) {
+                        (Some(expected), Some((found, payload_span))) => {
+                            if types_not_equal(expected, &found) {
+                                self.errors.add(
+                                    format!(
+                                        "Expected '{}' as payload type, but found '{}'",
+                                        expected, found
+                                    ),
+                                    payload_span,
+                                );
+                            }
+                        }
+                        (Some(expected), None) => {
+                            self.errors.add(
+                                format!(
+                                    "This enum variant requires a payload of type '{}'",
+                                    expected
+                                ),
+                                *span,
+                            );
+                        }
+                        (None, Some((_, payload_span))) => {
+                            self.errors
+                                .add("This enum variant does not expect a payload", payload_span);
+                        }
+                        (None, None) => {} // OK
+                    }
+                    Type::Named {
+                        id: *type_id,
+                        generics: Vec::new(), // NOTE: currently, enums do not have generics
                     }
                 }
             },
@@ -619,7 +681,13 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             return Type::UNKNOWN;
         };
         member.type_id = id;
-        let r#struct = &self.types[id.get()];
+        let TypeDef::Struct(r#struct) = &self.types[id.get()] else {
+            self.errors.add(
+                format!("Cannot access field of enum type '{}'", expr_type),
+                member.expr.1,
+            );
+            return Type::UNKNOWN;
+        };
         match r#struct
             .fields
             .iter()
@@ -648,13 +716,13 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         };
         let def = &self.types[id.get()];
         let def_generics_len = 0;
-        // TODO: add generics to structs
+        // TODO: add generics to structs/enums
 
         if generics.len() != def_generics_len {
             self.errors.add(
                 format!(
                     "The type '{}' has {} generics, but {} were provided.",
-                    def.name.0,
+                    def.name().0,
                     def_generics_len,
                     generics.len()
                 ),

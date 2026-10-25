@@ -81,6 +81,15 @@ impl Override<'_> {
                     self.r#type(r#type.1);
                 }
             }
+            Stmt::Enum(Enum { name, variants }) => {
+                self.set(tt::ENUM, name.1);
+                for Variant { name, payload } in variants {
+                    self.set(tt::ENUM_MEMBER, name.1);
+                    if let Some(payload) = payload.as_ref() {
+                        self.r#type(payload.1);
+                    }
+                }
+            }
             Stmt::VarDecl(VarDecl { name, value }) => {
                 self.set(tt::VARIABLE, name.1);
                 self.expr(value);
@@ -183,6 +192,17 @@ impl Override<'_> {
                 for FieldLiteral { name, value } in fields {
                     self.set(tt::PROPERTY, name.1);
                     self.expr(value);
+                }
+            }
+            Expr::VariantLiteral(VariantLiteral {
+                enum_name,
+                name,
+                payload,
+            }) => {
+                self.set(tt::ENUM, enum_name.1);
+                self.set(tt::ENUM_MEMBER, name.1);
+                if let Some(payload) = payload.as_ref() {
+                    self.expr(payload);
                 }
             }
             Expr::Member(Member { expr, member }) => {

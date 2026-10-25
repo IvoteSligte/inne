@@ -5,6 +5,7 @@ pub mod typed_hir;
 mod util;
 pub mod value;
 
+pub use error::Errors;
 pub use error::*;
 pub use hir::{Hir, hir_from_ast};
 pub use interpreter::Interpreter;

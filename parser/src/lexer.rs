@@ -23,7 +23,9 @@ pub enum Token<'src> {
     Return,
     In,
     Import,
+    Use,
     Struct,
+    Enum,
     Ref,
     Copy,
     ShallowCopy,
@@ -50,6 +52,7 @@ pub enum Token<'src> {
     Arrow,
     Semi,
     Colon,
+    ColonColon,
     At,
     Hashtag,
     Dollar,
@@ -59,7 +62,23 @@ impl Token<'_> {
     pub fn is_keyword(self) -> bool {
         matches!(
             self,
-            Func | Var | If | Else | For | While | Loop | Break | Continue | Return | In | Import
+            Func | Var
+                | If
+                | Else
+                | For
+                | While
+                | Loop
+                | Break
+                | Continue
+                | Return
+                | In
+                | Import
+                | Use
+                | Struct
+                | Enum
+                | Ref
+                | Copy
+                | ShallowCopy
         )
     }
 }
@@ -79,7 +98,9 @@ impl std::fmt::Display for Token<'_> {
             Return => "return",
             In => "in",
             Import => "import",
+            Use => "use",
             Struct => "struct",
+            Enum => "enum",
             Ref => "ref",
             Copy => "copy",
             ShallowCopy => "shallow_copy",
@@ -104,6 +125,7 @@ impl std::fmt::Display for Token<'_> {
             Arrow => "->",
             Semi => ";",
             Colon => ":",
+            ColonColon => "::",
             At => "@",
             Hashtag => "#",
             Dollar => "$",
@@ -184,7 +206,9 @@ pub fn create_lexer<'src>()
         text::ascii::keyword("return").to(Return),
         text::ascii::keyword("in").to(In),
         text::ascii::keyword("import").to(Import),
+        text::ascii::keyword("use").to(Use),
         text::ascii::keyword("struct").to(Struct),
+        text::ascii::keyword("enum").to(Enum),
         text::ascii::keyword("true").to(Bool(true)),
         text::ascii::keyword("false").to(Bool(false)),
         text::ascii::keyword("ref").to(Ref),
@@ -202,6 +226,7 @@ pub fn create_lexer<'src>()
         just(',').to(Comma),
         just("->").to(Arrow),
         just(';').to(Semi),
+        just("::").to(ColonColon),
         just(':').to(Colon),
         just('@').to(At),
         just('#').to(Hashtag),

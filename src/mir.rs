@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 pub use crate::typed_hir::{FuncId, Struct, TypeId, VarId, VarInfo};
 use crate::{
-    Error, TypedHir, Value, hir::Errors, typed_hir as thir, usize_newtype,
+    Error, Errors, TypedHir, Value, hir::TypeDef, typed_hir as thir, usize_newtype,
     util::write_comma_separated,
 };
 
@@ -28,6 +28,10 @@ pub enum TypeInfo<'a> {
     Struct {
         name: &'a str,
         field_names: Vec<&'a str>,
+    },
+    Enum {
+        name: &'a str,
+        variant_names: Vec<&'a str>,
     },
 }
 
@@ -118,6 +122,11 @@ pub enum Op {
         type_id: TypeId,
         fields: Vec<LocalId>,
     },
+    Enum {
+        type_id: TypeId,
+        variant_index: usize,
+        payload: Option<LocalId>,
+    },
     Member {
         expr: LocalId,
         field_index: usize,
@@ -180,15 +189,26 @@ impl Constructor {
         if !_self.errors.is_empty() {
             return Err(_self.errors.into_inner());
         }
-        Ok(Mir {
-            types: typed_hir
-                .types
-                .iter()
-                .map(|r#struct| TypeInfo::Struct {
+        let types = typed_hir
+            .types
+            .iter()
+            .map(|type_def| match type_def {
+                TypeDef::Struct(r#struct) => TypeInfo::Struct {
                     name: r#struct.name.0,
                     field_names: r#struct.fields.iter().map(|field| field.name.0).collect(),
-                })
-                .collect(),
+                },
+                TypeDef::Enum(r#enum) => TypeInfo::Enum {
+                    name: r#enum.name.0,
+                    variant_names: r#enum
+                        .variants
+                        .iter()
+                        .map(|variant| variant.name.0)
+                        .collect(),
+                },
+            })
+            .collect();
+        Ok(Mir {
+            types,
             funcs,
             stack_space: main_func.stack_space,
             blocks: main_func.blocks,
@@ -501,6 +521,22 @@ impl Constructor {
                     fields,
                 })
             }
+            thir::Expr::VariantLiteral(thir::VariantLiteral {
+                type_id,
+                variant_index,
+                enum_name: _,
+                name: _,
+                payload,
+            }) => {
+                let payload = payload
+                    .as_ref()
+                    .map(|payload| self.map_expr(&payload.0, builder));
+                builder.push_op(Op::Enum {
+                    type_id: *type_id,
+                    variant_index: *variant_index,
+                    payload,
+                })
+            }
             thir::Expr::Member(thir::Member {
                 type_id: _,
                 field_index: member_index,
@@ -736,7 +772,7 @@ impl std::fmt::Display for Value {
             Value::Range { start, end } => write!(f, "{start}..{end}"),
             Value::Struct(ptr) => {
                 let r#struct = ptr.borrow();
-                write!(f, "{}", r#struct.type_id.get())?;
+                write!(f, "_{}", r#struct.type_id.get())?;
                 f.write_str("{")?;
                 for (i, value) in r#struct.fields.iter().enumerate() {
                     if i > 0 {
@@ -745,6 +781,17 @@ impl std::fmt::Display for Value {
                     value.fmt(f)?;
                 }
                 f.write_str("}")
+            }
+            Value::Enum(ptr) => {
+                let r#enum = ptr.borrow();
+                write!(f, "_{}::", r#enum.type_id.get())?;
+                write!(f, "{}", r#enum.variant_index)?;
+                if let Some(payload) = r#enum.payload.as_ref() {
+                    f.write_str("(")?;
+                    payload.fmt(f)?;
+                    f.write_str(")")?;
+                }
+                Ok(())
             }
             // Pointers are currently not used as constants so they should be unreachable.
             Value::LocalPointer(_)
@@ -888,6 +935,17 @@ impl std::fmt::Display for Stmt {
                 write!(f, "Struct(type {}", type_id)?;
                 for field in fields {
                     write!(f, ", {}", field)?;
+                }
+                write!(f, ")")
+            }
+            Enum {
+                type_id,
+                variant_index,
+                payload,
+            } => {
+                write!(f, "Enum(type {}, variant {}", type_id, variant_index)?;
+                if let Some(payload) = payload {
+                    write!(f, ", {}", payload)?;
                 }
                 write!(f, ")")
             }

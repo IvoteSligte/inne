@@ -33,6 +33,7 @@ mod tt {
     pub const STRUCT: u32 = 10;
     pub const ENUM: u32 = 11;
     pub const PROPERTY: u32 = 12;
+    pub const ENUM_MEMBER: u32 = 13;
 }
 
 pub fn position_at_end(source: &str, line: &mut u32, character: &mut u32) -> Position {
@@ -150,6 +151,7 @@ impl LanguageServer for Backend {
                                     SemanticTokenType::STRUCT,
                                     SemanticTokenType::ENUM,
                                     SemanticTokenType::PROPERTY,
+                                    SemanticTokenType::ENUM_MEMBER,
                                 ],
                                 token_modifiers: Vec::new(),
                             },

@@ -1,6 +1,5 @@
 language:
 - methods // low priority
-- enums
 - imports
 - generics
 - move semantics

@@ -57,3 +57,53 @@ impl Error {
             .unwrap()
     }
 }
+
+/// Helper type for managing error messages.
+pub struct Errors {
+    inner: Vec<Error>,
+}
+
+impl Errors {
+    pub fn new() -> Self {
+        Self { inner: Vec::new() }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    pub fn add(&mut self, message: impl ToString, span: Span) {
+        self.add_with_contexts(message, span, Vec::new());
+    }
+
+    pub fn add_with_contexts(
+        &mut self,
+        message: impl ToString,
+        span: Span,
+        contexts: Vec<(String, Span)>,
+    ) {
+        self.inner.push(Error {
+            message: message.to_string(),
+            span,
+            contexts,
+        });
+    }
+
+    pub fn add_with_context(
+        &mut self,
+        message: impl ToString,
+        span: Span,
+        context_message: impl ToString,
+        context_span: Span,
+    ) {
+        self.add_with_contexts(
+            message,
+            span,
+            vec![(context_message.to_string(), context_span)],
+        );
+    }
+
+    pub fn into_inner(self) -> Vec<Error> {
+        self.inner
+    }
+}

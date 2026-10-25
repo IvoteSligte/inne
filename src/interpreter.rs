@@ -308,13 +308,22 @@ impl<'a> Interpreter<'a> {
                 (Value::Map(ptr), key) => ptr.borrow()[key].clone(),
                 _ => unreachable!(),
             },
-            Op::Struct { type_id, fields } => Value::Struct(create_pointer(value::Struct {
+            Op::Struct { type_id, fields } => Value::new_struct(value::Struct {
                 type_id: *type_id,
                 fields: fields
                     .iter()
                     .map(|local_id| self.get_local(*local_id).clone())
                     .collect(),
-            })),
+            }),
+            Op::Enum {
+                type_id,
+                variant_index,
+                payload,
+            } => Value::new_enum(value::Enum {
+                type_id: *type_id,
+                variant_index: *variant_index,
+                payload: payload.map(|local_id| self.get_local(local_id).clone()),
+            }),
             Op::Member { expr, field_index } => match self.get_local(*expr) {
                 Value::Struct(ptr) => ptr.borrow().fields[*field_index].clone(),
                 _ => unreachable!(),
@@ -455,11 +464,12 @@ impl<'a> Interpreter<'a> {
             }
             Value::Struct(ptr) => {
                 let r#struct = ptr.borrow();
-                let (struct_name, field_names) = match &self.types[r#struct.type_id.get()] {
-                    TypeInfo::Struct { name, field_names } => (name, field_names),
+                let TypeInfo::Struct { name, field_names } = &self.types[r#struct.type_id.get()]
+                else {
+                    unreachable!();
                 };
                 debug_assert_eq!(field_names.len(), r#struct.fields.len());
-                print!("{} {{", struct_name);
+                print!("{} {{", name);
                 for (i, (name, value)) in std::iter::zip(field_names, &r#struct.fields).enumerate()
                 {
                     if i > 0 {
@@ -469,6 +479,23 @@ impl<'a> Interpreter<'a> {
                     self.print(value, true);
                 }
                 print!("}}");
+            }
+            Value::Enum(ptr) => {
+                let r#enum = ptr.borrow();
+                let TypeInfo::Enum {
+                    name,
+                    variant_names,
+                } = &self.types[r#enum.type_id.get()]
+                else {
+                    unreachable!();
+                };
+                debug_assert!(r#enum.variant_index < variant_names.len());
+                print!("{}::{}", name, variant_names[r#enum.variant_index]);
+                if let Some(payload) = r#enum.payload.as_ref() {
+                    print!("(");
+                    self.print(&payload, true);
+                    print!(")");
+                }
             }
             // Ranges currently cannot be used as values, only as for-loop iterator and in slicing operations.
             Value::Range { .. } => unreachable!(),
@@ -518,6 +545,17 @@ impl<'a> Interpreter<'a> {
                         .iter()
                         .map(|field| self.deepcopy(field))
                         .collect(),
+                }))
+            }
+            Value::Enum(ptr) => {
+                let r#enum = ptr.borrow();
+                Value::Enum(create_pointer(value::Enum {
+                    type_id: r#enum.type_id,
+                    variant_index: r#enum.variant_index,
+                    payload: r#enum
+                        .payload
+                        .as_ref()
+                        .map(|payload| self.deepcopy(payload)),
                 }))
             }
             Value::LocalPointer(local_id) => self.deepcopy(self.get_local(*local_id)),

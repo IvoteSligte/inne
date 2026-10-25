@@ -10,6 +10,7 @@ pub type Name<'a> = Spanned<&'a str>;
 pub enum Stmt<'a> {
     Func(Func<'a>),
     Struct(Struct<'a>),
+    Enum(Enum<'a>),
     VarDecl(VarDecl<'a>),
     Expr(Spanned<Expr<'a>>),
     Assign(Assign<'a>),
@@ -53,6 +54,16 @@ pub struct Field<'a> {
     pub r#type: Spanned<Type<'a>>,
 }
 
+pub struct Enum<'a> {
+    pub name: Name<'a>,
+    pub variants: Vec<Variant<'a>>,
+}
+
+pub struct Variant<'a> {
+    pub name: Name<'a>,
+    pub payload: Option<Spanned<Type<'a>>>,
+}
+
 pub struct VarDecl<'a> {
     pub name: Name<'a>,
     pub value: Spanned<Expr<'a>>,
@@ -68,6 +79,7 @@ pub enum Expr<'a> {
     Map(Map<'a>),
     Tuple(Tuple<'a>),
     StructLiteral(StructLiteral<'a>),
+    VariantLiteral(VariantLiteral<'a>),
     Member(Member<'a>),
     Index(Index<'a>),
     Range(Range<'a>),
@@ -152,6 +164,12 @@ pub struct StructLiteral<'a> {
 pub struct FieldLiteral<'a> {
     pub name: Name<'a>,
     pub value: Spanned<Expr<'a>>,
+}
+
+pub struct VariantLiteral<'a> {
+    pub enum_name: Name<'a>,
+    pub name: Name<'a>,
+    pub payload: Option<Box<Spanned<Expr<'a>>>>,
 }
 
 pub struct Member<'a> {

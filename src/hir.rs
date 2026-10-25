@@ -1,6 +1,8 @@
 use std::{collections::HashMap, num::IntErrorKind};
 
-use crate::{Error, Span, Spanned, ast, usize_newtype, util::write_comma_separated, value::Int};
+use crate::{
+    Error, Errors, Span, Spanned, ast, usize_newtype, util::write_comma_separated, value::Int,
+};
 
 pub use crate::ast::{AssignOp, BinaryOp, Name, UnaryOp};
 
@@ -30,7 +32,7 @@ pub struct Hir<'a> {
     /// Essentially `HashMap<DefId, DefInfo>`, but all [DefId]`s are consecutive.
     pub(crate) vars: Vec<VarInfo<'a>>,
     pub(crate) funcs: Vec<Func<'a>>,
-    pub(crate) types: Vec<Struct<'a>>,
+    pub(crate) types: Vec<TypeDef<'a>>,
     pub(crate) stmts: Vec<Stmt<'a>>,
 }
 
@@ -63,6 +65,25 @@ pub struct Param<'a> {
     pub r#type: Spanned<Type>,
 }
 
+pub enum TypeDef<'a> {
+    Struct(Struct<'a>),
+    Enum(Enum<'a>),
+}
+
+impl TypeDef<'_> {
+    pub fn name(&self) -> Name<'_> {
+        match self {
+            TypeDef::Struct(r#struct) => r#struct.name,
+            TypeDef::Enum(r#enum) => r#enum.name,
+        }
+    }
+}
+
+pub enum AstTypeDef<'a> {
+    Struct(&'a ast::Struct<'a>),
+    Enum(&'a ast::Enum<'a>),
+}
+
 pub struct Struct<'a> {
     pub type_id: TypeId,
     pub name: Name<'a>,
@@ -72,6 +93,17 @@ pub struct Struct<'a> {
 pub struct Field<'a> {
     pub name: Name<'a>,
     pub r#type: Spanned<Type>,
+}
+
+pub struct Enum<'a> {
+    pub type_id: TypeId,
+    pub name: Name<'a>,
+    pub variants: Vec<Variant<'a>>,
+}
+
+pub struct Variant<'a> {
+    pub name: Name<'a>,
+    pub payload: Option<Spanned<Type>>,
 }
 
 usize_newtype!(TypeId);
@@ -131,6 +163,7 @@ pub enum Expr<'a> {
     Map(Map<'a>),
     Tuple(Tuple<'a>),
     StructLiteral(StructLiteral<'a>),
+    VariantLiteral(VariantLiteral<'a>),
     Index(Index<'a>),
     Member(Member<'a>),
     Range(Range<'a>),
@@ -189,6 +222,14 @@ pub struct StructLiteral<'a> {
 pub struct FieldLiteral<'a> {
     pub name: Name<'a>,
     pub value: Spanned<Expr<'a>>,
+}
+
+pub struct VariantLiteral<'a> {
+    pub type_id: TypeId,
+    pub variant_index: usize,
+    pub enum_name: Name<'a>,
+    pub name: Name<'a>,
+    pub payload: Option<Box<Spanned<Expr<'a>>>>,
 }
 
 pub struct Pair<'a> {
@@ -256,56 +297,6 @@ pub fn hir_from_ast<'a>(ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error>> {
     Constructor::map_ast(ast)
 }
 
-/// Helper type for managing error messages.
-pub(crate) struct Errors {
-    inner: Vec<Error>,
-}
-
-impl Errors {
-    pub fn new() -> Self {
-        Self { inner: Vec::new() }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    pub fn add(&mut self, message: impl ToString, span: Span) {
-        self.add_with_contexts(message, span, Vec::new());
-    }
-
-    pub fn add_with_contexts(
-        &mut self,
-        message: impl ToString,
-        span: Span,
-        contexts: Vec<(String, Span)>,
-    ) {
-        self.inner.push(Error {
-            message: message.to_string(),
-            span,
-            contexts,
-        });
-    }
-
-    pub fn add_with_context(
-        &mut self,
-        message: impl ToString,
-        span: Span,
-        context_message: impl ToString,
-        context_span: Span,
-    ) {
-        self.add_with_contexts(
-            message,
-            span,
-            vec![(context_message.to_string(), context_span)],
-        );
-    }
-
-    pub fn into_inner(self) -> Vec<Error> {
-        self.inner
-    }
-}
-
 /// Using a separate type instead of having the fields and methods directly on [Constructor]
 /// to prevent lifetime issues.
 struct VarList<'a>(Vec<VarInfo<'a>>);
@@ -326,9 +317,9 @@ impl<'a> VarList<'a> {
 struct Constructor<'a> {
     vars: VarList<'a>,
     funcs: Vec<Func<'a>>,
-    types: Vec<Struct<'a>>,
+    types: Vec<TypeDef<'a>>,
     func_map: HashMap<&'a str, (FuncId, &'a ast::Func<'a>)>,
-    type_map: HashMap<&'a str, (TypeId, &'a ast::Struct<'a>)>,
+    type_map: HashMap<&'a str, (TypeId, Span, AstTypeDef<'a>)>,
     scopes: Vec<HashMap<&'a str, VarId>>,
     errors: Errors,
 }
@@ -364,23 +355,10 @@ impl<'a> Constructor<'a> {
                     }
                 }
                 ast::Stmt::Struct(r#struct) => {
-                    let name = r#struct.name;
-                    // TODO: error if user defines type with same name as builtin
-                    //       (unlikely because user-defined types should be PascalCase by convention)
-                    if let Some(&(_, prev_type_ast)) = _self.type_map.get(name.0) {
-                        _self.errors.add_with_context(
-                            format!(
-                                "Type '{}' was already defined. Types must have unique names.",
-                                name.0
-                            ),
-                            name.1,
-                            "Previously defined here:",
-                            prev_type_ast.name.1,
-                        );
-                    } else {
-                        let id = TypeId(_self.type_map.len());
-                        _self.type_map.insert(name.0, (id, r#struct));
-                    }
+                    _self.add_type_to_map(r#struct.name, AstTypeDef::Struct(r#struct));
+                }
+                ast::Stmt::Enum(r#enum) => {
+                    _self.add_type_to_map(r#enum.name, AstTypeDef::Enum(r#enum));
                 }
                 _ => {}
             }
@@ -396,6 +374,25 @@ impl<'a> Constructor<'a> {
             types: _self.types,
             stmts,
         })
+    }
+
+    fn add_type_to_map(&mut self, name: Name<'a>, ast_type_def: AstTypeDef<'a>) {
+        // TODO: error if user defines type with same name as builtin
+        //       (unlikely because user-defined types should be PascalCase by convention)
+        if let Some(&(_, prev_type_span, _)) = self.type_map.get(name.0) {
+            self.errors.add_with_context(
+                format!(
+                    "Type '{}' was already defined. Types must have unique names.",
+                    name.0
+                ),
+                name.1,
+                "Previously defined here:",
+                prev_type_span,
+            );
+        } else {
+            let id = TypeId(self.type_map.len());
+            self.type_map.insert(name.0, (id, name.1, ast_type_def));
+        }
     }
 
     fn in_scope<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
@@ -465,7 +462,7 @@ impl<'a> Constructor<'a> {
                             }
                         }
                     }
-                    let (type_id, _) = *self.type_map.get(name.0).unwrap();
+                    let (type_id, _, _) = *self.type_map.get(name.0).unwrap();
                     let fields = fields
                         .iter()
                         .map(|field| Field {
@@ -474,11 +471,44 @@ impl<'a> Constructor<'a> {
                         })
                         .collect();
                     debug_assert_eq!(self.types.len(), type_id.get());
-                    self.types.push(Struct {
+                    self.types.push(TypeDef::Struct(Struct {
                         type_id,
                         name: *name,
                         fields,
-                    });
+                    }));
+                }
+                ast::Stmt::Enum(ast::Enum { name, variants }) => {
+                    if self.scopes.len() > 1 {
+                        // TODO: add outer function as context
+                        self.errors
+                            .add("Types cannot not be defined inside functions.", name.1);
+                        continue;
+                    }
+                    for (i, variant) in variants.iter().enumerate() {
+                        for other_variant in &variants[i + 1..] {
+                            if variant.name.0 == other_variant.name.0 {
+                                self.errors.add("This variant name was already used. Variants must have unique names.", other_variant.name.1);
+                                break;
+                            }
+                        }
+                    }
+                    let (type_id, _, _) = *self.type_map.get(name.0).unwrap();
+                    let variants = variants
+                        .iter()
+                        .map(|variant| Variant {
+                            name: variant.name,
+                            payload: variant
+                                .payload
+                                .as_ref()
+                                .map(|payload| self.map_type(payload)),
+                        })
+                        .collect();
+                    debug_assert_eq!(self.types.len(), type_id.get());
+                    self.types.push(TypeDef::Enum(Enum {
+                        type_id,
+                        name: *name,
+                        variants,
+                    }));
                 }
                 ast::Stmt::VarDecl(ast::VarDecl { name, value }) => {
                     let value = self.map_expr(value);
@@ -655,7 +685,7 @@ impl<'a> Constructor<'a> {
                         }
                     }
                     let type_id = match self.type_map.get(name.0) {
-                        Some((type_id, type_ast)) => {
+                        Some((type_id, type_span, AstTypeDef::Struct(type_ast))) => {
                             for type_field in &type_ast.fields {
                                 if !fields
                                     .iter()
@@ -676,15 +706,24 @@ impl<'a> Constructor<'a> {
                                 {
                                     Some(index) => index,
                                     None => {
-                                        self.errors.add(
-                                            format!("Unknown field '{}'", field.name.0),
+                                        self.errors.add_with_context(
+                                            format!(
+                                                "The type '{}' does not have a field named '{}'",
+                                                name.0, field.name.0
+                                            ),
                                             field.name.1,
+                                            "Type defined here:",
+                                            *type_span,
                                         );
                                         usize::MAX
                                     }
                                 }
                             });
                             *type_id
+                        }
+                        Some((_, type_span, AstTypeDef::Enum(_))) => {
+                            self.errors.add_with_context(format!("Tried to create a value of type '{}' as a struct, but it is an enum.", name.0), name.1, "Type defined here:", *type_span);
+                            TypeId::UNKNOWN
                         }
                         None => {
                             // TODO: add similar names as contexts
@@ -697,6 +736,56 @@ impl<'a> Constructor<'a> {
                         type_id: type_id,
                         name: *name,
                         fields,
+                    })
+                }
+                ast::Expr::VariantLiteral(ast::VariantLiteral {
+                    enum_name,
+                    name,
+                    payload,
+                }) => {
+                    let (type_id, variant_index) = match self.type_map.get(name.0) {
+                        Some((type_id, type_span, AstTypeDef::Enum(type_ast))) => {
+                            let variant_index = match type_ast
+                                .variants
+                                .iter()
+                                .position(|variant| variant.name.0 == name.0)
+                            {
+                                Some(index) => index,
+                                None => {
+                                    self.errors.add_with_context(
+                                        format!(
+                                            "The type '{}' does not have a variant named '{}'",
+                                            enum_name.0, name.0
+                                        ),
+                                        name.1,
+                                        "Type defined here:",
+                                        *type_span,
+                                    );
+                                    usize::MAX
+                                }
+                            };
+                            (*type_id, variant_index)
+                        }
+                        Some((_, type_span, AstTypeDef::Struct(_))) => {
+                            self.errors.add_with_context(format!("Tried to create a value of type '{}' as a enum, but it is an struct.", name.0), name.1, "Type defined here:", *type_span);
+                            (TypeId::UNKNOWN, usize::MAX)
+                        }
+                        None => {
+                            // TODO: add similar names as contexts
+                            self.errors
+                                .add(format!("Unknown type '{}'", name.0), name.1);
+                            (TypeId::UNKNOWN, usize::MAX)
+                        }
+                    };
+                    let payload = payload
+                        .as_ref()
+                        .map(|payload| Box::new(self.map_expr(payload)));
+                    Expr::VariantLiteral(VariantLiteral {
+                        type_id,
+                        variant_index,
+                        enum_name: *enum_name,
+                        name: *name,
+                        payload,
                     })
                 }
                 ast::Expr::Index(ast::Index { expr, index }) => Expr::Index(Index {
@@ -801,7 +890,7 @@ impl<'a> Constructor<'a> {
             "%tuple" => Type::Tuple(generics),
             _ => {
                 let id = match self.type_map.get(name.0) {
-                    Some((type_id, _)) => *type_id,
+                    Some((type_id, _, _)) => *type_id,
                     None => {
                         self.errors
                             .add(format!("Unknown type '{}'", name.0), name.1);
@@ -1071,6 +1160,22 @@ impl<'a> std::fmt::Display for Expr<'a> {
                 f.write_str("{")?;
                 write_comma_separated(f, fields.iter())?;
                 f.write_str("}")?;
+            }
+            Expr::VariantLiteral(VariantLiteral {
+                type_id,
+                variant_index,
+                enum_name,
+                name,
+                payload,
+            }) => {
+                write!(
+                    f,
+                    "_{type_id} {} :: _{variant_index} {}",
+                    enum_name.0, name.0
+                )?;
+                if let Some(payload) = payload {
+                    write!(f, "({})", payload.0)?;
+                }
             }
             Expr::Member(Member { expr, member, .. }) => {
                 write!(f, "({}).{}", expr.0, member.0)?;

@@ -42,6 +42,14 @@ where
         .then_ignore(just(Token::Colon))
         .then(r#type.clone())
         .map(|(name, r#type)| Field { name, r#type });
+    let variant = ident
+        .then(
+            r#type
+                .clone()
+                .delimited_by(just(Token::LParen), just(Token::RParen))
+                .or_not(),
+        )
+        .map(|(name, payload)| Variant { name, payload });
     recursive(|stmt| {
         let block = stmt
             .repeated()
@@ -77,6 +85,16 @@ where
                     .delimited_by(just(Token::LBrace), just(Token::RBrace)),
             )
             .map(|(name, fields)| Stmt::Struct(Struct { name, fields }));
+        let r#enum = just(Token::Enum)
+            .ignore_then(ident)
+            .then(
+                variant
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map(|(name, variants)| Stmt::Enum(Enum { name, variants }));
         let expr = expr_parser();
         let var_decl = just(Token::Var)
             .ignore_then(ident)
@@ -148,6 +166,7 @@ where
         choice((
             func,
             r#struct,
+            r#enum,
             var_decl,
             assign,
             if_stmt,
@@ -315,6 +334,22 @@ where
             )
             .map(|(name, fields)| Expr::StructLiteral(StructLiteral { name, fields }))
             .map_with(with_span);
+        let variant_literal = ident
+            .then_ignore(just(Token::ColonColon))
+            .then(ident)
+            .then(
+                expr.clone()
+                    .delimited_by(just(Token::LParen), just(Token::RParen))
+                    .or_not(),
+            )
+            .map(|((enum_name, name), payload)| {
+                Expr::VariantLiteral(VariantLiteral {
+                    enum_name,
+                    name,
+                    payload: payload.map(Box::new),
+                })
+            })
+            .map_with(with_span);
 
         // Unambiguous expressions
         let atom = choice((
@@ -328,6 +363,7 @@ where
             char,
             string,
             struct_literal,
+            variant_literal,
             expr.clone()
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
         ))
