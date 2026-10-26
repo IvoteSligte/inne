@@ -17,9 +17,12 @@ pub use typed_hir::{TypedHir, typed_hir_from_hir};
 pub use value::Value;
 
 pub fn lex(source: &str) -> (Option<Vec<(Token<'_>, Span)>>, Vec<Error>) {
-    let (tokens, errors) = parser::create_lexer().parse(source).into_output_errors();
-    let errors = errors.into_iter().map(Error::from_parse_error).collect();
-    (tokens, errors)
+    let (tokens, errors) = parser::lex(source);
+    let errors = errors
+        .into_iter()
+        .map(Error::from_lex_error)
+        .collect::<Vec<_>>();
+    (errors.is_empty().then_some(tokens), errors)
 }
 
 pub fn parse<'src>(

@@ -1,4 +1,4 @@
-use parser::Rich;
+use parser::{LexError, Rich};
 
 use ariadne::{Color, FnCache, Label, Report, ReportKind, Source};
 
@@ -11,6 +11,14 @@ pub struct Error {
 }
 
 impl Error {
+    pub fn from_lex_error((message, span): LexError) -> Self {
+        Self {
+            message: format!("{message}"),
+            span,
+            contexts: Vec::new(),
+        }
+    }
+
     pub fn from_parse_error<E>(error: Rich<'_, E>) -> Self
     where
         E: std::fmt::Display,

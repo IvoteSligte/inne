@@ -366,7 +366,7 @@ where
         }
         let index_or_method_or_atom = atom.clone().foldl_with(
             expr.clone()
-                .delimited_by(just(Token::LBracket), just(Token::LBracket))
+                .delimited_by(just(Token::LBracket), just(Token::RBracket))
                 .map(ExprOrName::Expr)
                 .or(just(Token::Dot).ignore_then(ident).map(ExprOrName::Name))
                 .repeated(),

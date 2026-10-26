@@ -6,6 +6,10 @@ use inne::{Spanned, Token, ast::*, lex, parse};
 // TODO: round-trip tests
 // TODO: keep comments written on the same line as a statement on the same line after formatting
 
+// TODO: Determine if an extra newline should be inserted based on the source.
+//       If statements were in the input with (at least) one line in between them,
+//       then they should have a line in between them in the formatted code.
+
 struct Writer<'src> {
     tokens: &'src [Spanned<Token<'src>>],
     output: IndentWriter<'static, String>,
@@ -24,9 +28,7 @@ impl Writer<'_> {
             if self.output.child.ends_with(|c: char| !c.is_whitespace()) {
                 self.output.write_str(" ")?;
             }
-            writeln!(self.output, "// {comment}")?;
-            // TODO: Determine if an extra newline should be inserted based on the source
-            //       for example, if two comments were in the input with a line in between them.
+            writeln!(self.output, "{comment}")?;
         }
         Ok(())
     }
