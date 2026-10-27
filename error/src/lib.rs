@@ -1,4 +1,4 @@
-use parser::{LexError, Rich};
+use parser::{LexError, ParseError};
 
 use ariadne::{Color, FnCache, Label, Report, ReportKind, Source};
 
@@ -19,20 +19,11 @@ impl Error {
         }
     }
 
-    pub fn from_parse_error<E>(error: Rich<'_, E>) -> Self
-    where
-        E: std::fmt::Display,
-    {
+    pub fn from_parse_error((message, span): ParseError) -> Self {
         Self {
-            message: format!("{}", error.reason()),
-            span: *error.span(),
-            contexts: error
-                .contexts()
-                .map(|(label, span)| {
-                    let message = format!("while parsing this {label}");
-                    (message, *span)
-                })
-                .collect(),
+            message,
+            span,
+            contexts: Vec::new(),
         }
     }
 

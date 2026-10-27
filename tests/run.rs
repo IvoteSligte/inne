@@ -11,7 +11,7 @@ fn run(filename: &str, source: &str) {
     eprint_errors(&errors, &source, &filename, "lexing");
 
     let tokens = maybe_tokens.expect("Failed to lex source");
-    let (maybe_ast, errors) = parse(&tokens, &filename, &source);
+    let (maybe_ast, errors) = parse(&tokens, &source, &filename);
     eprint_errors(&errors, &source, &filename, "parsing");
 
     let ast = maybe_ast.expect("Failed to parse source");

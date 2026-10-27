@@ -1,12 +1,10 @@
-// Enum unit and struct-like variants.
-// The specification documents enum-variant conditions, but does not fully
-// specify the syntax for the surrounding conditional; verify with the compiler.
+// Enum unit and payload-bearing variants.
 enum Result {
     Ok,
-    Value { number: i64 }
+    Value(int)
 }
 
-var result = Result::Value { number: 23 };
+var result = Result::Value(23);
 if var Result::Value(number) = result {
     print(number);
 }

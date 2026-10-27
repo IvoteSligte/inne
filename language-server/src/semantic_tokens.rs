@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 use inne::ast::*;
 use inne::*;
@@ -9,6 +9,7 @@ use crate::{File, position_at_end};
 use super::tt;
 
 pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
+    let start_instant = Instant::now();
     if file.source.is_empty() {
         eprintln!("Semantic tokens: File '{}' is empty.", file.name);
         return None;
@@ -42,7 +43,12 @@ pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
         eprintln!("Semantic tokens: Failed to parse file '{}'.", file.name);
     }
     let data = to_semantic_tokens(&file.source, semantic_tokens.into_values());
-    eprintln!("Semantic tokens (full) provided {} tokens.", data.len());
+    let end_instant = Instant::now();
+    let duration = end_instant - start_instant;
+    eprintln!(
+        "Semantic tokens (full, {duration:?}) provided {} tokens.",
+        data.len()
+    );
     Some(data)
 }
 

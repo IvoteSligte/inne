@@ -76,7 +76,7 @@ fn main() {
         }
         return;
     }
-    let (maybe_ast, errors) = parse(&tokens, &filename, &source);
+    let (maybe_ast, errors) = parse(&tokens, &source, &filename);
     eprint_errors(&errors, &source, &filename, "parsing");
     let Some(ast) = maybe_ast else {
         return;

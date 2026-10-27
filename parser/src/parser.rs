@@ -1,471 +1,584 @@
-use chumsky::{input::ValueInput, prelude::*};
+use chumsky::span::Span as _;
+
+use crate::{Span, Spanned, Token, ast::*};
 
 // TODO: error recovery
 // TODO: list/map/struct/enum pattern matching in variable declarations
 
-use crate::{Span, Spanned, Token, ast::*};
+pub type ParseError = (String, Span);
 
-pub type ParseError<'tokens, 'src> = Rich<'tokens, Token<'src>, Span>;
+const PARENS: (Token<'static>, Token<'static>) = (Token::LParen, Token::RParen);
+const BRACKETS: (Token<'static>, Token<'static>) = (Token::LBracket, Token::RBracket);
+const BRACES: (Token<'static>, Token<'static>) = (Token::LBrace, Token::RBrace);
+const ANGLES: (Token<'static>, Token<'static>) = (Token::Op("<"), Token::Op(">"));
 
-type ParseErrorExtra<'tokens, 'src> = extra::Err<Rich<'tokens, Token<'src>, Span>>;
-
-fn with_span<'src, O, I, E>(o: O, e: &mut chumsky::input::MapExtra<'src, '_, I, E>) -> (O, I::Span)
-where
-    I: Input<'src>,
-    E: extra::ParserExtra<'src, I>,
-{
-    (o, e.span())
+struct Parser<'parent, 'src> {
+    src: &'parent [Spanned<Token<'src>>],
+    errors: &'parent mut Vec<ParseError>,
+    start: usize,
+    end: usize,
 }
 
-pub fn create_parser<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, Vec<Stmt<'src>>, ParseErrorExtra<'tokens, 'src>> + Clone
-where
-    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
-{
-    let stmt = stmt_parser();
-    stmt.repeated().collect()
-}
+impl<'parent, 'src> Parser<'parent, 'src> {
+    fn atomic_spanned<T>(
+        &mut self,
+        func: impl FnOnce(&mut Parser<'_, 'src>) -> Option<T>,
+    ) -> Option<Spanned<T>> {
+        let mut _self = Parser {
+            start: self.end,
+            end: self.end,
+            src: self.src,
+            errors: self.errors,
+        };
+        func(&mut _self).map(|value| {
+            self.end = _self.end;
+            let span = _self.src[_self.start].1.union(_self.src[_self.end - 1].1);
+            (value, span)
+        })
+    }
 
-fn stmt_parser<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, Stmt<'src>, ParseErrorExtra<'tokens, 'src>> + Clone
-where
-    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
-{
-    let ident = ident_parser();
-    let r#type = type_parser();
-    let param = ident
-        .then_ignore(just(Token::Colon))
-        .then(r#type.clone())
-        .map(|(name, r#type)| Param { name, r#type });
-    let field = ident
-        .then_ignore(just(Token::Colon))
-        .then(r#type.clone())
-        .map(|(name, r#type)| Field { name, r#type });
-    let variant = ident
-        .then(
-            r#type
-                .clone()
-                .delimited_by(just(Token::LParen), just(Token::RParen))
-                .or_not(),
-        )
-        .map(|(name, payload)| Variant { name, payload });
-    let generics = ident
-        .separated_by(just(Token::Comma))
-        .allow_trailing()
-        .collect::<Vec<_>>()
-        .delimited_by(just(Token::LBrace), just(Token::RBrace))
-        .or_not()
-        .map(|maybe_generics| maybe_generics.unwrap_or(Vec::new()));
-    recursive(|stmt| {
-        let block = stmt
-            .repeated()
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LBrace), just(Token::RBrace));
-        // TODO: generic functions
-        let func = just(Token::Func)
-            .ignore_then(ident)
-            .then(generics)
-            .then(
-                param
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing()
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .then(just(Token::Arrow).ignore_then(r#type).or_not())
-            .then(block.clone())
-            .map(|((((name, generics), params), return_type), body)| {
-                Stmt::Func(Func {
-                    name,
-                    generics,
-                    params,
-                    return_type,
-                    body,
-                })
-            });
-        let r#struct = just(Token::Struct)
-            .ignore_then(ident)
-            .then(
-                field
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing()
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-            )
-            .map(|(name, fields)| Stmt::Struct(Struct { name, fields }));
-        let r#enum = just(Token::Enum)
-            .ignore_then(ident)
-            .then(
-                variant
-                    .separated_by(just(Token::Comma))
-                    .allow_trailing()
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-            )
-            .map(|(name, variants)| Stmt::Enum(Enum { name, variants }));
-        let expr = expr_parser();
-        let var_decl = just(Token::Var)
-            .ignore_then(ident)
-            .then_ignore(just(Token::Op("=")))
-            .then(expr.clone())
-            .map(|(name, value)| Stmt::VarDecl(VarDecl { name, value }));
-        let assign = expr
-            .clone()
-            .then(
-                choice((
-                    just(Token::Op("=")).to(AssignOp::Assign),
-                    just(Token::Op("+=")).to(AssignOp::Add),
-                    just(Token::Op("-=")).to(AssignOp::Sub),
-                    just(Token::Op("*=")).to(AssignOp::Mul),
-                    just(Token::Op("/=")).to(AssignOp::Div),
-                    just(Token::Op("%=")).to(AssignOp::Mod),
-                ))
-                .map_with(with_span),
-            )
-            .then(expr.clone())
-            .map(|((target, op), value)| Stmt::Assign(Assign { target, op, value }));
-        let if_head = just(Token::If)
-            .ignore_then(expr.clone())
-            .then(block.clone());
-        let if_stmt = if_head
-            .clone() // if
-            .then(
-                just(Token::Else)
-                    .ignore_then(if_head)
-                    .repeated()
-                    .collect::<Vec<_>>(),
-            ) // else if
-            .then(just(Token::Else).ignore_then(block.clone()).or_not()) // else
-            .map(|(((cond, then), else_ifs), r#else)| {
-                Stmt::If(If {
-                    cond,
-                    then,
-                    else_ifs,
-                    r#else,
-                })
-            });
-        let for_stmt = just(Token::For)
-            .ignore_then(ident)
-            .then_ignore(just(Token::In))
-            .then(
-                expr.clone()
-                    .then(just(Token::DotDot).ignore_then(expr.clone()).or_not())
-                    .map_with(with_span)
-                    .map(|((expr, range_end), range_span)| match range_end {
-                        Some(end) => (
-                            Expr::Range(Range {
-                                start: Box::new(expr),
-                                end: Box::new(end),
-                            }),
-                            range_span,
-                        ),
-                        None => expr,
-                    }),
-            )
-            .then(block.clone())
-            .map(|((var, iter), body)| Stmt::For(For { var, iter, body }));
-        let while_stmt = just(Token::While)
-            .ignore_then(expr.clone())
-            .then(block.clone())
-            .map(|(cond, body)| Stmt::While(While { cond, body }));
-        let loop_stmt = just(Token::Loop)
-            .ignore_then(block)
-            .map(|body| Stmt::Loop(Loop { body }));
-        choice((
-            func,
-            r#struct,
-            r#enum,
-            var_decl,
-            assign,
-            if_stmt,
-            for_stmt,
-            while_stmt,
-            loop_stmt,
-            just(Token::Break).map_with(|_, e| Stmt::Break(e.span())),
-            just(Token::Continue).map_with(|_, e| Stmt::Continue(e.span())),
-            just(Token::Return)
-                .ignore_then(expr.clone().or_not().map_with(with_span))
-                .map(|expr| Stmt::Return(expr)),
-            expr.map(Stmt::Expr),
-        ))
-        .then_ignore(just(Token::Semi).or_not())
-    })
-}
+    fn atomic<T>(&mut self, func: impl FnOnce(&mut Parser<'_, 'src>) -> Option<T>) -> Option<T> {
+        self.atomic_spanned(func).map(|(value, _)| value)
+    }
 
-fn type_parser<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, Spanned<Type<'src>>, ParseErrorExtra<'tokens, 'src>> + Clone
-where
-    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
-{
-    recursive(|r#type| {
-        let comma_separated_types = r#type
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<_>>();
+    /// This also parses single instances of `func`.
+    fn parse_binary(
+        &mut self,
+        op_map: impl Fn(&str) -> Option<BinaryOp>,
+        func: impl Fn(&mut Parser<'_, 'src>) -> Option<Spanned<Expr<'src>>>,
+    ) -> Option<Spanned<Expr<'src>>> {
+        let mut left = func(self)?;
+        while let Some(op) = self.take_if_map(|t| match t {
+            Token::Op(op) => op_map(op),
+            _ => None,
+        }) {
+            let right = func(self)?;
+            let span = left.1.union(right.1);
+            left = (
+                Expr::Binary(Binary {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }),
+                span,
+            );
+        }
+        Some(left)
+    }
 
-        ident_parser()
-            .then(
-                comma_separated_types
-                    .clone()
-                    .delimited_by(just(Token::Op("<")), just(Token::Op(">")))
-                    .or_not(),
-            )
-            .map(|(name, generics)| Type {
+    fn must<T>(
+        &mut self,
+        label: &'static str,
+        func: impl FnOnce(&mut Parser<'_, 'src>) -> Option<T>,
+    ) -> Option<T> {
+        let maybe = self.atomic(func);
+        if maybe.is_none() {
+            let span = self.src[self.end].1;
+            self.errors.push((format!("failed to parse {label}"), span))
+        }
+        maybe
+    }
+
+    fn must_token(&mut self, token: Token<'src>) -> Option<Spanned<Token<'src>>> {
+        let maybe = self.take_if_eq(token);
+        if maybe.is_none() {
+            let span = self.src[self.end].1;
+            self.errors
+                .push((format!("expected token '{token}'"), span));
+        }
+        maybe
+    }
+
+    fn peek(&self) -> Option<Spanned<Token<'src>>> {
+        self.remaining().iter().copied().next()
+    }
+
+    fn remaining(&self) -> &[Spanned<Token<'src>>] {
+        &self.src[self.end..]
+    }
+
+    #[must_use]
+    fn take_if_map<T>(&mut self, pred: impl Fn(Token<'src>) -> Option<T>) -> Option<Spanned<T>> {
+        if let Some((token, span)) = self.peek()
+            && let Some(value) = pred(token)
+        {
+            self.end += 1;
+            Some((value, span))
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    fn take_if(&mut self, pred: impl Fn(Token<'_>) -> bool) -> Option<Spanned<Token<'src>>> {
+        self.take_if_map(|t| pred(t).then_some(t))
+    }
+
+    #[must_use]
+    fn take_if_eq(&mut self, token: Token<'_>) -> Option<Spanned<Token<'src>>> {
+        self.take_if(|t| t == token)
+    }
+
+    fn delimited_by<T>(
+        &mut self,
+        (opening, closing): (Token<'src>, Token<'src>),
+        func: impl Fn(&mut Self) -> T,
+    ) -> Option<T> {
+        debug_assert_ne!(opening, closing); // This is basically never desirable, but an easy mistake to make.
+        self.take_if_eq(opening)?;
+        let value = func(self);
+        let _ = self.take_if_eq(closing); // TODO: report parse-error
+        Some(value)
+    }
+
+    /// This function is non-atomic.
+    /// If `func` consumes a token and still returns `None`, then that token is permanently gone.
+    fn repeated<T>(&mut self, func: impl Fn(&mut Self) -> Option<T>) -> Vec<T> {
+        (0..).map_while(|_| func(self)).collect()
+    }
+
+    /// This function is non-atomic.
+    /// If `func` consumes a token and still returns `None`, then that token is permanently gone.
+    ///
+    /// Allows a trailing separator.
+    fn separated_by_comma<T>(&mut self, func: impl Fn(&mut Self) -> Option<T>) -> Vec<T> {
+        let Some(first) = func(self) else {
+            return Vec::new();
+        };
+        let mut values = vec![first];
+        // This greedily consumes the separator before querying `func`.
+        while self.take_if_eq(Token::Comma).is_some()
+            && let Some(value) = func(self)
+        {
+            values.push(value);
+        }
+        values
+    }
+
+    // --- Inne-specific parser ---
+
+    fn ident(&mut self) -> Option<Spanned<&'src str>> {
+        let (token, span) = self.take_if(|t| matches!(t, Token::Ident(_)))?;
+        match token {
+            Token::Ident(name) => Some((name, span)),
+            _ => unreachable!(),
+        }
+    }
+
+    fn r#type(&mut self) -> Option<Spanned<Type<'src>>> {
+        self.atomic_spanned(|s| {
+            let name = s.ident()?;
+            let generics = s
+                .delimited_by(ANGLES, |s| s.separated_by_comma(|s| s.r#type()))
+                .unwrap_or_default();
+            Some(Type { name, generics })
+        })
+    }
+
+    fn param(&mut self) -> Option<Param<'src>> {
+        let name = self.ident()?;
+        self.atomic(|s| {
+            let _ = s.take_if_eq(Token::Colon);
+            let r#type = s.r#type()?;
+            Some(Param { name, r#type })
+        })
+    }
+
+    fn field(&mut self) -> Option<Field<'src>> {
+        let name = self.ident()?;
+        self.atomic(|s| {
+            let _ = s.take_if_eq(Token::Colon);
+            let r#type = s.r#type()?;
+            Some(Field { name, r#type })
+        })
+    }
+
+    fn variant(&mut self) -> Option<Variant<'src>> {
+        let name = self.ident()?;
+        self.atomic(|s| {
+            let payload = s.delimited_by(PARENS, Parser::r#type).flatten();
+            Some(Variant { name, payload })
+        })
+    }
+
+    fn generics(&mut self) -> Vec<Name<'src>> {
+        self.delimited_by(ANGLES, |s| s.separated_by_comma(Parser::ident))
+            .unwrap_or_default()
+    }
+
+    fn block(&mut self) -> Option<Vec<Stmt<'src>>> {
+        self.atomic(|s| s.delimited_by(BRACES, |s| s.repeated(Parser::stmt)))
+    }
+
+    fn func(&mut self) -> Option<Stmt<'src>> {
+        self.take_if_eq(Token::Func)?;
+        self.atomic(|s| {
+            let name = s.ident()?;
+            let generics = s.generics();
+            let params = s.delimited_by(PARENS, |s| s.separated_by_comma(Parser::param))?;
+            let _ = s.take_if_eq(Token::Arrow);
+            let return_type = s.r#type();
+            let body = s.block()?;
+            Some(Stmt::Func(Func {
                 name,
-                generics: generics.unwrap_or(Vec::new()),
+                generics,
+                params,
+                return_type,
+                body,
+            }))
+        })
+    }
+
+    fn r#struct(&mut self) -> Option<Stmt<'src>> {
+        self.take_if_eq(Token::Struct)?;
+        self.atomic(|s| {
+            let name = s.ident()?;
+            let fields = s.delimited_by(BRACES, |s| s.separated_by_comma(Parser::field))?;
+            Some(Stmt::Struct(Struct { name, fields }))
+        })
+    }
+
+    fn r#enum(&mut self) -> Option<Stmt<'src>> {
+        self.take_if_eq(Token::Enum)?;
+        self.atomic(|s| {
+            let name = s.ident()?;
+            let variants = s.delimited_by(BRACES, |s| s.separated_by_comma(Parser::variant))?;
+            Some(Stmt::Enum(Enum { name, variants }))
+        })
+    }
+
+    fn var_decl(&mut self) -> Option<Stmt<'src>> {
+        self.take_if_eq(Token::Var)?;
+        self.atomic(|s| {
+            let name = s.ident()?;
+            s.take_if_eq(Token::Op("="))?;
+            let value = s.expr()?;
+            Some(Stmt::VarDecl(VarDecl { name, value }))
+        })
+    }
+
+    fn if_stmt_head(&mut self) -> Option<(Spanned<Expr<'src>>, Block<'src>)> {
+        self.take_if_eq(Token::If)?;
+        let cond = self.must("condition", |s| s.expr())?;
+        let then = self.must("block", |s| s.block())?;
+        Some((cond, then))
+    }
+
+    fn r#if(&mut self) -> Option<Stmt<'src>> {
+        let (cond, then) = self.if_stmt_head()?;
+        let mut else_ifs = Vec::new();
+        let mut r#else = None;
+        while self.take_if_eq(Token::Else).is_some() {
+            if let Some(else_if) = self.if_stmt_head() {
+                else_ifs.push(else_if);
+            } else {
+                r#else = Some(self.must("block", |s| s.block())?);
+                break;
+            }
+        }
+        Some(Stmt::If(If {
+            cond,
+            then,
+            else_ifs,
+            r#else,
+        }))
+    }
+
+    fn r#for(&mut self) -> Option<Stmt<'src>> {
+        self.take_if_eq(Token::For)?;
+        let var = self.must("variable name", |s| s.ident())?;
+        self.must_token(Token::In)?;
+        let iter = self.must("iterator", |s| {
+            let expr = s.expr()?;
+            Some(if s.take_if_eq(Token::DotDot).is_some() {
+                let start = expr;
+                let end = s.must("range end expression", |s| s.expr())?;
+                let span = start.1.union(end.1);
+                (
+                    Expr::Range(Range {
+                        start: Box::new(start),
+                        end: Box::new(end),
+                    }),
+                    span,
+                )
+            } else {
+                expr
             })
-            .map_with(with_span)
-    })
-}
+        })?;
+        let body = self.must("loop body", |s| s.block())?;
+        Some(Stmt::For(For { var, iter, body }))
+    }
 
-fn ident_parser<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, Spanned<&'src str>, ParseErrorExtra<'tokens, 'src>> + Copy
-where
-    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
-{
-    select! { Token::Ident(ident) => ident }.map_with(with_span)
-}
+    fn r#while(&mut self) -> Option<Stmt<'src>> {
+        self.take_if_eq(Token::While)?;
+        let cond = self.must("condition", |s| s.expr())?;
+        let body = self.must("loop body", |s| s.block())?;
+        Some(Stmt::While(While { cond, body }))
+    }
 
-fn expr_binary<'src>(
-    left: Spanned<Expr<'src>>,
-    op: Spanned<BinaryOp>,
-    right: Spanned<Expr<'src>>,
-) -> Expr<'src> {
-    Expr::Binary(Binary {
-        left: Box::new(left),
-        op,
-        right: Box::new(right),
-    })
-}
+    fn r#loop(&mut self) -> Option<Stmt<'src>> {
+        self.take_if_eq(Token::Loop)?;
+        let body = self.must("loop body", |s| s.block())?;
+        Some(Stmt::Loop(Loop { body }))
+    }
 
-fn expr_parser<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, Spanned<Expr<'src>>, ParseErrorExtra<'tokens, 'src>> + Clone
-where
-    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
-{
-    let ident = ident_parser();
-    let var = select! { Token::Ident(ident) => Expr::Var(ident) }.map_with(with_span);
-    let int = select! { Token::Int(int) => Expr::Int(int) }.map_with(with_span);
-    let bool = select! { Token::Bool(bool) => Expr::Bool(bool) }.map_with(with_span);
-    let char = select! { Token::Char(char) => Expr::Char(char) }.map_with(with_span);
-    let string = select! { Token::String(string) => Expr::String(string) }.map_with(with_span);
-    let r#type = type_parser();
+    fn assign(&mut self) -> Option<Stmt<'src>> {
+        self.atomic(|s| {
+            let target = s.expr()?;
+            let op = s.take_if_map(|token| match token {
+                Token::Op("=") => Some(AssignOp::Assign),
+                Token::Op("+=") => Some(AssignOp::Add),
+                Token::Op("-=") => Some(AssignOp::Sub),
+                Token::Op("*=") => Some(AssignOp::Mul),
+                Token::Op("/=") => Some(AssignOp::Div),
+                Token::Op("%=") => Some(AssignOp::Mod),
+                _ => None,
+            })?;
+            let value = s.expr()?;
+            Some(Stmt::Assign(Assign { target, op, value }))
+        })
+    }
 
-    recursive(|expr| {
-        let comma_separated_exprs = expr
-            .clone()
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<_>>();
+    fn stmt(&mut self) -> Option<Stmt<'src>> {
+        self.func()
+            .or_else(|| self.r#struct())
+            .or_else(|| self.r#enum())
+            .or_else(|| self.var_decl())
+            .or_else(|| self.r#if())
+            .or_else(|| self.r#for())
+            .or_else(|| self.r#while())
+            .or_else(|| self.r#loop())
+            .or_else(|| self.assign())
+            .or_else(|| self.expr().map(Stmt::Expr))
+            .or_else(|| {
+                let (_, start_span) = self.take_if_eq(Token::Return)?;
+                let value = self.atomic(|s| s.expr());
+                let end_span = self.src[self.end].1;
+                let span = start_span.union(end_span);
+                Some(Stmt::Return((value, span)))
+            })
+            .or_else(|| {
+                let (_, span) = self.take_if_eq(Token::Continue)?;
+                Some(Stmt::Continue(span))
+            })
+            .or_else(|| {
+                let (_, span) = self.take_if_eq(Token::Break)?;
+                Some(Stmt::Break(span))
+            })
+            .inspect(|_| {
+                let _ = self.take_if_eq(Token::Semi);
+            })
+    }
 
-        // Function calls have very high precedence so we prioritise them
-        let call = ident
-            .then(
-                comma_separated_exprs
-                    .clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen)),
-            )
-            .map(|(name, args)| Expr::Call(Call { name, args }))
-            .map_with(with_span)
-            .boxed();
-        // TODO: make specifying more than one type instead of [<type>] report a nice error message
-        let list = comma_separated_exprs
-            .clone()
-            .delimited_by(just(Token::LBracket), just(Token::RBracket))
-            .map(|elements| Expr::List(List { elements }))
-            .or(r#type
-                .clone()
-                .delimited_by(
-                    // Have to do this instead of nested delimited_by (which would be cleaner)
-                    // because chumsky doesn't support that.
-                    just(Token::LBracket).then(just(Token::Op("<"))),
-                    just(Token::Op(">")).then(just(Token::RBracket)),
-                )
-                .map(|element_type| Expr::EmptyList(EmptyList { element_type })))
-            .map_with(with_span);
-        // TODO: make specifying only one type instead of {<key, value>} report a nice error message
-        let map = expr
-            .clone()
-            .then_ignore(just(Token::Colon))
-            .then(expr.clone())
-            .map(|(key, value)| Pair { key, value })
-            .separated_by(just(Token::Comma))
-            .allow_trailing()
-            .collect::<Vec<_>>()
-            .delimited_by(just(Token::LBrace), just(Token::RBrace))
-            .map(|pairs| Expr::Map(Map { pairs }))
-            .or(r#type
-                .clone()
-                .then_ignore(just(Token::Comma))
-                .then(r#type.clone())
-                .delimited_by(
-                    // Have to do this instead of nested delimited_by (which would be cleaner)
-                    // because chumsky doesn't support that.
-                    just(Token::LBrace).then(just(Token::Op("<"))),
-                    just(Token::Op(">")).then(just(Token::RBrace)),
-                )
-                .map(|(key_type, value_type)| {
+    fn call(&mut self) -> Option<Spanned<Expr<'src>>> {
+        self.atomic_spanned(|s| {
+            let name = s.ident()?;
+            let args = s.delimited_by(PARENS, |s| s.separated_by_comma(Parser::expr))?;
+            Some(Expr::Call(Call { name, args }))
+        })
+    }
+
+    // TODO: make specifying more than one type instead of [<type>] report a nice error message
+    fn list(&mut self) -> Option<Spanned<Expr<'src>>> {
+        self.atomic_spanned(|s| {
+            s.delimited_by(BRACKETS, |s| {
+                let elements = s.separated_by_comma(Parser::expr);
+                if elements.is_empty()
+                    && let Some(element_type) = s.delimited_by(ANGLES, Parser::r#type).flatten()
+                {
+                    Expr::EmptyList(EmptyList { element_type })
+                } else {
+                    Expr::List(List { elements })
+                }
+            })
+        })
+    }
+
+    // TODO: make specifying only one type instead of {<key, value>} report a nice error message
+    fn map_(&mut self) -> Option<Spanned<Expr<'src>>> {
+        self.atomic_spanned(|s| {
+            s.delimited_by(BRACES, |s| {
+                let pairs = s.separated_by_comma(|s| {
+                    let key = s.expr()?;
+                    let _ = s.take_if_eq(Token::Colon);
+                    let value = s.expr()?;
+                    Some(Pair { key, value })
+                });
+                if pairs.is_empty()
+                    && let Some((key_type, value_type)) = s
+                        .delimited_by(ANGLES, |s| {
+                            let key = s.r#type()?;
+                            let _ = s.take_if(|t| t == Token::Comma || t == Token::Colon);
+                            let value = s.r#type()?;
+                            Some((key, value))
+                        })
+                        .flatten()
+                {
                     Expr::EmptyMap(EmptyMap {
                         key_type,
                         value_type,
                     })
-                }))
-            .map_with(with_span);
+                } else {
+                    Expr::Map(Map { pairs })
+                }
+            })
+        })
+    }
 
-        // Name { ... } can be ambiguous if a { ... } block follows, such as in an if-statement,
-        // so we assume that the parser is greedy.
-        let struct_literal = ident
-            .then(
-                ident
-                    .then_ignore(just(Token::Colon))
-                    .then(expr.clone())
-                    .map(|(name, value)| FieldLiteral { name, value })
-                    .separated_by(just(Token::Comma))
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-            )
-            .map(|(name, fields)| Expr::StructLiteral(StructLiteral { name, fields }))
-            .map_with(with_span);
-        let variant_literal = ident
-            .then_ignore(just(Token::ColonColon))
-            .then(ident)
-            .then(
-                expr.clone()
-                    .delimited_by(just(Token::LParen), just(Token::RParen))
-                    .or_not(),
-            )
-            .map(|((enum_name, name), payload)| {
-                Expr::VariantLiteral(VariantLiteral {
-                    enum_name,
-                    name,
-                    payload: payload.map(Box::new),
+    fn struct_literal(&mut self) -> Option<Spanned<Expr<'src>>> {
+        self.atomic_spanned(|s| {
+            let name = s.ident()?;
+            s.take_if(|t| t == Token::Colon || t == Token::ColonColon)?;
+            let fields = s.delimited_by(BRACES, |s| {
+                s.separated_by_comma(|s| {
+                    let name = s.ident()?;
+                    s.take_if_eq(Token::Colon)?;
+                    let value = s.expr()?;
+                    Some(FieldLiteral { name, value })
+                })
+            })?;
+            Some(Expr::StructLiteral(StructLiteral { name, fields }))
+        })
+    }
+
+    fn variant_literal(&mut self) -> Option<Spanned<Expr<'src>>> {
+        self.atomic_spanned(|s| {
+            let enum_name = s.ident()?;
+            s.take_if_eq(Token::ColonColon)?;
+            let name = s.ident()?;
+            let payload = s.delimited_by(PARENS, Parser::expr).flatten().map(Box::new);
+            Some(Expr::VariantLiteral(VariantLiteral {
+                enum_name,
+                name,
+                payload,
+            }))
+        })
+    }
+
+    fn atom(&mut self) -> Option<Spanned<Expr<'src>>> {
+        self.call()
+            .or_else(|| self.list())
+            .or_else(|| self.map_())
+            .or_else(|| self.struct_literal())
+            .or_else(|| self.variant_literal())
+            .or_else(|| self.delimited_by(PARENS, Parser::expr).flatten())
+            .or_else(|| {
+                self.take_if_map(|token| {
+                    Some(match token {
+                        Token::Ident(name) => Expr::Var(name),
+                        Token::Int(int) => Expr::Int(int),
+                        Token::Bool(bool) => Expr::Bool(bool),
+                        Token::Char(char) => Expr::Char(char),
+                        Token::String(string) => Expr::String(string),
+                        _ => return None,
+                    })
                 })
             })
-            .map_with(with_span);
+    }
 
-        // Unambiguous expressions
-        let atom = choice((
-            call,
-            list,
-            map,
-            var,
-            int,
-            bool,
-            char,
-            string,
-            struct_literal,
-            variant_literal,
-            expr.clone()
-                .delimited_by(just(Token::LParen), just(Token::RParen)),
-        ))
-        .boxed();
-
-        enum ExprOrName<'a> {
-            Expr(Spanned<Expr<'a>>),
-            Name(Name<'a>),
+    fn index_or_member_or_atom(&mut self) -> Option<Spanned<Expr<'src>>> {
+        let mut left = self.atom()?;
+        loop {
+            if let Some((index, _)) =
+                self.atomic_spanned(|s| s.delimited_by(BRACKETS, Parser::expr).flatten())
+            {
+                let span = left.1.union(index.1);
+                left = (
+                    Expr::Index(Index {
+                        expr: Box::new(left),
+                        index: Box::new(index),
+                    }),
+                    span,
+                );
+                continue;
+            }
+            if let Some((member, _)) =
+                self.atomic_spanned(|s| s.take_if_eq(Token::Dot).and_then(|_| s.ident()))
+            {
+                let span = left.1.union(member.1);
+                left = (
+                    Expr::Member(Member {
+                        expr: Box::new(left),
+                        member,
+                    }),
+                    span,
+                );
+                continue;
+            }
+            break;
         }
-        let index_or_method_or_atom = atom.clone().foldl_with(
-            expr.clone()
-                .delimited_by(just(Token::LBracket), just(Token::RBracket))
-                .map(ExprOrName::Expr)
-                .or(just(Token::Dot).ignore_then(ident).map(ExprOrName::Name))
-                .repeated(),
-            |a, b, e| {
-                (
-                    match b {
-                        ExprOrName::Expr(index) => Expr::Index(Index {
-                            expr: Box::new(a),
-                            index: Box::new(index),
-                        }),
-                        ExprOrName::Name(member) => Expr::Member(Member {
-                            expr: Box::new(a),
-                            member,
-                        }),
-                    },
-                    e.span(),
-                )
-            },
+        Some(left)
+    }
+
+    fn unary(&mut self) -> Option<Spanned<Expr<'src>>> {
+        self.atomic_spanned(|s| {
+            let op = s.take_if_map(|t| match t {
+                Token::Op("-") => Some(UnaryOp::Neg),
+                Token::Op("not") => Some(UnaryOp::Not),
+                _ => None,
+            })?;
+            let expr = Box::new(s.must("expression", |s| s.index_or_member_or_atom())?);
+            Some(Expr::Unary(Unary { op, expr }))
+        })
+    }
+
+    fn unary_or_index_or_member_or_atom(&mut self) -> Option<Spanned<Expr<'src>>> {
+        self.unary().or_else(|| self.index_or_member_or_atom())
+    }
+
+    fn binary_or_unary_or_index_or_member_or_atom(&mut self) -> Option<Spanned<Expr<'src>>> {
+        macro_rules! parser {
+            ($name:ident, match { $($lit:literal => $op:ident),*$(,)? }, $prev:expr$(,)?) => {
+                fn $name<'src>(s: &mut Parser<'_, 'src>) -> Option<Spanned<Expr<'src>>> {
+                    s.parse_binary(
+                        |op| match op {
+                            $($lit => Some(BinaryOp::$op),)*
+                            _ => None,
+                        },
+                        $prev,
+                    )
+                }
+            };
+        }
+        parser!(
+            product,
+            match { "*" => Mul, "/" => Div, "%" => Mod },
+            |s| s.unary_or_index_or_member_or_atom(),
         );
-        let unary = just(Token::Op("-"))
-            .to(UnaryOp::Neg)
-            .or(just(Token::Op("not")).to(UnaryOp::Not))
-            .map_with(with_span)
-            .then(index_or_method_or_atom.clone())
-            .map(|(op, expr)| {
-                Expr::Unary(Unary {
-                    op,
-                    expr: Box::new(expr),
-                })
-            })
-            .map_with(with_span);
-        let unary_or_index_or_method_or_atom = unary.or(index_or_method_or_atom);
+        parser!(sum, match { "+" => Add, "-" => Sub }, product);
+        parser!(ordering, match { "<" => Lt, "<=" => Leq, ">" => Gt, ">=" => Geq }, sum);
+        parser!(equal, match { "==" => Eq, "!=" => NotEq }, ordering);
+        parser!(and, match { "and" => And }, equal);
+        parser!(or, match { "or" => Or }, and);
+        or(self)
+    }
 
-        // Product ops (multiply and divide) have equal precedence
-        let op = choice((
-            just(Token::Op("*")).to(BinaryOp::Mul),
-            just(Token::Op("/")).to(BinaryOp::Div),
-            just(Token::Op("%")).to(BinaryOp::Mod),
-        ))
-        .map_with(with_span);
-        let product = unary_or_index_or_method_or_atom.clone().foldl_with(
-            op.then(unary_or_index_or_method_or_atom.clone()).repeated(),
-            |a, (op, b), e| (expr_binary(a, op, b), e.span()),
-        );
+    fn expr(&mut self) -> Option<Spanned<Expr<'src>>> {
+        self.binary_or_unary_or_index_or_member_or_atom()
+    }
+}
 
-        // Sum ops (add and subtract) have equal precedence
-        let op = just(Token::Op("+"))
-            .to(BinaryOp::Add)
-            .or(just(Token::Op("-")).to(BinaryOp::Sub))
-            .map_with(with_span);
-        let sum = product
-            .clone()
-            .foldl_with(op.then(product).repeated(), |a, (op, b), e| {
-                (expr_binary(a, op, b), e.span())
-            })
-            .boxed();
-
-        // Comparison ops (<, <=, >, >=) have equal precedence
-        let op = choice((
-            just(Token::Op("<")).to(BinaryOp::Lt),
-            just(Token::Op("<=")).to(BinaryOp::Leq),
-            just(Token::Op(">")).to(BinaryOp::Gt),
-            just(Token::Op(">=")).to(BinaryOp::Geq),
-        ))
-        .map_with(with_span);
-        let ordering = sum
-            .clone()
-            .foldl_with(op.then(sum).repeated(), |a, (op, b), e| {
-                (expr_binary(a, op, b), e.span())
-            });
-
-        // Comparison ops (equal, not-equal) have equal precedence
-        let op = just(Token::Op("=="))
-            .to(BinaryOp::Eq)
-            .or(just(Token::Op("!=")).to(BinaryOp::NotEq))
-            .map_with(with_span);
-        let equal = ordering
-            .clone()
-            .foldl_with(op.then(ordering).repeated(), |a, (op, b), e| {
-                (expr_binary(a, op, b), e.span())
-            });
-
-        let op = just(Token::Op("and")).to(BinaryOp::And).map_with(with_span);
-        let and = equal
-            .clone()
-            .foldl_with(op.then(equal).repeated(), |a, (op, b), e| {
-                (expr_binary(a, op, b), e.span())
-            })
-            .boxed();
-
-        let op = just(Token::Op("or")).to(BinaryOp::Or).map_with(with_span);
-        let or = and
-            .clone()
-            .foldl_with(op.then(and).repeated(), |a, (op, b), e| {
-                (expr_binary(a, op, b), e.span())
-            });
-
-        let binary = or;
-        choice((binary, unary_or_index_or_method_or_atom))
-    })
-    .boxed()
+pub fn parse<'src>(
+    source: &[Spanned<Token<'src>>],
+    filename: &'src str,
+) -> (Ast<'src>, Vec<ParseError>) {
+    let source = source
+        .iter()
+        .copied()
+        .filter(|(token, _)| !matches!(token, Token::Comment(_)))
+        .collect::<Vec<_>>();
+    let mut errors = Vec::new();
+    let mut parser = Parser {
+        src: &source,
+        errors: &mut errors,
+        start: 0,
+        end: 0,
+    };
+    let stmts = parser.repeated(Parser::stmt);
+    let end = parser.end;
+    if end < source.len() {
+        errors.push((format!("expected statement"), source[end].1));
+    }
+    let ast = Ast { filename, stmts };
+    (ast, errors)
 }

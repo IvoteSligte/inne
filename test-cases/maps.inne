@@ -1,5 +1,5 @@
 // Typed maps, lookup, and assignment.
-var empty = {string, i64};
+var empty = {<string, int>};
 var scores = {"Ada": 10, "Lin": 20};
 print(scores["Ada"]);
 scores["Ada"] = 15;

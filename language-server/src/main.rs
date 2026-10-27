@@ -298,11 +298,6 @@ impl Backend {
     async fn publish_diagnostics(&self, file: &File) {
         eprintln!("Extracting diagnostics from file '{}'", file.name);
         let diagnostics = extract_diagnostics(file);
-        eprintln!(
-            "Published {} diagnostics for file '{}'",
-            diagnostics.len(),
-            file.name
-        );
         self.client
             .publish_diagnostics(file.uri.clone(), diagnostics, Some(file.version))
             .await;

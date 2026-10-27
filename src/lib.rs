@@ -27,17 +27,13 @@ pub fn lex(source: &str) -> (Option<Vec<(Token<'_>, Span)>>, Vec<Error>) {
 
 pub fn parse<'src>(
     tokens: &[(Token<'src>, Span)],
-    source: &'src str,
+    _source: &'src str,
     filename: &'src str,
 ) -> (Option<Ast<'src>>, Vec<Error>) {
-    let tokens = tokens
-        .iter()
-        .filter(|(token, _)| !matches!(token, Token::Comment(_)))
+    let (ast, errors) = parser::parse(tokens, filename);
+    let errors = errors
+        .into_iter()
+        .map(Error::from_parse_error)
         .collect::<Vec<_>>();
-    let (tokens, errors) = parser::create_parser()
-        .map(|stmts| Ast { filename, stmts })
-        .parse(tokens.map((source.len()..source.len()).into(), |(t, s)| (t, s)))
-        .into_output_errors();
-    let errors = errors.into_iter().map(Error::from_parse_error).collect();
-    (tokens, errors)
+    (errors.is_empty().then_some(ast), errors)
 }
