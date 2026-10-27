@@ -10,10 +10,6 @@ use super::tt;
 
 pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
     let start_instant = Instant::now();
-    if file.source.is_empty() {
-        eprintln!("Semantic tokens: File '{}' is empty.", file.name);
-        return None;
-    }
     let (Some(tokens), _) = inne::lex(&file.source) else {
         eprintln!("Semantic tokens: Failed to lex file '{}'.", file.name);
         return None;
@@ -46,7 +42,7 @@ pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
     let end_instant = Instant::now();
     let duration = end_instant - start_instant;
     eprintln!(
-        "Semantic tokens (full, {duration:?}) provided {} tokens.",
+        "Semantic tokens ({duration:?}) provided {} tokens.",
         data.len()
     );
     Some(data)
