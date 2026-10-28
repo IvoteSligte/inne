@@ -222,15 +222,13 @@ impl Override<'_> {
         // overrides < and > as tt::DELIMITER and idents as tt::TYPE
         self.0
             .range_mut(span.into_range())
-            .for_each(|(_, (span, token_type))| {
+            .for_each(|(_, (_, token_type))| {
                 if *token_type == tt::VARIABLE {
                     // identifier
                     *token_type = tt::TYPE;
-                    eprintln!("{span} => tt::TYPE");
                 } else if *token_type == tt::OPERATOR {
                     // < or >
                     *token_type = tt::DELIMITER;
-                    eprintln!("{span} => tt::DELIMITER");
                 }
             });
     }

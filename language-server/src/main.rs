@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -52,6 +51,31 @@ pub fn position_at_end(source: &str, line: &mut u32, character: &mut u32) -> Pos
         line: *line,
         character: *character,
     }
+}
+
+pub fn offset_at_position(source: &str, position: Position) -> Option<usize> {
+    if position.line == 0 && position.character == 0 {
+        return Some(0);
+    }
+    let mut line = 0;
+    let mut character = 0;
+    let mut byte = 0;
+    for c in source.chars() {
+        if c == '\n' {
+            line += 1;
+            character = 0;
+        } else if c != '\r' {
+            character += 1;
+        }
+        byte += c.len_utf8();
+        if line == position.line && character == position.character {
+            return Some(byte);
+        }
+        if line > position.line {
+            break;
+        }
+    }
+    None
 }
 
 struct File {
@@ -135,7 +159,7 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL, // TODO: incremental updates
+                    TextDocumentSyncKind::INCREMENTAL,
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions::default()),
@@ -197,34 +221,44 @@ impl LanguageServer for Backend {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         eprintln!("Received did_change event.");
+        let start_instant = Instant::now();
         let uri = params.text_document.uri;
-        let mut write_guard = self.files.write().await;
-        let Some(source) = params.content_changes.get(0).map(|change| &change.text) else {
+        let mut guard = self.files.write().await;
+        let Some(file) = &mut guard.get_mut(&uri) else {
             eprintln!(
-                "did_change event did not contain any changes for file '{}'.",
+                "ERROR: Unopened file received did_change notification: '{}'",
                 uri.as_str()
             );
             return;
         };
         let new_version = params.text_document.version;
-        match write_guard.entry(uri.clone()) {
-            Entry::Occupied(mut occupied_entry) => {
-                let file = occupied_entry.get_mut();
-                if file.version < new_version {
-                    eprintln!("Updated file: '{}'", file.name);
-                    file.source = source.to_owned();
-                    file.version = new_version;
-                    self.publish_diagnostics(&file).await;
+        if file.version >= new_version {
+            return;
+        }
+        let source = &mut file.source;
+        for change in params.content_changes {
+            match change.range {
+                Some(range) => {
+                    assert!(range.start <= range.end);
+                    let Some((start, end)) = offset_at_position(source, range.start)
+                        .zip(offset_at_position(source, range.end))
+                    else {
+                        eprintln!("ERROR: Invalid change range: {range:?}");
+                        return;
+                    };
+                    source.replace_range(start..end, &change.text);
                 }
-            }
-            Entry::Vacant(vacant_entry) => {
-                if let Some(file) = File::new(&uri, source, new_version) {
-                    eprintln!("Registered file (from did_change): '{}'", file.name);
-                    self.publish_diagnostics(&file).await;
-                    vacant_entry.insert(file);
-                }
+                None => *source = change.text,
             }
         }
+        file.version = new_version;
+        let end_instant = Instant::now();
+        eprintln!(
+            "Updated file ({:?}): '{}'",
+            end_instant - start_instant,
+            file.name
+        );
+        self.publish_diagnostics(&file).await;
     }
 
     async fn completion(&self, _: CompletionParams) -> Result<Option<CompletionResponse>> {
