@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, time::Instant};
 
 use inne::ast::*;
 use inne::*;
-use tower_lsp_server::ls_types::SemanticToken;
+use tower_lsp_server::ls_types::{SemanticToken, SemanticTokensEdit};
 
 use crate::{File, position_at_end};
 
@@ -38,11 +38,12 @@ pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
     } else {
         eprintln!("Semantic tokens: Failed to parse file '{}'.", file.name);
     }
-    let data = to_semantic_tokens(&file.source, semantic_tokens.into_values());
+    let data = to_semantic_tokens(&file.source, semantic_tokens.into_values()).collect::<Vec<_>>();
     let end_instant = Instant::now();
     let duration = end_instant - start_instant;
     eprintln!(
-        "Semantic tokens ({duration:?}) provided {} tokens.",
+        "Semantic tokens ({duration:?}, version {}) provided {} tokens.",
+        file.version,
         data.len()
     );
     Some(data)
@@ -235,23 +236,81 @@ impl Override<'_> {
     }
 }
 
-fn to_semantic_tokens(
-    source: &str,
+fn to_semantic_tokens<'src>(
+    source: &'src str,
     tokens: impl IntoIterator<Item = (Span, u32)>,
-) -> Vec<SemanticToken> {
+) -> impl Iterator<Item = SemanticToken> {
     let mut start_byte = 0usize;
-    tokens
-        .into_iter()
-        .map(|(span, token_type)| {
-            let delta_position = position_at_end(&source[start_byte..span.start], &mut 0, &mut 0);
-            start_byte = span.start;
-            SemanticToken {
-                delta_line: delta_position.line,
-                delta_start: delta_position.character,
-                length: (span.end - span.start) as _,
-                token_type,
-                token_modifiers_bitset: 0,
+    tokens.into_iter().map(move |(span, token_type)| {
+        let delta_position = position_at_end(&source[start_byte..span.start], &mut 0, &mut 0);
+        start_byte = span.start;
+        SemanticToken {
+            delta_line: delta_position.line,
+            delta_start: delta_position.character,
+            length: (span.end - span.start) as _,
+            token_type,
+            token_modifiers_bitset: 0,
+        }
+    })
+}
+
+fn search(slice: &[SemanticToken], pattern: &[SemanticToken]) -> Option<usize> {
+    for (i, chunk) in slice.chunks_exact(pattern.len()).enumerate() {
+        if chunk == pattern {
+            return Some(i);
+        }
+    }
+    None
+}
+
+const PATTERN_LEN: usize = 3;
+const MAX_SEARCH: usize = 10;
+
+// TODO: aggregate consecutive edits
+pub fn compute_delta<'a>(old: &[SemanticToken], new: &[SemanticToken]) -> Vec<SemanticTokensEdit> {
+    let mut edits = Vec::new();
+    let mut old_i = 0;
+    let mut new_i = 0;
+
+    let mut add_edit = |start: usize, delete_count: usize, data: Option<_>| {
+        edits.push(SemanticTokensEdit {
+            // These values need to be multiplied by 5 because they are written in terms of
+            // integers in the flattened JSON-encoded array (5 per SemanticToken).
+            start: (start * 5) as u32,
+            delete_count: (delete_count * 5) as u32,
+            data,
+        });
+    };
+    loop {
+        let Some(&new_token) = new.get(new_i) else {
+            if old_i < old.len() {
+                add_edit(old_i, old.len() - old_i, None);
             }
-        })
-        .collect()
+            break;
+        };
+        let Some(&old_token) = old.get(old_i) else {
+            if new_i < new.len() {
+                add_edit(old_i, 0, Some(new[new_i..].to_vec()));
+            }
+            break;
+        };
+        if old_token == new_token {
+            old_i += 1;
+            new_i += 1;
+            continue;
+        }
+        if let Some(offset) = search(
+            &old[old_i + 1..(old_i + 1 + MAX_SEARCH + PATTERN_LEN - 1).min(old.len())],
+            &new[new_i..(new_i + PATTERN_LEN).min(new.len())],
+        ) {
+            add_edit(old_i, 1 + offset, Some(vec![new_token]));
+            old_i += 1 + offset;
+            new_i += 1;
+            continue;
+        }
+        add_edit(old_i, 1, Some(vec![new_token]));
+        old_i += 1;
+        new_i += 1;
+    }
+    edits
 }

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use diagnostics::extract_diagnostics;
 use semantic_tokens::extract_semantic_tokens;
@@ -13,6 +14,8 @@ use inne::*;
 
 mod diagnostics;
 mod semantic_tokens;
+
+const MAX_SEMANTIC_TOKENS_LISTS: usize = 3;
 
 // TODO: format-on-save
 
@@ -60,6 +63,8 @@ struct File {
     _path: PathBuf,
     /// Source-code contained in the file.
     source: String,
+    /// The last-computed list of semantic tokens and its `result_id`.
+    semantic_tokens: HashMap<String, (Instant, Vec<SemanticToken>)>,
 }
 
 impl File {
@@ -76,6 +81,7 @@ impl File {
             name,
             _path: path,
             source,
+            semantic_tokens: HashMap::new(),
         })
     }
 
@@ -155,7 +161,7 @@ impl LanguageServer for Backend {
                                 ],
                                 token_modifiers: Vec::new(),
                             },
-                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            full: Some(SemanticTokensFullOptions::Delta { delta: Some(true) }),
                             ..Default::default()
                         },
                     ),
@@ -243,18 +249,67 @@ impl LanguageServer for Backend {
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
         eprintln!("Semantic tokens (full) requested.");
-        let read_guard = self.files.read().await;
         let uri = &params.text_document.uri;
-        let Some(file) = read_guard.get(uri) else {
+        let guard = self.files.read().await;
+        let Some(file) = guard.get(uri) else {
             eprintln!("Semantic tokens: File '{}' is not open.", uri.as_str());
             return Ok(None); // TODO: file-not-open error
         };
-        Ok(extract_semantic_tokens(file).map(|data| {
-            SemanticTokensResult::Tokens(SemanticTokens {
-                result_id: None,
-                data,
-            })
-        }))
+        let Some(tokens) = extract_semantic_tokens(file) else {
+            return Ok(None);
+        };
+        let result_id = file.version.to_string();
+
+        drop(guard); // Prevent permanent stall caused by trying to write while guard is held
+        self.store_semantic_tokens(uri, result_id.clone(), tokens.clone())
+            .await;
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: Some(result_id),
+            data: tokens,
+        })))
+    }
+
+    async fn semantic_tokens_full_delta(
+        &self,
+        params: SemanticTokensDeltaParams,
+    ) -> Result<Option<SemanticTokensFullDeltaResult>> {
+        eprintln!(
+            "Semantic tokens (delta, previous_result_id {}) requested.",
+            params.previous_result_id
+        );
+        let uri = &params.text_document.uri;
+        let guard = self.files.read().await;
+        let Some(file) = guard.get(uri) else {
+            eprintln!("Semantic tokens: File '{}' is not open.", uri.as_str());
+            return Ok(None); // TODO: file-not-open error
+        };
+        let Some((_, old_semantic_tokens)) = file.semantic_tokens.get(&params.previous_result_id)
+        else {
+            eprintln!(
+                "Semantic tokens: previous tokens not stored for result_id '{}'",
+                params.previous_result_id
+            );
+            return Err(jsonrpc::Error::internal_error());
+        };
+        let Some(tokens) = extract_semantic_tokens(file) else {
+            return Ok(None);
+        };
+        let result_id = file.version.to_string();
+        let edits = semantic_tokens::compute_delta(old_semantic_tokens, &tokens);
+
+        drop(guard); // Prevent permanent stall caused by trying to write while guard is held
+        self.store_semantic_tokens(uri, result_id.clone(), tokens.clone())
+            .await;
+        eprintln!(
+            "Semantic tokens (delta, result_id {result_id}) computed {} edits",
+            edits.len(),
+        );
+        Ok(Some(SemanticTokensFullDeltaResult::TokensDelta(
+            SemanticTokensDelta {
+                result_id: Some(result_id),
+                edits,
+            },
+        )))
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
@@ -301,6 +356,24 @@ impl Backend {
         self.client
             .publish_diagnostics(file.uri.clone(), diagnostics, Some(file.version))
             .await;
+    }
+
+    async fn store_semantic_tokens(
+        &self,
+        file_uri: &Uri,
+        result_id: String,
+        tokens: Vec<SemanticToken>,
+    ) {
+        let mut guard = self.files.write().await;
+        let map = &mut guard.get_mut(file_uri).unwrap().semantic_tokens;
+        if map.len() > MAX_SEMANTIC_TOKENS_LISTS {
+            let (oldest_key, _) = map
+                .iter()
+                .min_by_key(|(_, (timestamp, _))| timestamp)
+                .unwrap();
+            map.remove(&oldest_key.clone());
+        }
+        map.insert(result_id.clone(), (Instant::now(), tokens.clone()));
     }
 }
 
