@@ -32,8 +32,17 @@ struct FuncSignature<'hir, 'src> {
     name: Name<'src>,
     generics: &'hir [Name<'src>],
     params: &'hir [Param<'src>],
-    return_type: &'hir Type,
+    return_type: &'hir Spanned<Type>,
 }
+
+const NOTHING_RETURN_TYPE: Spanned<Type> = (
+    Type::Nothing,
+    Span {
+        start: 0,
+        end: 0,
+        context: (),
+    },
+);
 
 // TODO: return (Option<TypedHir<'a>>, Vec<Error>) instead because the TypedHir may be recoverable on error
 pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error>> {
@@ -59,11 +68,7 @@ pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Erro
                         name: func.name,
                         generics: func.generics.as_slice(),
                         params: func.params.as_slice(),
-                        return_type: func
-                            .return_type
-                            .as_ref()
-                            .map(|(r#type, _)| r#type)
-                            .unwrap_or(&Type::Nothing),
+                        return_type: func.return_type.as_ref().unwrap_or(&NOTHING_RETURN_TYPE),
                     },
                     &mut func.body,
                 )
@@ -82,7 +87,7 @@ pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Erro
         type_checker.check_stmts(&mut hir.stmts);
         type_checker.check_types();
         for (func_signature, func_body) in std::iter::zip(&func_signatures, func_bodies) {
-            type_checker.expected_return_type = func_signature.return_type;
+            type_checker.expected_return_type = &func_signature.return_type.0;
             type_checker.check_stmts(func_body);
         }
         (type_checker.errors, type_checker.vars)
@@ -110,21 +115,53 @@ struct TypeChecker<'src, 'hir> {
 
 impl<'src, 'hir> TypeChecker<'src, 'hir> {
     fn check_func_signature(&mut self, func: &'hir FuncSignature<'hir, 'src>) {
+        /// Calls `func` for every generic in `r#type`.
+        fn foreach_generic(r#type: &Type, func: &mut impl FnMut(GenericId)) {
+            match r#type {
+                Type::List(element) => foreach_generic(element, func),
+                Type::Map { key, value } => {
+                    foreach_generic(key, func);
+                    foreach_generic(value, func);
+                }
+                Type::Named { id: _, generics } => generics
+                    .iter()
+                    .for_each(|generic| foreach_generic(generic, func)),
+                Type::Generic(generic_id) => func(*generic_id),
+                _ => {}
+            }
+        }
         let FuncSignature {
             name,
-            generics: _,
+            generics,
             params,
             return_type,
         } = *func;
+        let mut ambiguous_generics = vec![true; generics.len()];
         for param in params {
             self.check_type(&param.r#type);
             self.vars[param.var_id.get()].r#type = param.r#type.0.clone();
+
+            foreach_generic(&param.r#type.0, &mut |generic_id| {
+                // A generic that is used by a parameter is unambiguous because the passed argument determines its type.
+                ambiguous_generics[generic_id.get()] = false;
+            });
         }
+        foreach_generic(&return_type.0, &mut |generic_id| {
+            if ambiguous_generics[generic_id.get()] {
+                self.errors.add(
+                format!(
+                    "Generic type '{}' is ambiguous. Generics in the return type of a function must also be used by a parameter.",
+                    generics[generic_id.get()].0,
+                ),
+                return_type.1,
+            )
+            }
+        });
         if name.0 == "main" {
             if !params.is_empty() {
                 self.errors
                     .add("The 'main' function may not have any parameters.", name.1);
-            } else if *return_type != Type::Nothing {
+            } else if return_type.0 != Type::Nothing {
                 self.errors
                     .add("The 'main' function may not return anything.", name.1);
             }
@@ -495,8 +532,6 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
     }
 
     fn check_call(&mut self, (call, span): Spanned<&mut Call<'src>>) -> Type {
-        // FIXME: match generics if the called function has them (and check if all of the same-named ones have the same concrete type)
-
         if call.func_id == FuncId::PRINT {
             // print(...) accepts any number of arguments of any type.
             return Type::Nothing;
@@ -600,7 +635,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 break;
             }
         }
-        return_type.clone()
+        return_type.0.clone()
     }
 
     fn check_list(&mut self, (list, span): Spanned<&mut List<'src>>) -> Type {
