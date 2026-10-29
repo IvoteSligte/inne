@@ -33,14 +33,7 @@ struct FuncSignature<'hir, 'src> {
     return_type: &'hir Spanned<Type>,
 }
 
-const NOTHING_RETURN_TYPE: Spanned<Type> = (
-    Type::Nothing,
-    Span {
-        start: 0,
-        end: 0,
-        context: (),
-    },
-);
+const NOTHING_RETURN_TYPE: Spanned<Type> = (Type::Nothing, Span { start: 0, end: 0 });
 
 // TODO: return (Option<TypedHir<'a>>, Vec<Error>) instead because the TypedHir may be recoverable on error
 pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error>> {
@@ -558,7 +551,6 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             let closing_paren_span = Span {
                 start: span.end - 1,
                 end: span.end,
-                context: span.context,
             };
             let extra_needed = params.len() - args.len();
             let message = format!(
@@ -574,7 +566,6 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             let after_params_span = Span {
                 start: first_arg_after_params_span.start,
                 end: last_arg_span.end,
-                context: last_arg_span.context,
             };
             let message = format!(
                 "This function only takes {} argument{}. {} argument{} passed.",

@@ -1,5 +1,3 @@
-use chumsky::span::Span as _;
-
 use crate::{Span, Spanned, Token, ast::*};
 
 // TODO: error recovery

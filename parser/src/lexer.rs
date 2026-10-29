@@ -1,7 +1,5 @@
-use chumsky::prelude::SimpleSpan;
+use crate::{Span, Spanned};
 
-pub type Span = SimpleSpan;
-pub type Spanned<T> = (T, Span);
 pub type LexError = (&'static str, Span);
 
 use Token::*;
