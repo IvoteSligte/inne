@@ -24,29 +24,28 @@ impl FuncId {
 
 pub struct VarInfo<'a> {
     pub name: &'a str,
-    pub span: Span,
+    pub span: Span<'a>,
 }
 
 pub struct Hir<'a> {
-    pub(crate) filename: &'a str,
     /// Essentially `HashMap<DefId, DefInfo>`, but all [DefId]`s are consecutive.
-    pub(crate) vars: Vec<VarInfo<'a>>,
-    pub(crate) funcs: Vec<Func<'a>>,
-    pub(crate) types: Vec<TypeDef<'a>>,
-    pub(crate) stmts: Vec<Stmt<'a>>,
+    pub vars: Vec<VarInfo<'a>>,
+    pub funcs: Vec<Func<'a>>,
+    pub types: Vec<TypeDef<'a>>,
+    pub stmts: Vec<Stmt<'a>>,
 }
 
 pub enum Stmt<'a> {
     VarDecl(VarDecl<'a>),
-    Expr(Spanned<Expr<'a>>),
+    Expr(SpannedExpr<'a>),
     Assign(Assign<'a>),
     If(If<'a>),
     For(For<'a>),
     While(While<'a>),
     Loop(Loop<'a>),
-    Break(Span),
-    Continue(Span),
-    Return(Spanned<Option<Spanned<Expr<'a>>>>),
+    Break(Span<'a>),
+    Continue(Span<'a>),
+    Return(Spanned<'a, Option<SpannedExpr<'a>>>),
 }
 
 pub type Block<'a> = Vec<Stmt<'a>>;
@@ -56,14 +55,14 @@ pub struct Func<'a> {
     pub name: Name<'a>,
     pub generics: Vec<Name<'a>>,
     pub params: Vec<Param<'a>>,
-    pub return_type: Option<Spanned<Type>>,
+    pub return_type: Option<Spanned<'a, Type>>,
     pub body: Block<'a>,
 }
 
 pub struct Param<'a> {
     pub var_id: VarId,
     pub name: Name<'a>,
-    pub r#type: Spanned<Type>,
+    pub r#type: Spanned<'a, Type>,
 }
 
 pub enum TypeDef<'a> {
@@ -80,9 +79,9 @@ impl TypeDef<'_> {
     }
 }
 
-pub enum AstTypeDef<'a> {
-    Struct(&'a ast::Struct<'a>),
-    Enum(&'a ast::Enum<'a>),
+pub enum AstTypeDef<'a, 'b> {
+    Struct(&'b ast::Struct<'a>),
+    Enum(&'b ast::Enum<'a>),
 }
 
 pub struct Struct<'a> {
@@ -93,7 +92,7 @@ pub struct Struct<'a> {
 
 pub struct Field<'a> {
     pub name: Name<'a>,
-    pub r#type: Spanned<Type>,
+    pub r#type: Spanned<'a, Type>,
 }
 
 pub struct Enum<'a> {
@@ -104,7 +103,7 @@ pub struct Enum<'a> {
 
 pub struct Variant<'a> {
     pub name: Name<'a>,
-    pub payload: Option<Spanned<Type>>,
+    pub payload: Option<Spanned<'a, Type>>,
 }
 
 usize_newtype!(TypeId);
@@ -148,16 +147,16 @@ impl Type {
 pub struct VarDecl<'a> {
     pub var_id: VarId,
     pub name: Name<'a>,
-    pub value: Spanned<Expr<'a>>,
+    pub value: SpannedExpr<'a>,
 }
 
 pub enum Expr<'a> {
     Binary(Binary<'a>),
     Unary(Unary<'a>),
     Call(Call<'a>),
-    EmptyList(EmptyList),
+    EmptyList(EmptyList<'a>),
     List(List<'a>),
-    EmptyMap(EmptyMap),
+    EmptyMap(EmptyMap<'a>),
     Map(Map<'a>),
     StructLiteral(StructLiteral<'a>),
     VariantLiteral(VariantLiteral<'a>),
@@ -171,34 +170,36 @@ pub enum Expr<'a> {
     String(&'a str),
 }
 
+pub type SpannedExpr<'a> = Spanned<'a, Expr<'a>>;
+
 pub struct Binary<'a> {
-    pub op: Spanned<BinaryOp>,
-    pub left: Box<Spanned<Expr<'a>>>,
-    pub right: Box<Spanned<Expr<'a>>>,
+    pub op: Spanned<'a, BinaryOp>,
+    pub left: Box<SpannedExpr<'a>>,
+    pub right: Box<SpannedExpr<'a>>,
 }
 
 pub struct Unary<'a> {
-    pub op: Spanned<UnaryOp>,
-    pub expr: Box<Spanned<Expr<'a>>>,
+    pub op: Spanned<'a, UnaryOp>,
+    pub expr: Box<SpannedExpr<'a>>,
 }
 
 pub struct Call<'a> {
     pub name: Name<'a>,
     pub func_id: FuncId,
-    pub args: Vec<Spanned<Expr<'a>>>,
+    pub args: Vec<SpannedExpr<'a>>,
 }
 
-pub struct EmptyList {
-    pub element_type: Spanned<Type>,
+pub struct EmptyList<'a> {
+    pub element_type: Spanned<'a, Type>,
 }
 
 pub struct List<'a> {
-    pub elements: Vec<Spanned<Expr<'a>>>,
+    pub elements: Vec<SpannedExpr<'a>>,
 }
 
-pub struct EmptyMap {
-    pub key_type: Spanned<Type>,
-    pub value_type: Spanned<Type>,
+pub struct EmptyMap<'a> {
+    pub key_type: Spanned<'a, Type>,
+    pub value_type: Spanned<'a, Type>,
 }
 
 pub struct Map<'a> {
@@ -214,7 +215,7 @@ pub struct StructLiteral<'a> {
 
 pub struct FieldLiteral<'a> {
     pub name: Name<'a>,
-    pub value: Spanned<Expr<'a>>,
+    pub value: SpannedExpr<'a>,
 }
 
 pub struct VariantLiteral<'a> {
@@ -222,17 +223,17 @@ pub struct VariantLiteral<'a> {
     pub variant_index: usize,
     pub enum_name: Name<'a>,
     pub name: Name<'a>,
-    pub payload: Option<Box<Spanned<Expr<'a>>>>,
+    pub payload: Option<Box<SpannedExpr<'a>>>,
 }
 
 pub struct Pair<'a> {
-    pub key: Spanned<Expr<'a>>,
-    pub value: Spanned<Expr<'a>>,
+    pub key: SpannedExpr<'a>,
+    pub value: SpannedExpr<'a>,
 }
 
 pub struct Index<'a> {
-    pub expr: Box<Spanned<Expr<'a>>>,
-    pub index: Box<Spanned<Expr<'a>>>,
+    pub expr: Box<SpannedExpr<'a>>,
+    pub index: Box<SpannedExpr<'a>>,
 }
 
 pub struct Member<'a> {
@@ -241,19 +242,19 @@ pub struct Member<'a> {
     /// Set in Typed-HIR stage.
     pub field_index: usize,
 
-    pub expr: Box<Spanned<Expr<'a>>>,
+    pub expr: Box<SpannedExpr<'a>>,
     pub member: Name<'a>,
 }
 
 pub struct Range<'a> {
-    pub start: Box<Spanned<Expr<'a>>>,
-    pub end: Box<Spanned<Expr<'a>>>,
+    pub start: Box<SpannedExpr<'a>>,
+    pub end: Box<SpannedExpr<'a>>,
 }
 
 pub struct Assign<'a> {
-    pub op: Spanned<AssignOp>,
-    pub target: Spanned<Expr<'a>>,
-    pub value: Spanned<Expr<'a>>,
+    pub op: Spanned<'a, AssignOp>,
+    pub target: SpannedExpr<'a>,
+    pub value: SpannedExpr<'a>,
 }
 
 pub struct If<'a> {
@@ -264,7 +265,7 @@ pub struct If<'a> {
 }
 
 pub struct Choice<'a> {
-    pub cond: Spanned<Expr<'a>>,
+    pub cond: SpannedExpr<'a>,
     pub then: Block<'a>,
 }
 
@@ -272,12 +273,12 @@ pub struct For<'a> {
     /// ID of the for-loop iteration variable.
     pub var_id: VarId,
     pub var: Name<'a>,
-    pub iter: Spanned<Expr<'a>>,
+    pub iter: SpannedExpr<'a>,
     pub body: Block<'a>,
 }
 
 pub struct While<'a> {
-    pub cond: Spanned<Expr<'a>>,
+    pub cond: SpannedExpr<'a>,
     pub body: Block<'a>,
 }
 
@@ -285,8 +286,8 @@ pub struct Loop<'a> {
     pub body: Block<'a>,
 }
 
-// TODO: return (Option<Hir<'a>>, Vec<Error>) instead because the Hir may be recoverable on error
-pub fn hir_from_ast<'a>(ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error>> {
+// TODO: return (Option<Hir<'a>>, Vec<Error>) instead because the HIR may be recoverable on error
+pub fn hir_from_ast<'a, 'b>(ast: &'b ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error<'a>>> {
     Constructor::map_ast(ast)
 }
 
@@ -307,19 +308,19 @@ impl<'a> VarList<'a> {
     }
 }
 
-struct Constructor<'a> {
+struct Constructor<'a, 'b> {
     vars: VarList<'a>,
     funcs: Vec<Func<'a>>,
     types: Vec<TypeDef<'a>>,
-    func_map: HashMap<&'a str, (FuncId, &'a ast::Func<'a>)>,
-    type_map: HashMap<&'a str, (TypeId, Span, AstTypeDef<'a>)>,
-    generics: &'a [Name<'a>],
+    func_map: HashMap<&'a str, (FuncId, &'b ast::Func<'a>)>,
+    type_map: HashMap<&'a str, (TypeId, Span<'a>, AstTypeDef<'a, 'b>)>,
+    generics: &'b [Name<'a>],
     scopes: Vec<HashMap<&'a str, VarId>>,
-    errors: Errors,
+    errors: Errors<'a>,
 }
 
-impl<'a> Constructor<'a> {
-    pub fn map_ast(ast: &'a ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error>> {
+impl<'a, 'b> Constructor<'a, 'b> {
+    pub fn map_ast(ast: &'b ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error<'a>>> {
         let mut _self = Self {
             vars: VarList(Vec::new()),
             funcs: Vec::new(),
@@ -363,7 +364,6 @@ impl<'a> Constructor<'a> {
             return Err(_self.errors.into_inner());
         }
         Ok(Hir {
-            filename: ast.filename,
             vars: _self.vars.0,
             funcs: _self.funcs,
             types: _self.types,
@@ -371,7 +371,7 @@ impl<'a> Constructor<'a> {
         })
     }
 
-    fn add_type_to_map(&mut self, name: Name<'a>, ast_type_def: AstTypeDef<'a>) {
+    fn add_type_to_map(&mut self, name: Name<'a>, ast_type_def: AstTypeDef<'a, 'b>) {
         // TODO: error if user defines type with same name as builtin
         //       (unlikely because user-defined types should be PascalCase by convention)
         if let Some(&(_, prev_type_span, _)) = self.type_map.get(name.0) {
@@ -397,11 +397,11 @@ impl<'a> Constructor<'a> {
         value
     }
 
-    fn map_scope<'b: 'a>(&mut self, stmts: &'a [ast::Stmt<'b>]) -> Vec<Stmt<'b>> {
+    fn map_scope(&mut self, stmts: &'b [ast::Stmt<'a>]) -> Vec<Stmt<'a>> {
         self.in_scope(|_self| _self.map_stmts(stmts))
     }
 
-    fn map_stmts<'b: 'a>(&mut self, stmts: &'a [ast::Stmt<'b>]) -> Vec<Stmt<'b>> {
+    fn map_stmts(&mut self, stmts: &'b [ast::Stmt<'a>]) -> Vec<Stmt<'a>> {
         let mut out_stmts = Vec::with_capacity(stmts.len());
         for stmt in stmts {
             match stmt {
@@ -445,7 +445,7 @@ impl<'a> Constructor<'a> {
                             body,
                         });
                         _self.generics = &[];
-                    });
+                    })
                 }
                 ast::Stmt::Struct(ast::Struct { name, fields }) => {
                     if self.scopes.len() > 1 {
@@ -580,12 +580,13 @@ impl<'a> Constructor<'a> {
                         *span,
                     )));
                 }
+                ast::Stmt::Import(import) => todo!(),
             }
         }
         out_stmts
     }
 
-    fn map_param<'b: 'a>(&mut self, param: &ast::Param<'b>) -> Param<'b> {
+    fn map_param(&mut self, param: &'b ast::Param<'a>) -> Param<'a> {
         let var_id = self.vars.add(param.name);
         if let Some(prev_param_var_id) =
             self.scopes.last_mut().unwrap().insert(param.name.0, var_id)
@@ -607,7 +608,7 @@ impl<'a> Constructor<'a> {
         }
     }
 
-    fn map_expr<'b: 'a>(&mut self, (expr, span): &Spanned<ast::Expr<'b>>) -> Spanned<Expr<'b>> {
+    fn map_expr(&mut self, (expr, span): &'b ast::SpannedExpr<'a>) -> SpannedExpr<'a> {
         (
             match expr {
                 ast::Expr::Binary(ast::Binary { op, left, right }) => Expr::Binary(Binary {
@@ -823,11 +824,11 @@ impl<'a> Constructor<'a> {
         )
     }
 
-    fn map_exprs<'b: 'a>(&mut self, exprs: &[Spanned<ast::Expr<'b>>]) -> Vec<Spanned<Expr<'b>>> {
+    fn map_exprs(&mut self, exprs: &'b [ast::SpannedExpr<'a>]) -> Vec<SpannedExpr<'a>> {
         exprs.iter().map(|elem| self.map_expr(elem)).collect()
     }
 
-    fn map_type(&mut self, (r#type, span): &Spanned<ast::Type<'_>>) -> Spanned<Type> {
+    fn map_type(&mut self, (r#type, span): &'b ast::SpannedType<'a>) -> Spanned<'a, Type> {
         let ast::Type { name, generics } = r#type;
         if matches!(name.0, "int" | "char" | "string" | "bool") && !generics.is_empty() {
             self.errors
@@ -910,7 +911,7 @@ impl<'a> Constructor<'a> {
         (r#type, *span)
     }
 
-    fn parse_int(&mut self, (input, span): Spanned<&str>) -> Int {
+    fn parse_int(&mut self, (input, span): Spanned<'a, &'a str>) -> Int {
         let err = match input.parse() {
             Ok(int) => return int,
             Err(err) => err,
@@ -934,7 +935,7 @@ impl<'a> Constructor<'a> {
         0 // Default value
     }
 
-    fn parse_char(&mut self, (input, span): Spanned<&str>) -> char {
+    fn parse_char(&mut self, (input, span): Spanned<'a, &'a str>) -> char {
         match input.parse() {
             Ok(char) => char,
             Err(_) => {
@@ -989,7 +990,7 @@ impl std::fmt::Display for Hir<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // NOTE: Not sure why it doesn't work without the dyn conversion.
         let f: &mut dyn std::fmt::Write = &mut IndentWriter::new("    ", f);
-        writeln!(f, "HIR '{}'", self.filename)?;
+        writeln!(f, "HIR:")?;
         writeln!(f, "vars: {{{INDENT}")?;
         for (i, VarInfo { name, span }) in self.vars.iter().enumerate() {
             writeln!(f, "_{i}: var {name} at {span};")?;

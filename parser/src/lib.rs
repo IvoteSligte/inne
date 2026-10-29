@@ -9,16 +9,27 @@ pub use lexer::*;
 pub use parser::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Span {
+pub struct Span<'a> {
     pub start: usize,
     pub end: usize,
+    pub filename: &'a str,
 }
 
-impl Span {
+impl<'a> Span<'a> {
+    pub fn new(start: usize, end: usize, filename: &'a str) -> Self {
+        Self {
+            start,
+            end,
+            filename,
+        }
+    }
+
     pub fn union(self, other: Self) -> Self {
+        debug_assert_eq!(self.filename, other.filename);
         Self {
             start: self.start,
             end: other.end,
+            filename: self.filename,
         }
     }
 
@@ -27,13 +38,13 @@ impl Span {
     }
 }
 
-impl std::fmt::Debug for Span {
+impl std::fmt::Debug for Span<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         <Self as std::fmt::Display>::fmt(self, f)
     }
 }
 
-impl std::fmt::Display for Span {
+impl std::fmt::Display for Span<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.start.fmt(f)?;
         f.write_str("..")?;
@@ -41,19 +52,10 @@ impl std::fmt::Display for Span {
     }
 }
 
-impl From<Span> for std::ops::Range<usize> {
-    fn from(Span { start, end }: Span) -> Self {
+impl From<Span<'_>> for std::ops::Range<usize> {
+    fn from(Span { start, end, .. }: Span) -> Self {
         Self { start, end }
     }
 }
 
-impl From<std::ops::Range<usize>> for Span {
-    fn from(value: std::ops::Range<usize>) -> Self {
-        Self {
-            start: value.start,
-            end: value.end,
-        }
-    }
-}
-
-pub type Spanned<T> = (T, Span);
+pub type Spanned<'a, T> = (T, Span<'a>);

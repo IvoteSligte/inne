@@ -2,27 +2,27 @@ use crate::{Span, Spanned, util::write_comma_separated};
 
 #[derive(Debug)]
 pub struct Ast<'a> {
-    pub filename: &'a str,
     pub stmts: Vec<Stmt<'a>>,
 }
 
-pub type Name<'a> = Spanned<&'a str>;
+pub type Name<'a> = Spanned<'a, &'a str>;
 
 #[derive(Debug)]
 pub enum Stmt<'a> {
+    Import(Import<'a>),
     Func(Func<'a>),
     Struct(Struct<'a>),
     Enum(Enum<'a>),
     VarDecl(VarDecl<'a>),
-    Expr(Spanned<Expr<'a>>),
+    Expr(SpannedExpr<'a>),
     Assign(Assign<'a>),
     If(If<'a>),
     For(For<'a>),
     While(While<'a>),
     Loop(Loop<'a>),
-    Break(Span),
-    Continue(Span),
-    Return(Spanned<Option<Spanned<Expr<'a>>>>),
+    Break(Span<'a>),
+    Continue(Span<'a>),
+    Return(Spanned<'a, Option<SpannedExpr<'a>>>),
 }
 
 pub type Block<'a> = Vec<Stmt<'a>>;
@@ -31,7 +31,14 @@ pub type Block<'a> = Vec<Stmt<'a>>;
 pub struct Type<'a> {
     /// Uses `%tuple` to indicate tuple types.
     pub name: Name<'a>,
-    pub generics: Vec<Spanned<Self>>,
+    pub generics: Vec<SpannedType<'a>>,
+}
+
+pub type SpannedType<'a> = Spanned<'a, Type<'a>>;
+
+#[derive(Debug)]
+pub struct Import<'a> {
+    pub path: Spanned<'a, Vec<Name<'a>>>,
 }
 
 #[derive(Debug)]
@@ -39,14 +46,14 @@ pub struct Func<'a> {
     pub name: Name<'a>,
     pub generics: Vec<Name<'a>>,
     pub params: Vec<Param<'a>>,
-    pub return_type: Option<Spanned<Type<'a>>>,
+    pub return_type: Option<SpannedType<'a>>,
     pub body: Block<'a>,
 }
 
 #[derive(Debug)]
 pub struct Param<'a> {
     pub name: Name<'a>,
-    pub r#type: Spanned<Type<'a>>,
+    pub r#type: SpannedType<'a>,
 }
 
 #[derive(Debug)]
@@ -58,7 +65,7 @@ pub struct Struct<'a> {
 #[derive(Debug)]
 pub struct Field<'a> {
     pub name: Name<'a>,
-    pub r#type: Spanned<Type<'a>>,
+    pub r#type: SpannedType<'a>,
 }
 
 #[derive(Debug)]
@@ -70,13 +77,13 @@ pub struct Enum<'a> {
 #[derive(Debug)]
 pub struct Variant<'a> {
     pub name: Name<'a>,
-    pub payload: Option<Spanned<Type<'a>>>,
+    pub payload: Option<SpannedType<'a>>,
 }
 
 #[derive(Debug)]
 pub struct VarDecl<'a> {
     pub name: Name<'a>,
-    pub value: Spanned<Expr<'a>>,
+    pub value: SpannedExpr<'a>,
 }
 
 #[derive(Debug)]
@@ -100,11 +107,13 @@ pub enum Expr<'a> {
     String(&'a str),
 }
 
+pub type SpannedExpr<'a> = Spanned<'a, Expr<'a>>;
+
 #[derive(Debug)]
 pub struct Binary<'a> {
-    pub op: Spanned<BinaryOp>,
-    pub left: Box<Spanned<Expr<'a>>>,
-    pub right: Box<Spanned<Expr<'a>>>,
+    pub op: Spanned<'a, BinaryOp>,
+    pub left: Box<SpannedExpr<'a>>,
+    pub right: Box<SpannedExpr<'a>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -127,8 +136,8 @@ pub enum BinaryOp {
 
 #[derive(Debug)]
 pub struct Unary<'a> {
-    pub op: Spanned<UnaryOp>,
-    pub expr: Box<Spanned<Expr<'a>>>,
+    pub op: Spanned<'a, UnaryOp>,
+    pub expr: Box<SpannedExpr<'a>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -140,23 +149,23 @@ pub enum UnaryOp {
 #[derive(Debug)]
 pub struct Call<'a> {
     pub name: Name<'a>,
-    pub args: Vec<Spanned<Expr<'a>>>,
+    pub args: Vec<SpannedExpr<'a>>,
 }
 
 #[derive(Debug)]
 pub struct EmptyList<'a> {
-    pub element_type: Spanned<Type<'a>>,
+    pub element_type: SpannedType<'a>,
 }
 
 #[derive(Debug)]
 pub struct List<'a> {
-    pub elements: Vec<Spanned<Expr<'a>>>,
+    pub elements: Vec<SpannedExpr<'a>>,
 }
 
 #[derive(Debug)]
 pub struct EmptyMap<'a> {
-    pub key_type: Spanned<Type<'a>>,
-    pub value_type: Spanned<Type<'a>>,
+    pub key_type: SpannedType<'a>,
+    pub value_type: SpannedType<'a>,
 }
 
 #[derive(Debug)]
@@ -166,8 +175,8 @@ pub struct Map<'a> {
 
 #[derive(Debug)]
 pub struct Pair<'a> {
-    pub key: Spanned<Expr<'a>>,
-    pub value: Spanned<Expr<'a>>,
+    pub key: SpannedExpr<'a>,
+    pub value: SpannedExpr<'a>,
 }
 
 #[derive(Debug)]
@@ -179,39 +188,39 @@ pub struct StructLiteral<'a> {
 #[derive(Debug)]
 pub struct FieldLiteral<'a> {
     pub name: Name<'a>,
-    pub value: Spanned<Expr<'a>>,
+    pub value: SpannedExpr<'a>,
 }
 
 #[derive(Debug)]
 pub struct VariantLiteral<'a> {
     pub enum_name: Name<'a>,
     pub name: Name<'a>,
-    pub payload: Option<Box<Spanned<Expr<'a>>>>,
+    pub payload: Option<Box<SpannedExpr<'a>>>,
 }
 
 #[derive(Debug)]
 pub struct Member<'a> {
-    pub expr: Box<Spanned<Expr<'a>>>,
+    pub expr: Box<SpannedExpr<'a>>,
     pub member: Name<'a>,
 }
 
 #[derive(Debug)]
 pub struct Index<'a> {
-    pub expr: Box<Spanned<Expr<'a>>>,
-    pub index: Box<Spanned<Expr<'a>>>,
+    pub expr: Box<SpannedExpr<'a>>,
+    pub index: Box<SpannedExpr<'a>>,
 }
 
 #[derive(Debug)]
 pub struct Range<'a> {
-    pub start: Box<Spanned<Expr<'a>>>,
-    pub end: Box<Spanned<Expr<'a>>>,
+    pub start: Box<SpannedExpr<'a>>,
+    pub end: Box<SpannedExpr<'a>>,
 }
 
 #[derive(Debug)]
 pub struct Assign<'a> {
-    pub op: Spanned<AssignOp>,
-    pub target: Spanned<Expr<'a>>,
-    pub value: Spanned<Expr<'a>>,
+    pub op: Spanned<'a, AssignOp>,
+    pub target: SpannedExpr<'a>,
+    pub value: SpannedExpr<'a>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,22 +235,22 @@ pub enum AssignOp {
 
 #[derive(Debug)]
 pub struct If<'a> {
-    pub cond: Spanned<Expr<'a>>,
+    pub cond: SpannedExpr<'a>,
     pub then: Block<'a>,
-    pub else_ifs: Vec<(Spanned<Expr<'a>>, Block<'a>)>,
+    pub else_ifs: Vec<(SpannedExpr<'a>, Block<'a>)>,
     pub r#else: Option<Block<'a>>,
 }
 
 #[derive(Debug)]
 pub struct For<'a> {
-    pub var: Spanned<&'a str>,
-    pub iter: Spanned<Expr<'a>>,
+    pub var: Name<'a>,
+    pub iter: SpannedExpr<'a>,
     pub body: Block<'a>,
 }
 
 #[derive(Debug)]
 pub struct While<'a> {
-    pub cond: Spanned<Expr<'a>>,
+    pub cond: SpannedExpr<'a>,
     pub body: Block<'a>,
 }
 

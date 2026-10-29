@@ -162,16 +162,16 @@ pub struct Stmt {
     pub op: Op,
 }
 
-pub fn mir_from_typed_hir<'a>(typed_hir: &'a TypedHir<'a>) -> Result<Mir<'a>, Vec<Error>> {
+pub fn mir_from_typed_hir<'a>(typed_hir: &'a TypedHir<'a>) -> Result<Mir<'a>, Vec<Error<'a>>> {
     Constructor::map_thir(typed_hir)
 }
 
-struct Constructor {
-    errors: Errors,
+struct Constructor<'a> {
+    errors: Errors<'a>,
 }
 
-impl Constructor {
-    pub fn map_thir<'a>(typed_hir: &'a TypedHir<'a>) -> Result<Mir<'a>, Vec<Error>> {
+impl<'a> Constructor<'a> {
+    pub fn map_thir(typed_hir: &'a TypedHir<'a>) -> Result<Mir<'a>, Vec<Error<'a>>> {
         let mut _self = Self {
             errors: Errors::new(),
         };
@@ -214,7 +214,7 @@ impl Constructor {
         })
     }
 
-    fn map_func<'a>(&mut self, func: &'a thir::Func<'a>) -> Func<'a> {
+    fn map_func(&mut self, func: &'a thir::Func<'a>) -> Func<'a> {
         let mut builder = FuncBuilder::new(func.name.0);
         for param in &func.params {
             let local_id = builder.create_local();
@@ -226,7 +226,7 @@ impl Constructor {
     }
 
     /// `loop_block_ids` are the block IDs for statements to jump to on `(continue, break)`.
-    fn map_scope<'a>(
+    fn map_scope(
         &mut self,
         stmts: &'a [thir::Stmt<'a>],
         loop_block_ids: Option<(BlockId, BlockId)>,
@@ -411,7 +411,7 @@ impl Constructor {
         // TODO: drop declared variables that hold pointers
     }
 
-    fn map_expr<'a>(&mut self, expr: &'a thir::Expr<'a>, builder: &mut FuncBuilder<'a>) -> LocalId {
+    fn map_expr(&mut self, expr: &'a thir::Expr<'a>, builder: &mut FuncBuilder<'a>) -> LocalId {
         match expr {
             thir::Expr::Binary(thir::Binary { op, left, right }) => {
                 let left_id = self.map_expr(&left.0, builder);

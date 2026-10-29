@@ -1,9 +1,9 @@
-use crate::{Span, Spanned, Token, ast::*};
+use crate::{Span, Spanned, SpannedToken, Token, ast::*};
 
 // TODO: error recovery
 // TODO: list/map/struct/enum pattern matching in variable declarations
 
-pub type ParseError = (String, Span);
+pub type ParseError<'a> = (String, Span<'a>);
 
 const PARENS: (Token<'static>, Token<'static>) = (Token::LParen, Token::RParen);
 const BRACKETS: (Token<'static>, Token<'static>) = (Token::LBracket, Token::RBracket);
@@ -11,40 +11,48 @@ const BRACES: (Token<'static>, Token<'static>) = (Token::LBrace, Token::RBrace);
 const ANGLES: (Token<'static>, Token<'static>) = (Token::Op("<"), Token::Op(">"));
 
 struct Parser<'parent, 'src> {
-    src: &'parent [Spanned<Token<'src>>],
-    errors: &'parent mut Vec<ParseError>,
-    start: usize,
+    src: &'parent [SpannedToken<'src>],
+    errors: &'parent mut Vec<ParseError<'src>>,
     end: usize,
 }
 
 impl<'parent, 'src> Parser<'parent, 'src> {
-    fn atomic_spanned<T>(
-        &mut self,
-        func: impl FnOnce(&mut Parser<'_, 'src>) -> Option<T>,
-    ) -> Option<Spanned<T>> {
+    fn atomic<T>(&mut self, func: impl FnOnce(&mut Parser<'_, 'src>) -> Option<T>) -> Option<T> {
         let mut _self = Parser {
-            start: self.end,
             end: self.end,
             src: self.src,
             errors: self.errors,
         };
-        func(&mut _self).map(|value| {
+        func(&mut _self).inspect(|_| {
             self.end = _self.end;
-            let span = _self.src[_self.start].1.union(_self.src[_self.end - 1].1);
+        })
+    }
+
+    fn spanned<T>(
+        &mut self,
+        func: impl FnOnce(&mut Parser<'_, 'src>) -> Option<T>,
+    ) -> Option<Spanned<'src, T>> {
+        let start_span = self.src.get(self.end)?.1;
+        func(self).map(|value| {
+            let end_span = self.src[self.end - 1].1;
+            let span = start_span.union(end_span);
             (value, span)
         })
     }
 
-    fn atomic<T>(&mut self, func: impl FnOnce(&mut Parser<'_, 'src>) -> Option<T>) -> Option<T> {
-        self.atomic_spanned(func).map(|(value, _)| value)
+    fn atomic_spanned<T>(
+        &mut self,
+        func: impl FnOnce(&mut Parser<'_, 'src>) -> Option<T>,
+    ) -> Option<Spanned<'src, T>> {
+        self.atomic(|s| s.spanned(func))
     }
 
     /// This also parses single instances of `func`.
     fn parse_binary(
         &mut self,
         op_map: impl Fn(&str) -> Option<BinaryOp>,
-        func: impl Fn(&mut Parser<'_, 'src>) -> Option<Spanned<Expr<'src>>>,
-    ) -> Option<Spanned<Expr<'src>>> {
+        func: impl Fn(&mut Parser<'_, 'src>) -> Option<SpannedExpr<'src>>,
+    ) -> Option<SpannedExpr<'src>> {
         let mut left = func(self)?;
         while let Some(op) = self.take_if_map(|t| match t {
             Token::Op(op) => op_map(op),
@@ -77,7 +85,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         maybe
     }
 
-    fn must_token(&mut self, token: Token<'src>) -> Option<Spanned<Token<'src>>> {
+    fn must_token(&mut self, token: Token<'src>) -> Option<SpannedToken<'src>> {
         let maybe = self.take_if_eq(token);
         if maybe.is_none() {
             let span = self.src[self.end].1;
@@ -87,16 +95,19 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         maybe
     }
 
-    fn peek(&self) -> Option<Spanned<Token<'src>>> {
+    fn peek(&self) -> Option<SpannedToken<'src>> {
         self.remaining().iter().copied().next()
     }
 
-    fn remaining(&self) -> &[Spanned<Token<'src>>] {
+    fn remaining(&self) -> &[SpannedToken<'src>] {
         &self.src[self.end..]
     }
 
     #[must_use]
-    fn take_if_map<T>(&mut self, pred: impl Fn(Token<'src>) -> Option<T>) -> Option<Spanned<T>> {
+    fn take_if_map<T>(
+        &mut self,
+        pred: impl Fn(Token<'src>) -> Option<T>,
+    ) -> Option<Spanned<'src, T>> {
         if let Some((token, span)) = self.peek()
             && let Some(value) = pred(token)
         {
@@ -108,12 +119,12 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     }
 
     #[must_use]
-    fn take_if(&mut self, pred: impl Fn(Token<'_>) -> bool) -> Option<Spanned<Token<'src>>> {
+    fn take_if(&mut self, pred: impl Fn(Token<'src>) -> bool) -> Option<SpannedToken<'src>> {
         self.take_if_map(|t| pred(t).then_some(t))
     }
 
     #[must_use]
-    fn take_if_eq(&mut self, token: Token<'_>) -> Option<Spanned<Token<'src>>> {
+    fn take_if_eq(&mut self, token: Token<'src>) -> Option<SpannedToken<'src>> {
         self.take_if(|t| t == token)
     }
 
@@ -139,13 +150,17 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     /// If `func` consumes a token and still returns `None`, then that token is permanently gone.
     ///
     /// Allows a trailing separator.
-    fn separated_by_comma<T>(&mut self, func: impl Fn(&mut Self) -> Option<T>) -> Vec<T> {
+    fn separated_by<T>(
+        &mut self,
+        separator: Token<'src>,
+        func: impl Fn(&mut Self) -> Option<T>,
+    ) -> Vec<T> {
         let Some(first) = func(self) else {
             return Vec::new();
         };
         let mut values = vec![first];
         // This greedily consumes the separator before querying `func`.
-        while self.take_if_eq(Token::Comma).is_some()
+        while self.take_if_eq(separator).is_some()
             && let Some(value) = func(self)
         {
             values.push(value);
@@ -153,9 +168,17 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         values
     }
 
-    // --- Inne-specific parser ---
+    /// This function is non-atomic.
+    /// If `func` consumes a token and still returns `None`, then that token is permanently gone.
+    ///
+    /// Allows a trailing comma.
+    fn separated_by_comma<T>(&mut self, func: impl Fn(&mut Self) -> Option<T>) -> Vec<T> {
+        self.separated_by(Token::Comma, func)
+    }
 
-    fn ident(&mut self) -> Option<Spanned<&'src str>> {
+    // --- Inne-specific methods ---
+
+    fn ident(&mut self) -> Option<Spanned<'src, &'src str>> {
         let (token, span) = self.take_if(|t| matches!(t, Token::Ident(_)))?;
         match token {
             Token::Ident(name) => Some((name, span)),
@@ -163,7 +186,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         }
     }
 
-    fn r#type(&mut self) -> Option<Spanned<Type<'src>>> {
+    fn r#type(&mut self) -> Option<SpannedType<'src>> {
         self.atomic_spanned(|s| {
             let name = s.ident()?;
             let generics = s
@@ -204,6 +227,17 @@ impl<'parent, 'src> Parser<'parent, 'src> {
 
     fn block(&mut self) -> Option<Vec<Stmt<'src>>> {
         self.atomic(|s| s.delimited_by(BRACES, |s| s.repeated(Parser::stmt)))
+    }
+
+    fn import(&mut self) -> Option<Stmt<'src>> {
+        self.take_if_eq(Token::Import)?;
+        let path = self.must("import path", |s| {
+            s.spanned(|s| {
+                let path = s.separated_by(Token::ColonColon, |s| s.ident());
+                (!path.is_empty()).then_some(path)
+            })
+        })?;
+        Some(Stmt::Import(Import { path }))
     }
 
     fn func(&mut self) -> Option<Stmt<'src>> {
@@ -251,7 +285,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         Some(Stmt::VarDecl(VarDecl { name, value }))
     }
 
-    fn if_stmt_head(&mut self) -> Option<(Spanned<Expr<'src>>, Block<'src>)> {
+    fn if_stmt_head(&mut self) -> Option<(SpannedExpr<'src>, Block<'src>)> {
         self.take_if_eq(Token::If)?;
         let cond = self.must("condition", |s| s.expr())?;
         let then = self.must("block", |s| s.block())?;
@@ -335,7 +369,8 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     }
 
     fn stmt(&mut self) -> Option<Stmt<'src>> {
-        self.func()
+        self.import()
+            .or_else(|| self.func())
             .or_else(|| self.r#struct())
             .or_else(|| self.r#enum())
             .or_else(|| self.var_decl())
@@ -365,7 +400,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
             })
     }
 
-    fn call(&mut self) -> Option<Spanned<Expr<'src>>> {
+    fn call(&mut self) -> Option<SpannedExpr<'src>> {
         self.atomic_spanned(|s| {
             let name = s.ident()?;
             let args = s.delimited_by(PARENS, |s| s.separated_by_comma(Parser::expr))?;
@@ -374,7 +409,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     }
 
     // TODO: make specifying more than one type instead of [<type>] report a nice error message
-    fn list(&mut self) -> Option<Spanned<Expr<'src>>> {
+    fn list(&mut self) -> Option<SpannedExpr<'src>> {
         self.atomic_spanned(|s| {
             s.delimited_by(BRACKETS, |s| {
                 let elements = s.separated_by_comma(Parser::expr);
@@ -390,7 +425,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     }
 
     // TODO: make specifying only one type instead of {<key, value>} report a nice error message
-    fn map_(&mut self) -> Option<Spanned<Expr<'src>>> {
+    fn map_(&mut self) -> Option<SpannedExpr<'src>> {
         self.atomic_spanned(|s| {
             s.delimited_by(BRACES, |s| {
                 let pairs = s.separated_by_comma(|s| {
@@ -420,7 +455,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         })
     }
 
-    fn struct_literal(&mut self) -> Option<Spanned<Expr<'src>>> {
+    fn struct_literal(&mut self) -> Option<SpannedExpr<'src>> {
         self.atomic_spanned(|s| {
             let name = s.ident()?;
             s.take_if(|t| t == Token::Colon || t == Token::ColonColon)?;
@@ -436,7 +471,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         })
     }
 
-    fn variant_literal(&mut self) -> Option<Spanned<Expr<'src>>> {
+    fn variant_literal(&mut self) -> Option<SpannedExpr<'src>> {
         self.atomic_spanned(|s| {
             let enum_name = s.ident()?;
             s.take_if_eq(Token::ColonColon)?;
@@ -450,7 +485,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         })
     }
 
-    fn atom(&mut self) -> Option<Spanned<Expr<'src>>> {
+    fn atom(&mut self) -> Option<SpannedExpr<'src>> {
         self.call()
             .or_else(|| self.list())
             .or_else(|| self.map_())
@@ -471,7 +506,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
             })
     }
 
-    fn index_or_member_or_atom(&mut self) -> Option<Spanned<Expr<'src>>> {
+    fn index_or_member_or_atom(&mut self) -> Option<SpannedExpr<'src>> {
         let mut left = self.atom()?;
         loop {
             if let Some((index, _)) =
@@ -505,7 +540,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         Some(left)
     }
 
-    fn unary(&mut self) -> Option<Spanned<Expr<'src>>> {
+    fn unary(&mut self) -> Option<SpannedExpr<'src>> {
         self.atomic_spanned(|s| {
             let op = s.take_if_map(|t| match t {
                 Token::Op("-") => Some(UnaryOp::Neg),
@@ -517,14 +552,14 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         })
     }
 
-    fn unary_or_index_or_member_or_atom(&mut self) -> Option<Spanned<Expr<'src>>> {
+    fn unary_or_index_or_member_or_atom(&mut self) -> Option<SpannedExpr<'src>> {
         self.unary().or_else(|| self.index_or_member_or_atom())
     }
 
-    fn binary_or_unary_or_index_or_member_or_atom(&mut self) -> Option<Spanned<Expr<'src>>> {
+    fn binary_or_unary_or_index_or_member_or_atom(&mut self) -> Option<SpannedExpr<'src>> {
         macro_rules! parser {
             ($name:ident, match { $($lit:literal => $op:ident),*$(,)? }, $prev:expr$(,)?) => {
-                fn $name<'src>(s: &mut Parser<'_, 'src>) -> Option<Spanned<Expr<'src>>> {
+                fn $name<'src>(s: &mut Parser<'_, 'src>) -> Option<SpannedExpr<'src>> {
                     s.parse_binary(
                         |op| match op {
                             $($lit => Some(BinaryOp::$op),)*
@@ -548,15 +583,12 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         or(self)
     }
 
-    fn expr(&mut self) -> Option<Spanned<Expr<'src>>> {
+    fn expr(&mut self) -> Option<SpannedExpr<'src>> {
         self.binary_or_unary_or_index_or_member_or_atom()
     }
 }
 
-pub fn parse<'src>(
-    source: &[Spanned<Token<'src>>],
-    filename: &'src str,
-) -> (Ast<'src>, Vec<ParseError>) {
+pub fn parse<'src>(source: &[SpannedToken<'src>]) -> (Ast<'src>, Vec<ParseError<'src>>) {
     let source = source
         .iter()
         .copied()
@@ -566,9 +598,9 @@ pub fn parse<'src>(
     let mut parser = Parser {
         src: &source,
         errors: &mut errors,
-        start: 0,
         end: 0,
     };
+    // This check allows us to assume that source[0] is valid.
     let stmts = parser.repeated(Parser::stmt);
     let end = parser.end;
     if end < source.len() {
@@ -577,6 +609,6 @@ pub fn parse<'src>(
             source[end].1,
         ));
     }
-    let ast = Ast { filename, stmts };
+    let ast = Ast { stmts };
     (ast, errors)
 }

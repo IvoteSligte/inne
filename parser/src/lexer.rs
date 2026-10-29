@@ -1,6 +1,7 @@
 use crate::{Span, Spanned};
 
-pub type LexError = (&'static str, Span);
+pub type LexError<'a> = (&'static str, Span<'a>);
+pub type SpannedToken<'src> = Spanned<'src, Token<'src>>;
 
 use Token::*;
 
@@ -194,15 +195,62 @@ impl<'lexer, 'src> Cursor<'lexer, 'src> {
         took_any
     }
 
-    pub fn push_error(&mut self, error: LexError) {
-        self.lexer.errors.push(error);
+    pub fn push_error(&mut self, message: &'static str, start: usize, end: usize) {
+        let span = self.lexer.create_span(start, end);
+        self.lexer.errors.push((message, span));
     }
 
-    pub fn commit(self) -> (&'src str, Span) {
+    pub fn commit(self) -> (&'src str, Span<'src>) {
         self.lexer.start = self.end;
         let text = &self.lexer.src[self.start..self.end];
-        let span = (self.start..self.end).into();
+        let span = Span {
+            start: self.start,
+            end: self.end,
+            filename: self.lexer.filename,
+        };
         (text, span)
+    }
+
+    /// Returns the length of the discovered character escape (if any),
+    /// and reports an error if encountered.
+    fn take_escape<'a>(&mut self) -> bool {
+        let bytes = self.remaining().as_bytes();
+        if bytes.is_empty() || bytes[0] != b'\\' {
+            return false;
+        }
+        let Some(escaped) = bytes.get(1) else {
+            self.skip(1);
+            return true;
+        };
+        match escaped {
+            b'\\' | b'/' | b'"' | b'b' | b'f' | b'n' | b'r' | b't' => {
+                self.skip(2);
+                true
+            }
+            b'u' => {
+                let mut num_hex_digits = 0;
+                for &b in &bytes[2..6] {
+                    if !b.is_ascii_hexdigit() {
+                        break;
+                    }
+                    num_hex_digits += 1;
+                }
+                if num_hex_digits < 4 {
+                    self.push_error(
+                        "Invalid unicode character; unicode characters require 4 hex digits",
+                        self.end,
+                        self.end + 2 + num_hex_digits,
+                    );
+                }
+                self.skip(2 + num_hex_digits);
+                true
+            }
+            _ => {
+                self.push_error("Invalid character escape", self.end, self.end + 2);
+                self.skip(2);
+                true
+            }
+        }
     }
 }
 
@@ -215,47 +263,12 @@ macro_rules! rule {
     }}
 }
 
-/// Returns the length of the discovered character escape (if any),
-/// as well as an error if relevant.
-fn check_escape(str: &str) -> (usize, Option<LexError>) {
-    let bytes = str.as_bytes();
-    if bytes.is_empty() || bytes[0] != b'\\' {
-        return (0, None);
-    }
-    let Some(escaped) = bytes.get(1) else {
-        return (1, None);
-    };
-    match escaped {
-        b'\\' | b'/' | b'"' | b'b' | b'f' | b'n' | b'r' | b't' => (2, None),
-        b'u' => {
-            let mut num_hex_digits = 0;
-            for &b in &bytes[2..6] {
-                if !b.is_ascii_hexdigit() {
-                    break;
-                }
-                num_hex_digits += 1;
-            }
-            if num_hex_digits < 4 {
-                let error = (
-                    "Invalid unicode character; unicode characters require 4 hex digits",
-                    (0..2 + num_hex_digits).into(),
-                );
-                return (2 + num_hex_digits, Some(error));
-            }
-            (6, None)
-        }
-        _ => {
-            let error = ("Invalid character escape", (0..2).into());
-            (2, Some(error))
-        }
-    }
-}
-
 struct Lexer<'src> {
     src: &'src str,
     start: usize,
-    tokens: Vec<Spanned<Token<'src>>>,
-    errors: Vec<LexError>,
+    tokens: Vec<SpannedToken<'src>>,
+    filename: &'src str,
+    errors: Vec<LexError<'src>>,
 }
 
 impl<'src> Lexer<'src> {
@@ -277,6 +290,14 @@ impl<'src> Lexer<'src> {
             let (_, span) = cursor.commit();
             self.tokens.push((token, span));
         })
+    }
+
+    fn create_span(&self, start: usize, end: usize) -> Span<'src> {
+        Span {
+            start,
+            end,
+            filename: self.filename,
+        }
     }
 
     // --- Inne-specific lexing functions ---
@@ -366,22 +387,19 @@ impl<'src> Lexer<'src> {
         if !cursor.take_if(|c| c == '\'') {
             return false;
         }
-        let (len, maybe_error) = check_escape(cursor.remaining());
-        if let Some(error) = maybe_error {
-            cursor.push_error(error);
-        }
-        if len != 0 {
-            cursor.skip(len);
+        if cursor.take_escape() {
+            // OK
         } else if cursor.take().is_none() {
             return false;
         }
         // An unfinished character is still treated as a character because its content is recoverable.
         let ends_with_apostrophe = cursor.take_if(|c| c == '\'');
         if !ends_with_apostrophe {
-            cursor.push_error((
+            cursor.push_error(
                 "found an unfinished character, add an apostrophe (') to complete it",
-                (cursor.start..cursor.end).into(),
-            ));
+                cursor.start,
+                cursor.end,
+            );
         }
         let (mut text, span) = cursor.commit();
         // Remove the opening and closing apostrophes from the character's content.
@@ -400,19 +418,16 @@ impl<'src> Lexer<'src> {
             return false;
         }
         let ends_with_quote = loop {
-            let (len, maybe_error) = check_escape(cursor.remaining());
-            if let Some(error) = maybe_error {
-                cursor.push_error(error);
-            }
-            if len != 0 {
-                cursor.skip(len);
+            if cursor.take_escape() {
+                // OK
             } else if cursor.take_if(|c| c == '"') {
                 break true;
             } else if cursor.take().is_none() {
-                cursor.push_error((
+                cursor.push_error(
                     "found an unfinished string, add a quote '\"' to complete it",
-                    (cursor.start..cursor.end).into(),
-                ));
+                    cursor.start,
+                    cursor.end,
+                );
                 break false;
             }
         };
@@ -468,7 +483,7 @@ impl<'src> Lexer<'src> {
         if start_invalid < end_invalid {
             self.errors.push((
                 "found invalid character(s)",
-                (start_invalid..end_invalid).into(),
+                Span::new(start_invalid, end_invalid, self.filename),
             ));
         }
         success
@@ -476,11 +491,15 @@ impl<'src> Lexer<'src> {
 }
 
 /// Note that this will still produce a list of tokens even when errors have been encountered.
-pub fn lex<'src>(src: &'src str) -> (Vec<Spanned<Token<'src>>>, Vec<LexError>) {
+pub fn lex<'src>(
+    src: &'src str,
+    filename: &'src str,
+) -> (Vec<SpannedToken<'src>>, Vec<LexError<'src>>) {
     let mut lexer = Lexer {
         src,
         start: 0,
         tokens: Vec::new(),
+        filename,
         errors: Vec::new(),
     };
     while lexer.inne_token() {}

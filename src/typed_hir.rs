@@ -2,27 +2,26 @@ use std::{collections::HashMap, ops::Deref};
 
 pub use crate::hir::{
     Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, EmptyList, EmptyMap, Expr, For, Func,
-    FuncId, GenericId, Hir, If, Index, List, Loop, Map, Member, Name, Pair, Param, Range, Stmt,
-    Struct, StructLiteral, Type, TypeDef, TypeId, Unary, UnaryOp, VarDecl, VarId, VariantLiteral,
-    While,
+    FuncId, GenericId, Hir, If, Index, List, Loop, Map, Member, Name, Pair, Param, Range,
+    SpannedExpr, Stmt, Struct, StructLiteral, Type, TypeDef, TypeId, Unary, UnaryOp, VarDecl,
+    VarId, VariantLiteral, While,
 };
 
 use crate::{Error, Errors, Span, Spanned, hir, util::write_comma_separated};
 
 /// Type-checked high-level intermediate representation.
 /// Contains type annotations for all function and variable definitions.
-pub struct TypedHir<'a> {
-    pub filename: &'a str,
+pub struct TypedHir<'src> {
     /// Essentially `HashMap<VarId, VarInfo>`, but all [DefId]`s are consecutive.
-    pub vars: Vec<VarInfo>,
-    pub funcs: Vec<Func<'a>>,
-    pub types: Vec<TypeDef<'a>>,
-    pub stmts: Vec<Stmt<'a>>,
+    pub vars: Vec<VarInfo<'src>>,
+    pub funcs: Vec<Func<'src>>,
+    pub types: Vec<TypeDef<'src>>,
+    pub stmts: Vec<Stmt<'src>>,
 }
 
 #[derive(Debug)]
-pub struct VarInfo {
-    pub span: Span,
+pub struct VarInfo<'src> {
+    pub span: Span<'src>,
     pub r#type: Type,
 }
 
@@ -30,13 +29,20 @@ struct FuncSignature<'hir, 'src> {
     name: Name<'src>,
     generics: &'hir [Name<'src>],
     params: &'hir [Param<'src>],
-    return_type: &'hir Spanned<Type>,
+    return_type: &'hir Spanned<'src, Type>,
 }
 
-const NOTHING_RETURN_TYPE: Spanned<Type> = (Type::Nothing, Span { start: 0, end: 0 });
+const NOTHING_RETURN_TYPE: Spanned<Type> = (
+    Type::Nothing,
+    Span {
+        start: 0,
+        end: 0,
+        filename: "<constant>",
+    },
+);
 
 // TODO: return (Option<TypedHir<'a>>, Vec<Error>) instead because the TypedHir may be recoverable on error
-pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error>> {
+pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error<'a>>> {
     let vars = hir
         .vars
         .into_iter()
@@ -89,7 +95,6 @@ pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Erro
     }
     debug_assert!(vars.iter().all(|var| { var.r#type != Type::UNKNOWN }));
     Ok(TypedHir {
-        filename: hir.filename,
         vars,
         stmts: hir.stmts,
         funcs: hir.funcs,
@@ -98,8 +103,8 @@ pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Erro
 }
 
 struct TypeChecker<'src, 'hir> {
-    errors: Errors,
-    vars: Vec<VarInfo>,
+    errors: Errors<'src>,
+    vars: Vec<VarInfo<'src>>,
     func_signatures: &'hir [FuncSignature<'hir, 'src>],
     current_func_signature: Option<&'hir FuncSignature<'hir, 'src>>,
     types: &'hir [TypeDef<'src>],
@@ -324,7 +329,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
 
     /// Returns the expression's type and whether it can be assigned to.
     /// Expressions can only be assigned to if they are variables or non-empty lists/maps.
-    fn check_expr(&mut self, (expr, span): &mut Spanned<Expr<'src>>) -> (Type, bool) {
+    fn check_expr(&mut self, (expr, span): &mut SpannedExpr<'src>) -> (Type, bool) {
         (
             match expr {
                 Expr::Binary(binary) => self.check_binary((binary, *span)),
@@ -449,7 +454,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         )
     }
 
-    fn check_binary(&mut self, (binary, span): Spanned<&mut Binary<'src>>) -> Type {
+    fn check_binary(&mut self, (binary, span): Spanned<'src, &mut Binary<'src>>) -> Type {
         let (left_type, _) = self.check_expr(&mut binary.left);
         let (right_type, _) = self.check_expr(&mut binary.right);
         let or_type = left_type.or(&right_type); // Known if either one is known
@@ -506,7 +511,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         }
     }
 
-    fn check_unary(&mut self, (unary, span): Spanned<&mut Unary<'src>>) -> Type {
+    fn check_unary(&mut self, (unary, span): Spanned<'src, &mut Unary<'src>>) -> Type {
         let (expr_type, _) = self.check_expr(&mut unary.expr);
         match unary.op.0 {
             UnaryOp::Neg => {
@@ -535,7 +540,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         expr_type
     }
 
-    fn check_call(&mut self, (call, span): Spanned<&mut Call<'src>>) -> Type {
+    fn check_call(&mut self, (call, span): Spanned<'src, &mut Call<'src>>) -> Type {
         if call.func_id == FuncId::PRINT {
             // print(...) accepts any number of arguments of any type.
             return Type::Nothing;
@@ -550,7 +555,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         if params.len() > args.len() {
             let closing_paren_span = Span {
                 start: span.end - 1,
-                end: span.end,
+                ..span
             };
             let extra_needed = params.len() - args.len();
             let message = format!(
@@ -565,7 +570,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             let (_, last_arg_span) = args.last().unwrap();
             let after_params_span = Span {
                 start: first_arg_after_params_span.start,
-                end: last_arg_span.end,
+                ..*last_arg_span
             };
             let message = format!(
                 "This function only takes {} argument{}. {} argument{} passed.",
@@ -645,7 +650,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         return_type.0.clone()
     }
 
-    fn check_list(&mut self, (list, span): Spanned<&mut List<'src>>) -> Type {
+    fn check_list(&mut self, (list, span): Spanned<'src, &mut List<'src>>) -> Type {
         if list.elements.is_empty() {
             self.errors.add(
                 "An empty list must have an element type specified. Example: [<int>]",
@@ -672,7 +677,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         Type::List(Box::new(first_element_type))
     }
 
-    fn check_map(&mut self, (map, span): Spanned<&mut Map<'src>>) -> Type {
+    fn check_map(&mut self, (map, span): Spanned<'src, &mut Map<'src>>) -> Type {
         if map.pairs.is_empty() {
             self.errors.add(
                 "An empty map must have a key and value type specified. Example: {<string, int>}",
@@ -719,7 +724,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         }
     }
 
-    fn check_index(&mut self, (index, span): Spanned<&mut Index<'src>>) -> Type {
+    fn check_index(&mut self, (index, span): Spanned<'src, &mut Index<'src>>) -> Type {
         let (expr_type, _) = self.check_expr(&mut index.expr);
         let (index_type, _) = self.check_expr(&mut index.index);
         match &index.expr.0 {
@@ -840,7 +845,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         }
     }
 
-    fn check_type(&mut self, (r#type, span): &Spanned<Type>) {
+    fn check_type(&mut self, (r#type, span): &Spanned<'src, Type>) {
         let Type::Named { id, generics } = r#type else {
             return;
         };
@@ -879,12 +884,12 @@ fn types_not_equal(left: &Type, right: &Type) -> bool {
     left.is_known() && right.is_known() && left != right
 }
 
-fn extract_generic_constraints(
+fn extract_generic_constraints<'src>(
     left: &Type,
-    left_span: Span,
+    left_span: Span<'src>,
     right: &Type,
-    right_span: Span,
-    constraints: &mut HashMap<GenericId, Vec<(Type, Span)>>,
+    right_span: Span<'src>,
+    constraints: &mut HashMap<GenericId, Vec<(Type, Span<'src>)>>,
 ) {
     match (left, right) {
         (Type::Generic(generic_id), _) if *right != Type::UNKNOWN => {

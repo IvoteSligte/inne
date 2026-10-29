@@ -10,7 +10,7 @@ use super::tt;
 
 pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
     let start_instant = Instant::now();
-    let (Some(tokens), _) = inne::lex(&file.source) else {
+    let (Some(tokens), _) = inne::lex(&file.source, &file.name) else {
         eprintln!("Semantic tokens: Failed to lex file '{}'.", file.name);
         return None;
     };
@@ -30,7 +30,7 @@ pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
         Some((span.start, (*span, token_type)))
     }));
     // Second pass overrides identifiers with their specialised types (if applicable)
-    if let (Some(parse_tree), _) = inne::parse(&tokens, &file.source, &file.name) {
+    if let (Some(parse_tree), _) = inne::parse(&tokens, &file.source) {
         let mut r#override = Override(&mut semantic_tokens);
         for stmt in &parse_tree.stmts {
             r#override.stmt(stmt);
@@ -49,15 +49,15 @@ pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
     Some(data)
 }
 
-struct Override<'a>(&'a mut BTreeMap<usize, (Span, u32)>);
+struct Override<'a, 'src>(&'a mut BTreeMap<usize, (Span<'src>, u32)>);
 
-impl Override<'_> {
-    fn set(&mut self, token_type: u32, span: Span) {
+impl<'src> Override<'_, 'src> {
+    fn set(&mut self, token_type: u32, span: Span<'src>) {
         debug_assert!(self.0.contains_key(&span.start));
         self.0.insert(span.start, (span, token_type));
     }
 
-    fn stmt(&mut self, stmt: &parser::Stmt) {
+    fn stmt(&mut self, stmt: &parser::Stmt<'src>) {
         match stmt {
             Stmt::Func(Func {
                 name,
@@ -155,10 +155,15 @@ impl Override<'_> {
             Stmt::Return((None, _)) => {}
             Stmt::Break(_) => {}
             Stmt::Continue(_) => {}
+            Stmt::Import(Import { path }) => {
+                for (_, span) in &path.0 {
+                    self.set(tt::NAMESPACE, *span);
+                }
+            }
         }
     }
 
-    fn expr(&mut self, (expr, span): &Spanned<Expr>) {
+    fn expr(&mut self, (expr, span): &SpannedExpr<'src>) {
         match expr {
             Expr::Binary(Binary { left, op: _, right }) => {
                 self.expr(left);
@@ -180,10 +185,12 @@ impl Override<'_> {
                 self.expr(start);
                 self.expr(end);
             }
-            Expr::EmptyList(_) => self.r#type((span.start + 1..span.end + 1).into()),
+            Expr::EmptyList(_) => {
+                self.r#type(Span::new(span.start + 1, span.end - 1, span.filename))
+            }
             Expr::List(List { elements }) => elements.iter().for_each(|item| self.expr(&item)),
             Expr::EmptyMap(_) => {
-                self.r#type((span.start + 1..span.end + 1).into());
+                self.r#type(Span::new(span.start + 1, span.end - 1, span.filename));
             }
             Expr::Map(Map { pairs }) => pairs.iter().for_each(|Pair { key, value }| {
                 self.expr(key);
@@ -236,7 +243,7 @@ impl Override<'_> {
 
 fn to_semantic_tokens<'src>(
     source: &'src str,
-    tokens: impl IntoIterator<Item = (Span, u32)>,
+    tokens: impl IntoIterator<Item = (Span<'src>, u32)>,
 ) -> impl Iterator<Item = SemanticToken> {
     let mut start_byte = 0usize;
     tokens.into_iter().map(move |(span, token_type)| {

@@ -14,8 +14,11 @@ pub use parser::{self, Ast, LexError, ParseError, Span, Spanned, Token, ast};
 pub use typed_hir::{TypedHir, typed_hir_from_hir};
 pub use value::Value;
 
-pub fn lex(source: &str) -> (Option<Vec<(Token<'_>, Span)>>, Vec<Error>) {
-    let (tokens, errors) = parser::lex(source);
+pub fn lex<'src>(
+    source: &'src str,
+    filename: &'src str,
+) -> (Option<Vec<(Token<'src>, Span<'src>)>>, Vec<Error<'src>>) {
+    let (tokens, errors) = parser::lex(source, filename);
     let errors = errors
         .into_iter()
         .map(Error::from_lex_error)
@@ -24,11 +27,10 @@ pub fn lex(source: &str) -> (Option<Vec<(Token<'_>, Span)>>, Vec<Error>) {
 }
 
 pub fn parse<'src>(
-    tokens: &[(Token<'src>, Span)],
+    tokens: &[(Token<'src>, Span<'src>)],
     _source: &'src str,
-    filename: &'src str,
-) -> (Option<Ast<'src>>, Vec<Error>) {
-    let (ast, errors) = parser::parse(tokens, filename);
+) -> (Option<Ast<'src>>, Vec<Error<'src>>) {
+    let (ast, errors) = parser::parse(tokens);
     let errors = errors
         .into_iter()
         .map(Error::from_parse_error)

@@ -1,7 +1,7 @@
 use std::fmt::{Result, Write};
 
 use indentify::*;
-use inne::{Spanned, Token, ast::*, lex, parse};
+use inne::{Spanned, Token, ast::*, lex, parse, parser::SpannedToken};
 
 // TODO: round-trip tests
 // TODO: keep comments written on the same line as a statement on the same line after formatting
@@ -11,7 +11,7 @@ use inne::{Spanned, Token, ast::*, lex, parse};
 //       then they should have a line in between them in the formatted code.
 
 struct Writer<'src> {
-    tokens: &'src [Spanned<Token<'src>>],
+    tokens: &'src [SpannedToken<'src>],
     output: IndentWriter<'static, String>,
 }
 
@@ -118,7 +118,7 @@ impl<T: Format> Format for &T {
     }
 }
 
-impl<T: Format> Format for Spanned<T> {
+impl<T: Format> Format for Spanned<'_, T> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         self.0.fmt(f)
     }
@@ -131,10 +131,10 @@ impl Format for Name<'_> {
 }
 
 macro_rules! delegate {
-    ($self:ident, $f:ident, $($variant:ident),*; $($variant2:ident($value:ident) => $expr:expr),* $(,)?) => {
+    ($self:ident, $f:ident, $($variant:ident),*; $($variant2:pat => $expr:expr),* $(,)?) => {
         match $self {
             $($variant(item) => item.fmt($f),)*
-            $($variant2($value) => $expr,)*
+            $($variant2 => $expr,)*
         }
     }
 }
@@ -180,6 +180,7 @@ impl Format for Stmt<'_> {
                 match &value.0 {
                     Some((value, _)) => {
                         f.put_keyword(Token::Return)?;
+                        f.put_space()?;
                         value.fmt(f)?;
                         f.put_semi()
                     }
@@ -188,6 +189,18 @@ impl Format for Stmt<'_> {
                         f.put_semi()
                     }
                 }
+            },
+            Import(import) => {
+                f.put(Token::Import)?;
+                f.put_space()?;
+                for (i, segment) in import.path.0.iter().enumerate() {
+                    if i > 0 {
+                        f.put_comma()?;
+                        f.put_space()?;
+                    }
+                    segment.fmt(f)?;
+                }
+                f.put_semi()
             }
         )
     }
@@ -652,14 +665,14 @@ impl Format for Loop<'_> {
 
 /// Returns `None` on parsing failure and `Some(Err(_))` on write failure.
 pub fn format(source: &str, mut dest: impl Write) -> Option<Result> {
-    let (maybe_tokens, errors) = lex(source);
+    let (maybe_tokens, errors) = lex(source, "file.inne");
     if !errors.is_empty() {
         return None;
     }
     let Some(tokens) = maybe_tokens else {
         return None;
     };
-    let (maybe_ast, errors) = parse(&tokens, source, "file.inne");
+    let (maybe_ast, errors) = parse(&tokens, source);
     if !errors.is_empty() {
         return None;
     }

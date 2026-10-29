@@ -36,6 +36,7 @@ mod tt {
     pub const ENUM: u32 = 11;
     pub const PROPERTY: u32 = 12;
     pub const ENUM_MEMBER: u32 = 13;
+    pub const NAMESPACE: u32 = 14;
 }
 
 pub fn position_at_end(source: &str, line: &mut u32, character: &mut u32) -> Position {
@@ -109,16 +110,16 @@ impl File {
         })
     }
 
-    pub fn analyze(&self) -> Vec<Error> {
+    pub fn analyze(&self) -> Vec<Error<'_>> {
         let mut all_errors = Vec::new();
         eprintln!("Lexing file '{}'", self.name);
-        let (maybe_tokens, errors) = inne::lex(&self.source);
+        let (maybe_tokens, errors) = inne::lex(&self.source, &self.name);
         all_errors.extend(errors);
         let Some(tokens) = maybe_tokens else {
             return all_errors;
         };
         eprintln!("Parsing file '{}'", self.name);
-        let (maybe_ast, errors) = inne::parse(&tokens, &self.source, &self.name);
+        let (maybe_ast, errors) = inne::parse(&tokens, &self.source);
         all_errors.extend(errors);
         let Some(ast) = maybe_ast else {
             return all_errors;
@@ -182,6 +183,7 @@ impl LanguageServer for Backend {
                                     SemanticTokenType::ENUM,
                                     SemanticTokenType::PROPERTY,
                                     SemanticTokenType::ENUM_MEMBER,
+                                    SemanticTokenType::NAMESPACE,
                                 ],
                                 token_modifiers: Vec::new(),
                             },

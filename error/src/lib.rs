@@ -4,14 +4,14 @@ use ariadne::{Color, FnCache, Label, Report, ReportKind, Source};
 
 pub use parser::Span;
 
-pub struct Error {
+pub struct Error<'a> {
     pub message: String,
-    pub span: Span,
-    pub contexts: Vec<(String, Span)>,
+    pub span: Span<'a>,
+    pub contexts: Vec<(String, Span<'a>)>,
 }
 
-impl Error {
-    pub fn from_lex_error((message, span): LexError) -> Self {
+impl<'a> Error<'a> {
+    pub fn from_lex_error((message, span): LexError<'a>) -> Self {
         Self {
             message: format!("{message}"),
             span,
@@ -19,7 +19,7 @@ impl Error {
         }
     }
 
-    pub fn from_parse_error((message, span): ParseError) -> Self {
+    pub fn from_parse_error((message, span): ParseError<'a>) -> Self {
         Self {
             message,
             span,
@@ -27,7 +27,8 @@ impl Error {
         }
     }
 
-    pub fn eprint(&self, source: &str, filename: &str, stage: &str) {
+    pub fn eprint(&self, source: &str, stage: &str) {
+        let filename = self.span.filename;
         // ariadne::sources has lifetime issues that are resolved by inlining it.
         let sources = {
             let iter = [(filename, source)];
@@ -58,11 +59,11 @@ impl Error {
 }
 
 /// Helper type for managing error messages.
-pub struct Errors {
-    inner: Vec<Error>,
+pub struct Errors<'a> {
+    inner: Vec<Error<'a>>,
 }
 
-impl Errors {
+impl<'a> Errors<'a> {
     pub fn new() -> Self {
         Self { inner: Vec::new() }
     }
@@ -71,15 +72,15 @@ impl Errors {
         self.inner.is_empty()
     }
 
-    pub fn add(&mut self, message: impl ToString, span: Span) {
+    pub fn add(&mut self, message: impl ToString, span: Span<'a>) {
         self.add_with_contexts(message, span, Vec::new());
     }
 
     pub fn add_with_contexts(
         &mut self,
         message: impl ToString,
-        span: Span,
-        contexts: Vec<(String, Span)>,
+        span: Span<'a>,
+        contexts: Vec<(String, Span<'a>)>,
     ) {
         self.inner.push(Error {
             message: message.to_string(),
@@ -91,9 +92,9 @@ impl Errors {
     pub fn add_with_context(
         &mut self,
         message: impl ToString,
-        span: Span,
+        span: Span<'a>,
         context_message: impl ToString,
-        context_span: Span,
+        context_span: Span<'a>,
     ) {
         self.add_with_contexts(
             message,
@@ -102,7 +103,7 @@ impl Errors {
         );
     }
 
-    pub fn into_inner(self) -> Vec<Error> {
+    pub fn into_inner(self) -> Vec<Error<'a>> {
         self.inner
     }
 }

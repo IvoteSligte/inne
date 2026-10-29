@@ -64,8 +64,8 @@ fn main() {
         );
     }
     let filename = format!("{}", args.file.display());
-    let (maybe_tokens, errors) = lex(&source);
-    eprint_errors(&errors, &source, &filename, "lexing");
+    let (maybe_tokens, errors) = lex(&source, &filename);
+    eprint_errors(&errors, &source, "lexing");
     let Some(tokens) = maybe_tokens else {
         return;
     };
@@ -76,8 +76,8 @@ fn main() {
         }
         return;
     }
-    let (maybe_ast, errors) = parse(&tokens, &source, &filename);
-    eprint_errors(&errors, &source, &filename, "parsing");
+    let (maybe_ast, errors) = parse(&tokens, &source);
+    eprint_errors(&errors, &source, "parsing");
     let Some(ast) = maybe_ast else {
         return;
     };
@@ -87,7 +87,7 @@ fn main() {
     let hir = match hir_from_ast(&ast) {
         Ok(hir) => hir,
         Err(errors) => {
-            eprint_errors(&errors, &source, &filename, "symbol resolution");
+            eprint_errors(&errors, &source, "symbol resolution");
             return;
         }
     };
@@ -98,7 +98,7 @@ fn main() {
     let typed_hir = match typed_hir_from_hir(hir) {
         Ok(typed_hir) => typed_hir,
         Err(errors) => {
-            eprint_errors(&errors, &source, &filename, "type checking");
+            eprint_errors(&errors, &source, "type checking");
             return;
         }
     };
@@ -108,7 +108,7 @@ fn main() {
     let mir = match mir_from_typed_hir(&typed_hir) {
         Ok(mir) => mir,
         Err(errors) => {
-            eprint_errors(&errors, &source, &filename, "control-flow analysis");
+            eprint_errors(&errors, &source, "control-flow analysis");
             return;
         }
     };
@@ -119,8 +119,8 @@ fn main() {
     Interpreter::run(&mir);
 }
 
-pub fn eprint_errors(errors: &[Error], source: &str, filename: &str, stage: &str) {
+pub fn eprint_errors(errors: &[Error], source: &str, stage: &str) {
     for error in errors {
-        error.eprint(source, filename, stage);
+        error.eprint(source, stage);
     }
 }
