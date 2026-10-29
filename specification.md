@@ -90,11 +90,11 @@ struct Name {
 
 The trailing comma is optional for the last field.
 
-Structs are instantiated using `Name { ... }` syntax.
+Structs are instantiated using `Name::{ ... }` syntax.
 
 Example:
 ```
-Name:{
+Name::{
     name0: value0,
     name1: value1,
 }
@@ -102,29 +102,21 @@ Name:{
 
 ### Enums
 
-Rust C-style enums (i.e. tagged unions).
+Enums have variants, which may contain a payload.
 
 Example:
 ```
 enum Name {
     Unit,
-    Struct {
-        name0: type0,
-        name1: type1,
-    }
+    Struct(int)
 }
 ```
 
-Enums are instantiated using `Name::Variant` syntax.
+Enums are instantiated using `Name::Variant` or `Name::Variant(payload)` syntax.
 
 Example: `Name::Unit`
 
-Example: 
-```
-Name::Struct {
-    
-}
-```
+Example: `Name::Struct(5 + 6)`
 
 ## Functions
 
@@ -136,11 +128,17 @@ The syntax follows Rust's, but uses the `func` keyword instead of `fn`.
 
 Explicit returns (with the `return` keyword) are mandatory.
 
+A `return` without value is allowed in the global scope.
+
 ### Built-in Functions
 
 #### Print
 
-`print(...)` takes any number of arguments of any (mix of) types and prints them with a space in between and followed by a newline.
+`print(...)` takes any number of arguments of any (mix of) types and writes them to stdout them with a space in between and followed by a newline.
+
+#### Panic
+
+`panic(message)` exits the program with exit code 1 and writes the provided message to stderr.
 
 ## Operators
 
@@ -193,6 +191,10 @@ Using a range as iterator yields integers, using a list yields its elements, and
 ### Infinite loops
 
 `loop { ... }` as in Rust.
+
+### Loop Control-Flow
+
+Loops can be exited with `break` and the rest of an iteration can be skipped with `continue`.
 
 ## Imports
 
