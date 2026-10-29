@@ -622,7 +622,6 @@ impl<'a> FuncBuilder<'a> {
     /// Moves the cursor to `move_to_block_id` after pushing a jump to `target_block_id`.
     /// Does not push the jump (but still moves the cursor) if the current block is finished.
     pub fn push_jump(&mut self, target_block_id: BlockId, move_to_block_id: BlockId) {
-        debug_assert_ne!(self.current_block.0, target_block_id);
         debug_assert_ne!(self.current_block.0, move_to_block_id);
         let (id, stmts) = std::mem::replace(
             &mut self.current_block,

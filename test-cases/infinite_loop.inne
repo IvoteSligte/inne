@@ -1,9 +1,8 @@
-// Infinite loop with an explicit break.
-// NOTE: This test requires `break` support; the supplied specification does not
-// describe break, so keep this as a manual compatibility test.
+// Infinite loop.
+
 var i = 0;
 loop {
     print(i);
     i += 1;
-    break;
 }
+
