@@ -127,7 +127,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         debug_assert_ne!(opening, closing); // This is basically never desirable, but an easy mistake to make.
         self.take_if_eq(opening)?;
         let value = func(self);
-        let _ = self.take_if_eq(closing); // TODO: report parse-error
+        let _ = self.must("closing delimiter", |s| s.take_if_eq(closing));
         Some(value)
     }
 
@@ -169,7 +169,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         self.atomic_spanned(|s| {
             let name = s.ident()?;
             let generics = s
-                .delimited_by(ANGLES, |s| s.separated_by_comma(|s| s.r#type()))
+                .delimited_by(ANGLES, |s| s.separated_by_comma(Parser::r#type))
                 .unwrap_or_default();
             Some(Type { name, generics })
         })
@@ -177,26 +177,24 @@ impl<'parent, 'src> Parser<'parent, 'src> {
 
     fn param(&mut self) -> Option<Param<'src>> {
         let name = self.ident()?;
-        self.atomic(|s| {
-            let _ = s.take_if_eq(Token::Colon);
-            let r#type = s.r#type()?;
-            Some(Param { name, r#type })
-        })
+        let _ = self.take_if_eq(Token::Colon);
+        let r#type = self.must("parameter type", |s| s.r#type())?;
+        Some(Param { name, r#type })
     }
 
     fn field(&mut self) -> Option<Field<'src>> {
         let name = self.ident()?;
-        self.atomic(|s| {
-            let _ = s.take_if_eq(Token::Colon);
-            let r#type = s.r#type()?;
-            Some(Field { name, r#type })
-        })
+        let _ = self.take_if_eq(Token::Colon);
+        let r#type = self.must("field type", |s| s.r#type())?;
+        Some(Field { name, r#type })
     }
 
     fn variant(&mut self) -> Option<Variant<'src>> {
         let name = self.ident()?;
         self.atomic(|s| {
-            let payload = s.delimited_by(PARENS, Parser::r#type).flatten();
+            let payload = s
+                .delimited_by(PARENS, |s| s.must("payload type", |s| s.r#type()))
+                .flatten();
             Some(Variant { name, payload })
         })
     }
@@ -212,49 +210,47 @@ impl<'parent, 'src> Parser<'parent, 'src> {
 
     fn func(&mut self) -> Option<Stmt<'src>> {
         self.take_if_eq(Token::Func)?;
-        self.atomic(|s| {
-            let name = s.ident()?;
-            let generics = s.generics();
-            let params = s.delimited_by(PARENS, |s| s.separated_by_comma(Parser::param))?;
-            let _ = s.take_if_eq(Token::Arrow);
-            let return_type = s.r#type();
-            let body = s.block()?;
-            Some(Stmt::Func(Func {
-                name,
-                generics,
-                params,
-                return_type,
-                body,
-            }))
-        })
+        let name = self.must("function name", |s| s.ident())?;
+        let generics = self.generics();
+        let params = self.must("function parameters", |s| {
+            s.delimited_by(PARENS, |s| s.separated_by_comma(Parser::param))
+        })?;
+        let _ = self.take_if_eq(Token::Arrow);
+        let return_type = self.r#type();
+        let body = self.must("function body", |s| s.block())?;
+        Some(Stmt::Func(Func {
+            name,
+            generics,
+            params,
+            return_type,
+            body,
+        }))
     }
 
     fn r#struct(&mut self) -> Option<Stmt<'src>> {
         self.take_if_eq(Token::Struct)?;
-        self.atomic(|s| {
-            let name = s.ident()?;
-            let fields = s.delimited_by(BRACES, |s| s.separated_by_comma(Parser::field))?;
-            Some(Stmt::Struct(Struct { name, fields }))
-        })
+        let name = self.must("struct name", |s| s.ident())?;
+        let fields = self.must("struct fields", |s| {
+            s.delimited_by(BRACES, |s| s.separated_by_comma(Parser::field))
+        })?;
+        Some(Stmt::Struct(Struct { name, fields }))
     }
 
     fn r#enum(&mut self) -> Option<Stmt<'src>> {
         self.take_if_eq(Token::Enum)?;
-        self.atomic(|s| {
-            let name = s.ident()?;
-            let variants = s.delimited_by(BRACES, |s| s.separated_by_comma(Parser::variant))?;
-            Some(Stmt::Enum(Enum { name, variants }))
-        })
+        let name = self.must("enum name", |s| s.ident())?;
+        let variants = self.must("enum variants", |s| {
+            s.delimited_by(BRACES, |s| s.separated_by_comma(Parser::variant))
+        })?;
+        Some(Stmt::Enum(Enum { name, variants }))
     }
 
     fn var_decl(&mut self) -> Option<Stmt<'src>> {
         self.take_if_eq(Token::Var)?;
-        self.atomic(|s| {
-            let name = s.ident()?;
-            s.take_if_eq(Token::Op("="))?;
-            let value = s.expr()?;
-            Some(Stmt::VarDecl(VarDecl { name, value }))
-        })
+        let name = self.must("variable name", |s| s.ident())?;
+        self.must("=", |s| s.take_if_eq(Token::Op("=")))?;
+        let value = self.must("value", |s| s.expr())?;
+        Some(Stmt::VarDecl(VarDecl { name, value }))
     }
 
     fn if_stmt_head(&mut self) -> Option<(Spanned<Expr<'src>>, Block<'src>)> {
@@ -292,7 +288,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
             let expr = s.expr()?;
             Some(if s.take_if_eq(Token::DotDot).is_some() {
                 let start = expr;
-                let end = s.must("range end expression", |s| s.expr())?;
+                let end = s.must("range end value", |s| s.expr())?;
                 let span = start.1.union(end.1);
                 (
                     Expr::Range(Range {
@@ -323,6 +319,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     }
 
     fn assign(&mut self) -> Option<Stmt<'src>> {
+        // Atomic because both assign and expr start with an expression.
         self.atomic(|s| {
             let target = s.expr()?;
             let op = s.take_if_map(|token| match token {
@@ -334,7 +331,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
                 Token::Op("%=") => Some(AssignOp::Mod),
                 _ => None,
             })?;
-            let value = s.expr()?;
+            let value = s.must("value", |s| s.expr())?;
             Some(Stmt::Assign(Assign { target, op, value }))
         })
     }
@@ -517,7 +514,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
                 Token::Op("not") => Some(UnaryOp::Not),
                 _ => None,
             })?;
-            let expr = Box::new(s.must("expression", |s| s.index_or_member_or_atom())?);
+            let expr = Box::new(s.must("value", |s| s.index_or_member_or_atom())?);
             Some(Expr::Unary(Unary { op, expr }))
         })
     }
@@ -577,7 +574,10 @@ pub fn parse<'src>(
     let stmts = parser.repeated(Parser::stmt);
     let end = parser.end;
     if end < source.len() {
-        errors.push((format!("expected statement"), source[end].1));
+        errors.push((
+            format!("expected function, struct, variable declaration, import, or expression"),
+            source[end].1,
+        ));
     }
     let ast = Ast { filename, stmts };
     (ast, errors)

@@ -34,14 +34,20 @@ impl Writer<'_> {
     }
 
     fn skip_to(&mut self, token: Token<'_>) -> Result {
-        // Semicolons and commas are not guaranteed to appear in the input.
-        debug_assert_ne!(token, Token::Semi);
-        debug_assert_ne!(token, Token::Comma);
+        // Some tokens are not guaranteed to appear in the input, so we ignore them.
+        if matches!(
+            token,
+            Token::Semi | Token::Comma | Token::Arrow | Token::Colon
+        ) {
+            return Ok(());
+        }
         let mid = self
             .tokens
             .iter()
             .position(|(other_token, _)| *other_token == token)
-            .unwrap();
+            .unwrap_or_else(|| {
+                panic!("Failed to find token {token:?} in the input");
+            });
         let (tokens_before, tokens_after) = self.tokens.split_at(mid);
         self.tokens = tokens_after;
 
@@ -73,11 +79,11 @@ impl Writer<'_> {
     }
 
     pub fn put_semi(&mut self) -> Result {
-        self.output.write_str(";")
+        self.put(Token::Semi)
     }
 
     pub fn put_comma(&mut self) -> Result {
-        self.output.write_str(",")
+        self.put(Token::Comma)
     }
 
     pub fn put_newline(&mut self) -> Result {

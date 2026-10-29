@@ -549,9 +549,11 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 end: span.end,
                 context: span.context,
             };
+            let extra_needed = params.len() - args.len();
             let message = format!(
-                "This function needs {} more arguments.",
-                params.len() - args.len()
+                "This function needs {} more argument{}.",
+                extra_needed,
+                s_if_not_1(extra_needed)
             );
             self.errors.add(message, closing_paren_span);
         }
@@ -564,9 +566,11 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 context: last_arg_span.context,
             };
             let message = format!(
-                "This function only takes {} arguments. {} arguments passed.",
+                "This function only takes {} argument{}. {} argument{} passed.",
                 params.len(),
-                args.len()
+                s_if_not_1(params.len()),
+                args.len(),
+                s_if_not_1(params.len()),
             );
             self.errors.add(message, after_params_span);
         }
@@ -653,11 +657,11 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             if types_not_equal(&first_element_type, &element_type) {
                 self.errors.add_with_context(
                     format!(
-                        "All list elements should have the same type, but this one has type '{}'",
+                        "All elements of a list should have the same type, but this one has type '{}'",
                         element_type
                     ),
                     element.1,
-                    format!("The first element has type '{}'", first_element_type),
+                    format!("While the first element has type '{}'", first_element_type),
                     first_element_span,
                 );
             }
@@ -691,7 +695,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                                 $str, $str, r#type
                             ),
                             $var.1,
-                            format!("The first {} has type '{}'", $str, $first_type),
+                            format!("While the first {} has type '{}'", $str, $first_type),
                             $first_span,
                         );
                     }
@@ -823,6 +827,12 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             );
         }
     }
+}
+
+/// Returns a literal string of "s" if the given value is exactly 1.
+/// Useful for conditionally pluralizing words.
+fn s_if_not_1(n: usize) -> &'static str {
+    if n != 1 { "s" } else { "" }
 }
 
 /// Returns `true` if the types are definitively not equal.

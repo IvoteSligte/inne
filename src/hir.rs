@@ -948,6 +948,7 @@ impl<'a> Constructor<'a> {
 
 use indentify::*;
 
+// FIXME: this function is currently used in TypedHIR a lot, but it does not print generic and named-type names
 impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
