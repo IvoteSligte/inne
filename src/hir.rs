@@ -948,23 +948,34 @@ impl<'a> Constructor<'a> {
 
 use indentify::*;
 
-// FIXME: this function is currently used in TypedHIR a lot, but it does not print generic and named-type names
-impl std::fmt::Display for Type {
+/// Wrapper for implementing [std::fmt::Display] for a type that can otherwise not implement it.
+pub(crate) struct Display<T>(pub(crate) T);
+
+// It would be easy to call Display on Type by accident in a type-checking error message
+// if it was implemented directly, so we use a wrapper to prevent that.
+impl std::fmt::Display for Display<&Type> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+        f.write_str(match &self.0 {
             Type::Nothing => "nothing",
             Type::Int => "int",
             Type::Bool => "bool",
             Type::String => "string",
             Type::Char => "char",
             Type::Range => "range",
-            Type::List(element) => return write!(f, "List<{element}>"),
-            Type::Map { key, value } => return write!(f, "Map<{key}, {value}>"),
+            Type::List(element) => return write!(f, "List<{}>", Display(element.as_ref())),
+            Type::Map { key, value } => {
+                return write!(
+                    f,
+                    "Map<{}, {}>",
+                    Display(key.as_ref()),
+                    Display(value.as_ref())
+                );
+            }
             Type::Named { id, generics } => {
                 write!(f, "_{id}")?;
                 if !generics.is_empty() {
                     f.write_str("<")?;
-                    write_comma_separated(f, generics)?;
+                    write_comma_separated(f, generics.iter().map(Display))?;
                     f.write_str(">")?;
                 }
                 return Ok(());
@@ -1010,11 +1021,17 @@ impl std::fmt::Display for Hir<'_> {
                 if i > 0 {
                     f.write_str(", ")?;
                 }
-                write!(f, "_{} {}: {}", param.var_id, param.name.0, param.r#type.0)?;
+                write!(
+                    f,
+                    "_{} {}: {}",
+                    param.var_id,
+                    param.name.0,
+                    Display(&param.r#type.0)
+                )?;
             }
             write!(f, ") ")?;
             if let Some((return_type, _)) = return_type {
-                write!(f, "-> {return_type} ")?;
+                write!(f, "-> {} ", Display(return_type))?;
             }
             writeln!(f, "{{{INDENT}")?;
             for stmt in body {
@@ -1125,7 +1142,7 @@ impl<'a> std::fmt::Display for Expr<'a> {
             }
             Expr::EmptyList(EmptyList { element_type }) => {
                 f.write_str("<")?;
-                element_type.0.fmt(f)?;
+                Display(&element_type.0).fmt(f)?;
                 f.write_str(">")?;
             }
             Expr::List(List { elements }) => {
@@ -1138,9 +1155,9 @@ impl<'a> std::fmt::Display for Expr<'a> {
                 value_type,
             }) => {
                 f.write_str("<")?;
-                key_type.0.fmt(f)?;
+                Display(&key_type.0).fmt(f)?;
                 f.write_str(", ")?;
-                value_type.0.fmt(f)?;
+                Display(&value_type.0).fmt(f)?;
                 f.write_str(">")?;
             }
             Expr::Map(Map { pairs }) => {

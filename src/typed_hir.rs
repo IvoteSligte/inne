@@ -7,7 +7,7 @@ pub use crate::hir::{
     While,
 };
 
-use crate::{Error, Errors, Span, Spanned};
+use crate::{Error, Errors, Span, Spanned, hir, util::write_comma_separated};
 
 // NOTE: The HIR only needs to be edited to set Member.member_index,
 //       but maybe in the future a whole transformation is better?
@@ -78,8 +78,8 @@ pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Erro
             errors: Errors::new(),
             vars,
             func_signatures: &func_signatures,
+            current_func_signature: None,
             types: &hir.types,
-            expected_return_type: &Type::Nothing,
         };
         for signature in &func_signatures {
             type_checker.check_func_signature(signature);
@@ -87,8 +87,9 @@ pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Erro
         type_checker.check_stmts(&mut hir.stmts);
         type_checker.check_types();
         for (func_signature, func_body) in std::iter::zip(&func_signatures, func_bodies) {
-            type_checker.expected_return_type = &func_signature.return_type.0;
+            type_checker.current_func_signature = Some(func_signature);
             type_checker.check_stmts(func_body);
+            type_checker.current_func_signature = None;
         }
         (type_checker.errors, type_checker.vars)
     };
@@ -109,8 +110,8 @@ struct TypeChecker<'src, 'hir> {
     errors: Errors,
     vars: Vec<VarInfo>,
     func_signatures: &'hir [FuncSignature<'hir, 'src>],
+    current_func_signature: Option<&'hir FuncSignature<'hir, 'src>>,
     types: &'hir [TypeDef<'src>],
-    expected_return_type: &'hir Type,
 }
 
 impl<'src, 'hir> TypeChecker<'src, 'hir> {
@@ -130,6 +131,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 _ => {}
             }
         }
+        self.current_func_signature = Some(func);
         let FuncSignature {
             name,
             generics,
@@ -166,6 +168,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     .add("The 'main' function may not return anything.", name.1);
             }
         }
+        self.current_func_signature = None;
     }
 
     /// Checks the type definitions in the HIR.
@@ -219,7 +222,8 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     self.errors.add(
                         format!(
                             "Expected a value of type '{}', but found a value of type '{}'",
-                            target_type, value_type
+                            self.display(&target_type),
+                            self.display(&value_type)
                         ),
                         value.1,
                     );
@@ -233,7 +237,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                                 // TODO: simplify error message (also in Binary)
                                 let message = format!(
                                     "Cannot apply arithmetic operator to values of type '{}'",
-                                    target_type
+                                    self.display(&target_type)
                                 );
                                 self.errors.add(message, *op_span);
                             }
@@ -247,7 +251,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     if cond_type != Type::Bool {
                         let message = format!(
                             "If-conditions must be booleans ('bool'). Found '{}'.",
-                            cond_type
+                            self.display(&cond_type)
                         );
                         self.errors.add(message, cond.1)
                     }
@@ -271,8 +275,10 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     Type::Map { key, value: _ } => *key,
                     _ => {
                         // TODO: add "Did you mean to use a range?" as context if iter_type==Type::Int
-                        self.errors
-                            .add(format!("Cannot iterate over type '{}'", iter_type), iter.1);
+                        self.errors.add(
+                            format!("Cannot iterate over type '{}'", self.display(&iter_type)),
+                            iter.1,
+                        );
                         Type::UNKNOWN
                     }
                 };
@@ -284,7 +290,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 if cond_type != Type::Bool {
                     let message = format!(
                         "While-conditions must be booleans ('bool'). Found '{}'.",
-                        cond_type
+                        self.display(&cond_type)
                     );
                     self.errors.add(message, cond.1)
                 }
@@ -300,12 +306,17 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     .as_mut()
                     .map(|value| self.check_expr(value).0)
                     .unwrap_or(Type::Nothing);
-                if value_type != *self.expected_return_type {
+                let expected_return_type = self
+                    .current_func_signature
+                    .map(|func| &func.return_type.0)
+                    .unwrap_or(&Type::Nothing);
+                if value_type != *expected_return_type {
                     // TODO: add function return type span as context
                     self.errors.add(
                         format!(
                             "Expected return type '{}', but found '{}'",
-                            self.expected_return_type, value_type
+                            self.display(expected_return_type),
+                            self.display(&value_type)
                         ),
                         value.as_ref().map(|(_, span)| *span).unwrap_or(*span),
                     );
@@ -380,8 +391,8 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                                 format!(
                                     "The field '{}' has type '{}', but the provided value has type '{}'",
                                     struct_field.name.0,
-                                    struct_field.r#type.0,
-                                    value_type,
+                                    self.display(&struct_field.r#type.0),
+                                    self.display(&value_type),
                                 ),
                                 field.value.1,
                             );
@@ -415,7 +426,8 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                                 self.errors.add(
                                     format!(
                                         "Expected '{}' as payload type, but found '{}'",
-                                        expected, found
+                                        self.display(&expected),
+                                        self.display(&found)
                                     ),
                                     payload_span,
                                 );
@@ -425,7 +437,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                             self.errors.add(
                                 format!(
                                     "This enum variant requires a payload of type '{}'",
-                                    expected
+                                    self.display(&expected)
                                 ),
                                 *span,
                             );
@@ -455,7 +467,8 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             self.errors.add(
                 format!(
                     "Both sides must be of the same type. Left is '{}' and right is '{}'.",
-                    left_type, right_type,
+                    self.display(&left_type),
+                    self.display(&right_type)
                 ),
                 span,
             );
@@ -467,7 +480,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     self.errors.add(
                         format!(
                             "Cannot apply arithmetic operator to values of type '{}'",
-                            or_type
+                            self.display(&or_type)
                         ),
                         binary.op.1,
                     );
@@ -479,7 +492,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     self.errors.add(
                         format!(
                             "Cannot apply comparison operator to values of type '{}'",
-                            or_type
+                            self.display(&or_type)
                         ),
                         binary.op.1,
                     );
@@ -491,7 +504,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     self.errors.add(
                         format!(
                             "Cannot apply boolean operator to values of type '{}'",
-                            or_type
+                            self.display(&or_type)
                         ),
                         binary.op.1,
                     );
@@ -510,7 +523,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     self.errors.add(
                         format!(
                             "Only integers can be negated. Cannot negate '{}'.",
-                            expr_type
+                            self.display(&expr_type)
                         ),
                         span,
                     );
@@ -521,7 +534,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     self.errors.add(
                         format!(
                             "Only booleans can be inverted. Cannot invert '{}'.",
-                            expr_type
+                            self.display(&expr_type)
                         ),
                         span,
                     );
@@ -581,7 +594,8 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             if types_not_equal(&arg_type, param_type) {
                 let message = format!(
                     "Expected a value of type '{}' but found a value of type '{}'",
-                    arg_type, param_type
+                    self.display(&arg_type),
+                    self.display(&param_type)
                 );
                 self.errors.add(message, arg.1);
             } else if !generics.is_empty() {
@@ -613,8 +627,8 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                                 "This argument requires that generic '{}' of function '{}' is both '{}' and '{}'",
                                 generic.0,
                                 func_name.0,
-                                first_type,
-                                r#type,
+                                self.display(&    first_type),
+                                self.display(&                                r#type),
                             ),
                             *span,
                             "Generic defined here:",
@@ -626,8 +640,8 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                                 "This argument requires that generic '{}' of function '{}' is '{}', but another requires that it is '{}'",
                                 generic.0,
                                 func_name.0,
-                                first_type,
-                                r#type,
+                                self.display(&    first_type),
+                                self.display(&                                r#type),
                             ),
                             *first_span,
                             vec![
@@ -658,10 +672,10 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 self.errors.add_with_context(
                     format!(
                         "All elements of a list should have the same type, but this one has type '{}'",
-                        element_type
+                        self.display(&    element_type)
                     ),
                     element.1,
-                    format!("While the first element has type '{}'", first_element_type),
+                    format!("While the first element has type '{}'", self.display(&first_element_type)),
                     first_element_span,
                 );
             }
@@ -692,10 +706,16 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                         self.errors.add_with_context(
                             format!(
                                 "All map {}s should have the same type, but this {} has type '{}'",
-                                $str, $str, r#type
+                                $str,
+                                $str,
+                                self.display(&r#type)
                             ),
                             $var.1,
-                            format!("While the first {} has type '{}'", $str, $first_type),
+                            format!(
+                                "While the first {} has type '{}'",
+                                $str,
+                                self.display(&$first_type)
+                            ),
                             $first_span,
                         );
                     }
@@ -726,22 +746,30 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             _ => {}
         }
         match expr_type {
-            Type::String => match index_type {
-                Type::Int => Type::Char,
-                Type::Range => Type::String,
-                index_type => {
-                    if index_type.is_known() {
-                        self.errors.add(format!("Only int and range can be used to index into strings, not '{index_type}'."), index.index.1);
+            Type::String => {
+                match index_type {
+                    Type::Int => Type::Char,
+                    Type::Range => Type::String,
+                    index_type => {
+                        if index_type.is_known() {
+                            self.errors.add(format!("Only int and range can be used to index into strings, not '{}'.", self.display(&index_type)), index.index.1);
+                        }
+                        Type::UNKNOWN
                     }
-                    Type::UNKNOWN
                 }
-            },
+            }
             Type::List(ref element_type) => match index_type {
                 Type::Int => element_type.deref().clone(),
                 Type::Range => expr_type,
                 index_type => {
                     if index_type.is_known() {
-                        self.errors.add(format!("Only int and range can be used to index into lists, not '{index_type}'."), index.index.1);
+                        self.errors.add(
+                            format!(
+                                "Only int and range can be used to index into lists, not '{}'.",
+                                self.display(&index_type)
+                            ),
+                            index.index.1,
+                        );
                     }
                     Type::UNKNOWN
                 }
@@ -751,13 +779,23 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 value: value_type,
             } => {
                 if index_type.is_known() && key_type.is_known() && index_type != *key_type {
-                    self.errors.add(format!("The map's key type is '{key_type}', but '{index_type}' was used to access it."), index.index.1);
+                    self.errors.add(
+                        format!(
+                            "The map's key type is '{}', but '{}' was used to access it.",
+                            self.display(&key_type),
+                            self.display(&index_type)
+                        ),
+                        index.index.1,
+                    );
                 }
                 *value_type
             }
             expr_type => {
                 self.errors.add(
-                    format!("Only 'string', 'list', and 'map' can be indexed, not '{expr_type}'."),
+                    format!(
+                        "Only 'string', 'list', and 'map' can be indexed, not '{}'.",
+                        self.display(&expr_type)
+                    ),
                     index.expr.1,
                 );
                 Type::UNKNOWN
@@ -772,7 +810,10 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         }
         let Type::Named { id, generics: _ } = expr_type else {
             self.errors.add(
-                format!("Cannot access field of non-struct type '{}'", expr_type),
+                format!(
+                    "Cannot access field of non-struct type '{}'",
+                    self.display(&expr_type)
+                ),
                 member.expr.1,
             );
             return Type::UNKNOWN;
@@ -780,7 +821,10 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         member.type_id = id;
         let TypeDef::Struct(r#struct) = &self.types[id.get()] else {
             self.errors.add(
-                format!("Cannot access field of enum type '{}'", expr_type),
+                format!(
+                    "Cannot access field of enum type '{}'",
+                    self.display(&expr_type)
+                ),
                 member.expr.1,
             );
             return Type::UNKNOWN;
@@ -826,6 +870,10 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 *span,
             );
         }
+    }
+
+    fn display<'a>(&'a self, r#type: &'a Type) -> Display<'a, &'a Type> {
+        Display(self, r#type)
     }
 }
 
@@ -911,5 +959,45 @@ fn extract_generic_constraints(
             }
         }
         _ => {}
+    }
+}
+
+struct Display<'a, T>(&'a TypeChecker<'a, 'a>, T);
+
+impl<T> Display<'_, T> {
+    fn with(&self, value: T) -> Self {
+        Self(self.0, value)
+    }
+}
+
+impl<'a> std::fmt::Display for Display<'a, &'a Type> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(checker, r#type) = self;
+        match r#type {
+            Type::Nothing | Type::Int | Type::Bool | Type::String | Type::Char | Type::Range => {
+                hir::Display(*r#type).fmt(f)
+            }
+            Type::List(element) => {
+                write!(f, "list<{}>", self.with(element))
+            }
+            Type::Map { key, value } => {
+                write!(f, "map<{}, {}>", self.with(key), self.with(value))
+            }
+            Type::Named { id, generics } => {
+                let name = checker.types[id.get()].name();
+                f.write_str(name.0)?;
+                if !generics.is_empty() {
+                    f.write_str("<")?;
+                    write_comma_separated(f, generics.iter().map(|generic| self.with(generic)))?;
+                    f.write_str(">")?;
+                }
+                Ok(())
+            }
+            Type::Generic(generic_id) => {
+                let func = checker.current_func_signature.unwrap();
+                let name = func.generics[generic_id.get()];
+                f.write_str(name.0)
+            }
+        }
     }
 }
