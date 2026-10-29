@@ -12,7 +12,7 @@ use crate::{
 //       - check for tautological conditions
 
 // TODO: operator string(x) for value->string
-// TODO: string concatenation
+// TODO: format strings
 // TODO: print(...) without trailing newline
 
 pub struct Mir<'a> {

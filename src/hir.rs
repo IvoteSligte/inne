@@ -972,7 +972,7 @@ impl std::fmt::Display for Display<&Type> {
                 );
             }
             Type::Named { id, generics } => {
-                write!(f, "_{id}")?;
+                write!(f, "${id}")?;
                 if !generics.is_empty() {
                     f.write_str("<")?;
                     write_comma_separated(f, generics.iter().map(Display))?;
@@ -980,7 +980,7 @@ impl std::fmt::Display for Display<&Type> {
                 }
                 return Ok(());
             }
-            Type::Generic(id) => return write!(f, "_{id}"),
+            Type::Generic(id) => return write!(f, "#{id}"),
         })
     }
 }
@@ -1141,9 +1141,9 @@ impl<'a> std::fmt::Display for Expr<'a> {
                 f.write_str(")")?;
             }
             Expr::EmptyList(EmptyList { element_type }) => {
-                f.write_str("<")?;
+                f.write_str("[<")?;
                 Display(&element_type.0).fmt(f)?;
-                f.write_str(">")?;
+                f.write_str(">]")?;
             }
             Expr::List(List { elements }) => {
                 f.write_str("[")?;
@@ -1154,11 +1154,11 @@ impl<'a> std::fmt::Display for Expr<'a> {
                 key_type,
                 value_type,
             }) => {
-                f.write_str("<")?;
+                f.write_str("{<")?;
                 Display(&key_type.0).fmt(f)?;
                 f.write_str(", ")?;
                 Display(&value_type.0).fmt(f)?;
-                f.write_str(">")?;
+                f.write_str(">}")?;
             }
             Expr::Map(Map { pairs }) => {
                 f.write_str("{")?;

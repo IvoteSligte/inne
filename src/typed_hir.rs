@@ -9,9 +9,6 @@ pub use crate::hir::{
 
 use crate::{Error, Errors, Span, Spanned, hir, util::write_comma_separated};
 
-// NOTE: The HIR only needs to be edited to set Member.member_index,
-//       but maybe in the future a whole transformation is better?
-
 /// Type-checked high-level intermediate representation.
 /// Contains type annotations for all function and variable definitions.
 pub struct TypedHir<'a> {
@@ -23,6 +20,7 @@ pub struct TypedHir<'a> {
     pub stmts: Vec<Stmt<'a>>,
 }
 
+#[derive(Debug)]
 pub struct VarInfo {
     pub span: Span,
     pub r#type: Type,
@@ -96,7 +94,7 @@ pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Erro
     if !errors.is_empty() {
         return Err(errors.into_inner());
     }
-    debug_assert!(vars.iter().all(|var| var.r#type.is_known()));
+    debug_assert!(vars.iter().all(|var| { var.r#type != Type::UNKNOWN }));
     Ok(TypedHir {
         filename: hir.filename,
         vars,
@@ -341,7 +339,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 Expr::Call(call) => self.check_call((call, *span)),
                 Expr::EmptyList(EmptyList { element_type }) => {
                     self.check_type(element_type);
-                    element_type.0.clone()
+                    Type::List(Box::new(element_type.0.clone()))
                 }
                 Expr::List(list) => self.check_list((list, *span)),
                 Expr::EmptyMap(EmptyMap {
