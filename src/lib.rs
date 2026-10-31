@@ -1,6 +1,7 @@
 pub mod hir;
 pub mod interpreter;
 pub mod mir;
+pub mod module;
 pub mod typed_hir;
 mod util;
 pub mod value;
