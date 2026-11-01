@@ -2,6 +2,10 @@ language:
 - methods // low priority
 - imports
 - generics
+  - struct generics
+  - enum generics
+- type aliases // low priority
+  - make 'string' an alias of 'list<char>'
 - move semantics
 - pattern matching/destructuring
   - if var Enum(x) = expr
@@ -9,6 +13,7 @@ language:
   - var Enum(x) = expr else ... // low priority
   - match                       // low priority
 - format strings
+- allow global code that does not depend on code from other files in the same project (to prevent cycles)
 
 tooling:
 - autocomplete

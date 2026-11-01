@@ -209,3 +209,9 @@ Example: `import file;`
 Submodules can be accessed with `::`
 
 Example: `import file::submodule::subsubmodule;`
+
+## Projects
+
+An Inne project consists of all `.inne` files in the same folder as a `main.inne` file (the project root), as well as in subfolders.
+
+Except in `main.inne`, variables and expressions in the global scope (i.e. outside of functions) may not depend on code from other files in the same project.

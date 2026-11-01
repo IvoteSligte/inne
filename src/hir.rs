@@ -8,7 +8,8 @@ pub use crate::ast::{AssignOp, BinaryOp, Name, UnaryOp};
 
 // TODO: warn if expression used as statement does not have any side-effects
 // TODO: warn for unused expression return value
-// TODO: info for variable accessed from a different scope
+// TODO: warn for unused functions and types
+// TODO: error message context for variable accessed from a different scope
 
 usize_newtype!(VarId);
 usize_newtype!(FuncId);
@@ -79,9 +80,9 @@ impl TypeDef<'_> {
     }
 }
 
-pub enum AstTypeDef<'a, 'b> {
-    Struct(&'b ast::Struct<'a>),
-    Enum(&'b ast::Enum<'a>),
+pub enum AstTypeDef<'ast, 'src> {
+    Struct(&'ast ast::Struct<'src>),
+    Enum(&'ast ast::Enum<'src>),
 }
 
 pub struct Struct<'a> {
@@ -308,19 +309,19 @@ impl<'a> VarList<'a> {
     }
 }
 
-struct Constructor<'a, 'b> {
-    vars: VarList<'a>,
-    funcs: Vec<Func<'a>>,
-    types: Vec<TypeDef<'a>>,
-    func_map: HashMap<&'a str, (FuncId, &'b ast::Func<'a>)>,
-    type_map: HashMap<&'a str, (TypeId, Span<'a>, AstTypeDef<'a, 'b>)>,
-    generics: &'b [Name<'a>],
-    scopes: Vec<HashMap<&'a str, VarId>>,
-    errors: Errors<'a>,
+struct Constructor<'ast, 'src> {
+    vars: VarList<'src>,
+    funcs: Vec<Func<'src>>,
+    types: Vec<TypeDef<'src>>,
+    func_map: HashMap<&'src str, (FuncId, &'ast ast::Func<'src>)>,
+    type_map: HashMap<&'src str, (TypeId, Span<'src>, AstTypeDef<'ast, 'src>)>,
+    generics: &'ast [Name<'src>],
+    scopes: Vec<HashMap<&'src str, VarId>>,
+    errors: Errors<'src>,
 }
 
-impl<'a, 'b> Constructor<'a, 'b> {
-    pub fn map_ast(ast: &'b ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error<'a>>> {
+impl<'ast, 'src> Constructor<'ast, 'src> {
+    pub fn map_ast(ast: &'ast Ast<'src>) -> Result<Hir<'src>, Vec<Error<'src>>> {
         let mut _self = Self {
             vars: VarList(Vec::new()),
             funcs: Vec::new(),
@@ -371,7 +372,7 @@ impl<'a, 'b> Constructor<'a, 'b> {
         })
     }
 
-    fn add_type_to_map(&mut self, name: Name<'a>, ast_type_def: AstTypeDef<'a, 'b>) {
+    fn add_type_to_map(&mut self, name: Name<'src>, ast_type_def: AstTypeDef<'ast, 'src>) {
         // TODO: error if user defines type with same name as builtin
         //       (unlikely because user-defined types should be PascalCase by convention)
         if let Some(&(_, prev_type_span, _)) = self.type_map.get(name.0) {
@@ -397,11 +398,11 @@ impl<'a, 'b> Constructor<'a, 'b> {
         value
     }
 
-    fn map_scope(&mut self, stmts: &'b [ast::Stmt<'a>]) -> Vec<Stmt<'a>> {
+    fn map_scope(&mut self, stmts: &'ast [ast::Stmt<'src>]) -> Vec<Stmt<'src>> {
         self.in_scope(|_self| _self.map_stmts(stmts))
     }
 
-    fn map_stmts(&mut self, stmts: &'b [ast::Stmt<'a>]) -> Vec<Stmt<'a>> {
+    fn map_stmts(&mut self, stmts: &'ast [ast::Stmt<'src>]) -> Vec<Stmt<'src>> {
         let mut out_stmts = Vec::with_capacity(stmts.len());
         for stmt in stmts {
             match stmt {
@@ -586,7 +587,7 @@ impl<'a, 'b> Constructor<'a, 'b> {
         out_stmts
     }
 
-    fn map_param(&mut self, param: &'b ast::Param<'a>) -> Param<'a> {
+    fn map_param(&mut self, param: &'ast ast::Param<'src>) -> Param<'src> {
         let var_id = self.vars.add(param.name);
         if let Some(prev_param_var_id) =
             self.scopes.last_mut().unwrap().insert(param.name.0, var_id)
@@ -608,7 +609,7 @@ impl<'a, 'b> Constructor<'a, 'b> {
         }
     }
 
-    fn map_expr(&mut self, (expr, span): &'b ast::SpannedExpr<'a>) -> SpannedExpr<'a> {
+    fn map_expr(&mut self, (expr, span): &'ast ast::SpannedExpr<'src>) -> SpannedExpr<'src> {
         (
             match expr {
                 ast::Expr::Binary(ast::Binary { op, left, right }) => Expr::Binary(Binary {
@@ -824,11 +825,11 @@ impl<'a, 'b> Constructor<'a, 'b> {
         )
     }
 
-    fn map_exprs(&mut self, exprs: &'b [ast::SpannedExpr<'a>]) -> Vec<SpannedExpr<'a>> {
+    fn map_exprs(&mut self, exprs: &'ast [ast::SpannedExpr<'src>]) -> Vec<SpannedExpr<'src>> {
         exprs.iter().map(|elem| self.map_expr(elem)).collect()
     }
 
-    fn map_type(&mut self, (r#type, span): &'b ast::SpannedType<'a>) -> Spanned<'a, Type> {
+    fn map_type(&mut self, (r#type, span): &'ast ast::SpannedType<'src>) -> Spanned<'src, Type> {
         let ast::Type { name, generics } = r#type;
         if matches!(name.0, "int" | "char" | "string" | "bool") && !generics.is_empty() {
             self.errors
@@ -911,7 +912,7 @@ impl<'a, 'b> Constructor<'a, 'b> {
         (r#type, *span)
     }
 
-    fn parse_int(&mut self, (input, span): Spanned<'a, &'a str>) -> Int {
+    fn parse_int(&mut self, (input, span): Spanned<'src, &'src str>) -> Int {
         let err = match input.parse() {
             Ok(int) => return int,
             Err(err) => err,
@@ -935,7 +936,7 @@ impl<'a, 'b> Constructor<'a, 'b> {
         0 // Default value
     }
 
-    fn parse_char(&mut self, (input, span): Spanned<'a, &'a str>) -> char {
+    fn parse_char(&mut self, (input, span): Spanned<'src, &'src str>) -> char {
         match input.parse() {
             Ok(char) => char,
             Err(_) => {
@@ -948,6 +949,7 @@ impl<'a, 'b> Constructor<'a, 'b> {
 }
 
 use indentify::*;
+use parser::Ast;
 
 /// Wrapper for implementing [std::fmt::Display] for a type that can otherwise not implement it.
 pub(crate) struct Display<T>(pub(crate) T);
