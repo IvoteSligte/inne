@@ -1,2 +1,6 @@
-// Helper module for imports.inne.
-var value = 123;
+
+func function() -> string {
+    return "Hello, World!";
+}
+
+

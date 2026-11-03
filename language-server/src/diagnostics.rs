@@ -65,7 +65,11 @@ fn group_errors_by_file<'file, 'src>(
             .or_default()
             .push(error);
     }
-    debug_assert!(filename_map.len() <= files.len());
+    // FIXME: this assert has triggered; probably because of invalid URI comparisons.
+    debug_assert!(
+        filename_map.len() <= files.len(),
+        "Somehow, there are errors for more unique files than there are known files in the project."
+    );
     files
         .iter()
         .map(|file| {

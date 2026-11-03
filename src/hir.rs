@@ -15,6 +15,7 @@ pub use crate::ast::{AssignOp, BinaryOp, Name, UnaryOp};
 // TODO: warn for unused expression return value
 // TODO: warn for unused functions and types
 // TODO: error message context for variable accessed from a different scope
+// TODO: split into true two-pass approach (function/type registration and "the rest")
 
 usize_newtype!(VarId);
 usize_newtype!(FuncId);
@@ -85,6 +86,7 @@ impl TypeDef<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum AstTypeDef<'ast, 'src> {
     Struct(&'ast ast::Struct<'src>),
     Enum(&'ast ast::Enum<'src>),
@@ -357,6 +359,7 @@ struct Constructor<'ast, 'src> {
     func_map: HashMap<&'src str, (FuncId, &'ast ast::Func<'src>)>,
     /// The type map for the current module.    
     type_map: HashMap<&'src str, (TypeId, Span<'src>, AstTypeDef<'ast, 'src>)>,
+
     generics: &'ast [Name<'src>],
     scopes: Vec<HashMap<&'src str, VarId>>,
 }
@@ -403,15 +406,18 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
             funcs: Vec::new(),
             types: Vec::new(),
             errors: Errors::new(),
-            modules,
             func_map: HashMap::new(),
             type_map: HashMap::new(),
+            modules,
             generics: &[],
             scopes: Vec::new(),
         };
+        for i in 0.._self.modules.len() {
+            _self.add_module_defs(i, root_path);
+        }
         let mut root_stmts = Vec::new();
         for i in 0.._self.modules.len() {
-            let stmts = _self.map_module(i, root_path);
+            let stmts = _self.map_module_stmts(i);
             if _self.modules[i].is_root {
                 root_stmts = stmts;
             }
@@ -427,7 +433,9 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         })
     }
 
-    fn map_module(&mut self, index: usize, root_path: &Path) -> Vec<Stmt<'src>> {
+    /// Registers function and type definitions for a module.
+    /// This should be called before `Self::map_module_stmts`.
+    fn add_module_defs(&mut self, index: usize, root_path: &Path) {
         debug_assert!(self.func_map.is_empty());
         debug_assert!(self.type_map.is_empty());
         debug_assert!(self.scopes.is_empty());
@@ -454,7 +462,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                             prev_func_ast.name.1,
                         );
                     } else {
-                        let id = FuncId(self.func_map.len());
+                        let id = FuncId(self.funcs.len());
                         self.func_map.insert(name.0, (id, func));
                     }
                 }
@@ -474,9 +482,77 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                 _ => {}
             }
         }
-        let stmts = self.map_scope(&ast.stmts);
         debug_assert!(self.modules[index].func_map.is_empty());
         debug_assert!(self.modules[index].type_map.is_empty());
+        std::mem::swap(&mut self.modules[index].func_map, &mut self.func_map);
+        std::mem::swap(&mut self.modules[index].type_map, &mut self.type_map);
+    }
+
+    #[must_use]
+    fn map_module_stmts(&mut self, index: usize) -> Vec<Stmt<'src>> {
+        debug_assert!(self.func_map.is_empty());
+        debug_assert!(self.type_map.is_empty());
+        debug_assert!(self.scopes.is_empty());
+        let Module { ast, .. } = self.modules[index];
+        std::mem::swap(&mut self.modules[index].func_map, &mut self.func_map);
+        std::mem::swap(&mut self.modules[index].type_map, &mut self.type_map);
+        // NOTE: when nested folders are supported, then there are two paths for submodules of the current module:
+        //       'parent/' and 'parent/module/'
+        let current_path = self.modules[index].path.parent().unwrap().to_owned();
+
+        for stmt in &ast.stmts {
+            let ast::Stmt::Import(ast::Import { path }) = stmt else {
+                continue;
+            };
+            debug_assert!(path.0.len() > 0);
+            if path.0.len() == 1 {
+                self.errors.add(
+                    "All imports must be of the form 'import module::item' or 'import module::submodule::item', etc.",
+                    path.1,
+                );
+                continue;
+            }
+            let mut search_path = current_path.clone();
+            for (segment, _) in &path.0[0..path.0.len() - 1] {
+                search_path = search_path.join(segment);
+            }
+            let item_name = path.0.last().unwrap();
+            match self.find_module(&search_path) {
+                Ok(module) => {
+                    if let Some(func) = module.func_map.get(item_name.0) {
+                        self.func_map.insert(item_name.0, *func);
+                        continue;
+                    }
+                    if let Some(r#type) = module.type_map.get(item_name.0) {
+                        self.type_map.insert(item_name.0, *r#type);
+                        continue;
+                    }
+                    self.errors.add(
+                        format!(
+                            "No function or type with the name '{}' found in '{}'",
+                            item_name.0,
+                            module.path.display()
+                        ),
+                        item_name.1,
+                    );
+                    // TODO: register the item in an 'unknown_set' and use that to suppress errors related to unknown definitions
+                    continue;
+                }
+                Err(invalid_path) => {
+                    // TODO: tighter span, print module::submodule style path instead.
+                    self.errors.add(
+                        format!(
+                            "This path expects a module at '{}', which does not exist.",
+                            invalid_path.display(),
+                        ),
+                        path.1,
+                    );
+                    continue;
+                }
+            }
+        }
+        let stmts = self.map_scope(&ast.stmts);
+
         std::mem::swap(&mut self.modules[index].func_map, &mut self.func_map);
         std::mem::swap(&mut self.modules[index].type_map, &mut self.type_map);
         self.scopes.clear();
@@ -497,7 +573,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                 prev_type_span,
             );
         } else {
-            let id = TypeId(self.type_map.len());
+            let id = TypeId(self.types.len());
             self.type_map.insert(name.0, (id, name.1, ast_type_def));
         }
     }
@@ -509,10 +585,12 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         value
     }
 
+    #[must_use]
     fn map_scope(&mut self, stmts: &'ast [ast::Stmt<'src>]) -> Vec<Stmt<'src>> {
         self.in_scope(|_self| _self.map_stmts(stmts))
     }
 
+    #[must_use]
     fn map_stmts(&mut self, stmts: &'ast [ast::Stmt<'src>]) -> Vec<Stmt<'src>> {
         let mut out_stmts = Vec::with_capacity(stmts.len());
         for stmt in stmts {
@@ -622,6 +700,14 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                         variants,
                     }));
                 }
+                ast::Stmt::Import(ast::Import { path }) => {
+                    if self.scopes.len() > 1 {
+                        // TODO: add outer function as context
+                        self.errors
+                            .add("Imports cannot be used inside functions.", path.1);
+                        continue;
+                    }
+                }
                 ast::Stmt::VarDecl(ast::VarDecl { name, value }) => {
                     let value = self.map_expr(value);
                     // The declaration should be added *after* the value is analyzed,
@@ -692,12 +778,12 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                         *span,
                     )));
                 }
-                ast::Stmt::Import(import) => todo!(),
             }
         }
         out_stmts
     }
 
+    #[must_use]
     fn map_param(&mut self, param: &'ast ast::Param<'src>) -> Param<'src> {
         let var_id = self.vars.add(param.name);
         if let Some(prev_param_var_id) =
@@ -720,6 +806,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         }
     }
 
+    #[must_use]
     fn map_expr(&mut self, (expr, span): &'ast ast::SpannedExpr<'src>) -> SpannedExpr<'src> {
         (
             match expr {
@@ -853,7 +940,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                     name,
                     payload,
                 }) => {
-                    let (type_id, variant_index) = match self.type_map.get(name.0) {
+                    let (type_id, variant_index) = match self.type_map.get(enum_name.0) {
                         Some((type_id, type_span, AstTypeDef::Enum(type_ast))) => {
                             let variant_index = match type_ast
                                 .variants
@@ -877,13 +964,21 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                             (*type_id, variant_index)
                         }
                         Some((_, type_span, AstTypeDef::Struct(_))) => {
-                            self.errors.add_with_context(format!("Tried to create a value of type '{}' as a enum, but it is an struct.", name.0), name.1, "Type defined here:", *type_span);
+                            self.errors.add_with_context(
+                                format!(
+                                    "Tried to create a value of type '{}' as an enum, but it is a struct.",
+                                    name.0,
+                                ),
+                                name.1,
+                                "Type defined here:",
+                                *type_span,
+                            );
                             (TypeId::UNKNOWN, usize::MAX)
                         }
                         None => {
                             // TODO: add similar type/function/generic names as contexts
                             self.errors
-                                .add(format!("Unknown type '{}'", name.0), name.1);
+                                .add(format!("Unknown type '{}'", enum_name.0), enum_name.1);
                             (TypeId::UNKNOWN, usize::MAX)
                         }
                     };
@@ -936,10 +1031,12 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         )
     }
 
+    #[must_use]
     fn map_exprs(&mut self, exprs: &'ast [ast::SpannedExpr<'src>]) -> Vec<SpannedExpr<'src>> {
         exprs.iter().map(|elem| self.map_expr(elem)).collect()
     }
 
+    #[must_use]
     fn map_type(&mut self, (r#type, span): &'ast ast::SpannedType<'src>) -> Spanned<'src, Type> {
         let ast::Type { name, generics } = r#type;
         if matches!(name.0, "int" | "char" | "string" | "bool") && !generics.is_empty() {
@@ -1023,6 +1120,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         (r#type, *span)
     }
 
+    #[must_use]
     fn parse_int(&mut self, (input, span): Spanned<'src, &'src str>) -> Int {
         let err = match input.parse() {
             Ok(int) => return int,
@@ -1047,6 +1145,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         0 // Default value
     }
 
+    #[must_use]
     fn parse_char(&mut self, (input, span): Spanned<'src, &'src str>) -> char {
         match input.parse() {
             Ok(char) => char,
@@ -1054,6 +1153,31 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                 self.errors
                     .add(format!("Invalid character '{input:?}'"), span);
                 '?' // Default value
+            }
+        }
+    }
+
+    #[must_use]
+    fn find_module<'m, 'p>(&'m self, path: &'p Path) -> Result<&'m Module<'ast, 'src>, &'p Path> {
+        debug_assert!(
+            path.components().next().is_some(),
+            "Path should not be empty"
+        );
+        let module_path = path.with_extension(".inne");
+        match self
+            .modules
+            .iter()
+            .find(|module| module.path.starts_with(&module_path))
+        {
+            Some(module) => Ok(module),
+            None => {
+                let Some(parent) = path.parent() else {
+                    return Err(path);
+                };
+                match self.find_module(parent) {
+                    Ok(_) => Err(path),
+                    Err(parent_path) => Err(parent_path),
+                }
             }
         }
     }

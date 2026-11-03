@@ -1,4 +1,4 @@
 // Import test.
 // Requires the sibling module helper.inne
-import helper;
-print(helper::value);
+import helper::function;
+print(function());
