@@ -18,7 +18,7 @@ fn directory_containing(path: &Path) -> std::io::Result<&Path> {
 
 /// Reads `.inne` files in the same directory as `relative_to`.
 /// `relative_to` may also be a directory path itself.
-pub fn read_modules(relative_to: impl AsRef<Path>) -> std::io::Result<Vec<(PathBuf, String)>> {
+pub fn read_files(relative_to: impl AsRef<Path>) -> std::io::Result<Vec<(PathBuf, String)>> {
     let path = relative_to.as_ref();
     let folder_path = directory_containing(path)?;
     // TODO: nested folders

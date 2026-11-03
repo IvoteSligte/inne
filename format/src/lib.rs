@@ -672,7 +672,7 @@ pub fn format(source: &str, mut dest: impl Write) -> Option<Result> {
     let Some(tokens) = maybe_tokens else {
         return None;
     };
-    let (maybe_ast, errors) = parse(&tokens, source);
+    let (maybe_ast, errors) = parse(&tokens);
     if !errors.is_empty() {
         return None;
     }

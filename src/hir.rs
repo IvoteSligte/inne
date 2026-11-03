@@ -300,9 +300,9 @@ pub struct Loop<'a> {
 /// Paths should be valid UTF-8.
 pub fn hir_from_ast_modules<'ast, 'src: 'ast>(
     modules: impl IntoIterator<Item = (&'src Path, &'src str, &'ast Ast<'src>)>,
-    root_index: usize,
+    root_path: &'src Path,
 ) -> Result<Hir<'src>, Vec<Error<'src>>> {
-    Constructor::map_ast_project(modules, root_index)
+    Constructor::map_ast_project(modules, root_path)
 }
 
 /// Using a separate type instead of having the fields and methods directly on [Constructor]
@@ -370,13 +370,13 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
     #[must_use]
     pub fn map_ast_project(
         modules: impl IntoIterator<Item = (&'src Path, &'src str, &'ast Ast<'src>)>,
-        root_index: usize,
+        root_path: &'src Path,
     ) -> Result<Hir<'src>, Vec<Error<'src>>> {
         let modules = modules
             .into_iter()
             .map(|(path, source, ast)| {
                 debug_assert!(path.extension() == Some(OsStr::new("inne")));
-                Module::new(path, source, ast, false)
+                Module::new(path, source, ast, path == root_path)
             })
             .collect::<Vec<_>>();
         debug_assert!(
@@ -389,12 +389,8 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
             "Every module must have a unique path."
         );
         debug_assert!(
-            modules
-                .iter()
-                .filter(|module| module.path.file_name() == Some(OsStr::new("main.inne")))
-                .count()
-                == 1,
-            "Exactly one 'main.inne' module must exist."
+            modules.iter().filter(|module| module.is_root).count() == 1,
+            "Exactly one root module must exist."
         );
         debug_assert!(
             modules
@@ -415,7 +411,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         };
         let mut root_stmts = Vec::new();
         for i in 0.._self.modules.len() {
-            let stmts = _self.map_module(i, _self.modules[root_index].path);
+            let stmts = _self.map_module(i, root_path);
             if _self.modules[i].is_root {
                 root_stmts = stmts;
             }

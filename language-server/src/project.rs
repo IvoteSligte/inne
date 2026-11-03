@@ -7,13 +7,13 @@ use tower_lsp_server::ls_types::*;
 
 pub struct Project {
     pub files: Vec<File>,
-    pub root_index: usize,
+    pub root_path: PathBuf,
 }
 
 impl Project {
     /// Returns `None` on error.
     pub fn new(root_path: PathBuf) -> Option<Self> {
-        let modules = match inne::project::read_modules(&root_path) {
+        let modules = match inne::project::read_files(&root_path) {
             Ok(modules) => modules,
             Err(err) => {
                 eprintln!("Failed to read project modules: {}", err);
@@ -21,10 +21,8 @@ impl Project {
             }
         };
         Some(Self {
-            root_index: modules
-                .iter()
-                .position(|(path, _)| &root_path == path)
-                .unwrap(),
+            // NOTE: should root_path be canonicalized?
+            root_path,
             files: modules
                 .into_iter()
                 .map(|(path, source)| {
@@ -56,7 +54,7 @@ impl Project {
                 continue;
             };
             eprintln!("Parsing file '{}'", file.name);
-            let (maybe_ast, errors) = inne::parse(&tokens, &file.source);
+            let (maybe_ast, errors) = inne::parse(&tokens);
             all_errors.extend(errors);
             let Some(ast) = maybe_ast else {
                 continue;
@@ -70,7 +68,7 @@ impl Project {
         let asts = asts
             .iter()
             .map(|(file, ast)| (file.path.as_path(), file.source.as_str(), ast));
-        let hir = match inne::hir_from_ast_modules(asts, self.root_index) {
+        let hir = match inne::hir_from_ast_modules(asts, &self.root_path) {
             Ok(hir) => hir,
             Err(errors) => {
                 all_errors.extend(errors);

@@ -30,7 +30,7 @@ pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
         Some((span.start, (*span, token_type)))
     }));
     // Second pass overrides identifiers with their specialised types (if applicable)
-    if let (Some(parse_tree), _) = inne::parse(&tokens, &file.source) {
+    if let (Some(parse_tree), _) = inne::parse(&tokens) {
         let mut r#override = Override(&mut semantic_tokens);
         for stmt in &parse_tree.stmts {
             r#override.stmt(stmt);
