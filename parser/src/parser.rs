@@ -605,7 +605,7 @@ pub fn parse<'src>(source: &[SpannedToken<'src>]) -> (Ast<'src>, Vec<ParseError<
     let end = parser.end;
     if end < source.len() {
         errors.push((
-            format!("expected function, struct, variable declaration, import, or expression"),
+            format!("expected function, struct, variable declaration, import or expression"),
             source[end].1,
         ));
     }

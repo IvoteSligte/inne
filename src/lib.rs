@@ -1,14 +1,14 @@
 pub mod hir;
 pub mod interpreter;
 pub mod mir;
-pub mod module;
+pub mod project;
 pub mod typed_hir;
 mod util;
 pub mod value;
 
 pub use error::Errors;
 pub use error::*;
-pub use hir::{Hir, hir_from_ast};
+pub use hir::{Hir, hir_from_ast_modules};
 pub use interpreter::Interpreter;
 pub use mir::{Mir, mir_from_typed_hir};
 pub use parser::{self, Ast, LexError, ParseError, Span, Spanned, Token, ast};

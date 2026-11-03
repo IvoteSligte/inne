@@ -1,19 +1,30 @@
-use std::time::Instant;
+use std::{collections::HashMap, time::Instant};
 
-use crate::{File, position_at_end};
+use crate::{File, Project, position_at_end};
+use inne::Error;
 use tower_lsp_server::ls_types::*;
 
-pub fn extract_diagnostics(file: &File) -> Vec<Diagnostic> {
+pub fn extract_diagnostics(project: &Project) -> Vec<(&File, Vec<Diagnostic>)> {
     let start_instant = Instant::now();
-    let mut errors = file.analyze();
-    if errors.is_empty() {
-        return Vec::new();
-    }
+    let project_errors = project.analyze();
+    let end_instant = Instant::now();
+    let duration = end_instant - start_instant;
+    eprintln!(
+        "Extracted {} diagnostics ({duration:?}) for project",
+        project_errors.len(),
+    );
+    group_errors_by_file(&project.files, project_errors)
+        .into_iter()
+        .map(|(file, errors)| (file, errors_to_diagnostics(errors)))
+        .collect()
+}
+
+fn errors_to_diagnostics(mut errors: Vec<Error<'_>>) -> Vec<Diagnostic> {
     errors.sort_by_key(|error| error.span.start);
     let mut line = 0u32;
     let mut character = 0u32;
     let mut offset = 0usize;
-    let diagnostics = errors
+    errors
         .into_iter()
         .filter_map(|error| {
             if error.span.start < offset {
@@ -21,12 +32,12 @@ pub fn extract_diagnostics(file: &File) -> Vec<Diagnostic> {
                 return None;
             }
             let start = position_at_end(
-                &file.source[offset..error.span.start],
+                &error.source()[offset..error.span.start],
                 &mut line,
                 &mut character,
             );
             let end = position_at_end(
-                &file.source[error.span.start..error.span.end],
+                &error.source()[error.span.start..error.span.end],
                 &mut line,
                 &mut character,
             );
@@ -39,14 +50,27 @@ pub fn extract_diagnostics(file: &File) -> Vec<Diagnostic> {
                 ..Default::default()
             })
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+}
 
-    let end_instant = Instant::now();
-    let duration = end_instant - start_instant;
-    eprintln!(
-        "Extracted {} diagnostics ({duration:?}) for file '{}'",
-        diagnostics.len(),
-        file.name
-    );
-    diagnostics
+/// Assumes that `File::name` is unique for each file.
+fn group_errors_by_file<'file, 'src>(
+    files: &'file [File],
+    errors: Vec<Error<'src>>,
+) -> Vec<(&'file File, Vec<Error<'src>>)> {
+    let mut filename_map = HashMap::<&str, Vec<Error<'_>>>::new();
+    for error in errors {
+        filename_map
+            .entry(error.span.filename)
+            .or_default()
+            .push(error);
+    }
+    debug_assert!(filename_map.len() <= files.len());
+    files
+        .iter()
+        .map(|file| {
+            let errors = filename_map.remove(file.name.as_str()).unwrap_or_default();
+            (file, errors)
+        })
+        .collect()
 }

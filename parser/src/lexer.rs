@@ -203,11 +203,7 @@ impl<'lexer, 'src> Cursor<'lexer, 'src> {
     pub fn commit(self) -> (&'src str, Span<'src>) {
         self.lexer.start = self.end;
         let text = &self.lexer.src[self.start..self.end];
-        let span = Span {
-            start: self.start,
-            end: self.end,
-            filename: self.lexer.filename,
-        };
+        let span = self.lexer.create_span(self.start, self.end);
         (text, span)
     }
 
@@ -293,11 +289,7 @@ impl<'src> Lexer<'src> {
     }
 
     fn create_span(&self, start: usize, end: usize) -> Span<'src> {
-        Span {
-            start,
-            end,
-            filename: self.filename,
-        }
+        Span::new(start, end, self.filename, self.src)
     }
 
     // --- Inne-specific lexing functions ---
@@ -483,7 +475,7 @@ impl<'src> Lexer<'src> {
         if start_invalid < end_invalid {
             self.errors.push((
                 "found invalid character(s)",
-                Span::new(start_invalid, end_invalid, self.filename),
+                self.create_span(start_invalid, end_invalid),
             ));
         }
         success

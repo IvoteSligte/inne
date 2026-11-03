@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use diagnostics::extract_diagnostics;
@@ -9,14 +7,16 @@ use tower_lsp_server::jsonrpc::{self, Result};
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
-use inne::*;
-
 mod diagnostics;
+mod project;
 mod semantic_tokens;
+
+use project::{File, Project, find_root, get_file, uri_to_path};
 
 const MAX_SEMANTIC_TOKENS_LISTS: usize = 3;
 
 // TODO: format-on-save
+// TODO: watch project files that the client has not opened; with workspace/didChangeWatchedFiles
 
 // NOTE: The LSP protocol uses UTF-16 by default, so care should be taken when counting characters.
 
@@ -79,80 +79,9 @@ pub fn offset_at_position(source: &str, position: Position) -> Option<usize> {
     None
 }
 
-struct File {
-    version: i32,
-    uri: Uri,
-    /// Human-readable filename.
-    name: String,
-    /// Absolute path of the file.
-    _path: PathBuf,
-    /// Source-code contained in the file.
-    source: String,
-    /// The last-computed list of semantic tokens and its `result_id`.
-    semantic_tokens: HashMap<String, (Instant, Vec<SemanticToken>)>,
-}
-
-impl File {
-    pub fn new(uri: &Uri, source: impl ToString, version: i32) -> Option<Self> {
-        let source = source.to_string();
-        let name = uri.as_str().to_string(); // TODO: better human-readable name
-        let Some(path) = uri.to_file_path().as_deref().map(Path::to_path_buf) else {
-            eprintln!("The provided URI is not a file: '{}'", uri.as_str());
-            return None;
-        };
-        Some(Self {
-            version,
-            uri: uri.clone(),
-            name,
-            _path: path,
-            source,
-            semantic_tokens: HashMap::new(),
-        })
-    }
-
-    pub fn analyze(&self) -> Vec<Error<'_>> {
-        let mut all_errors = Vec::new();
-        eprintln!("Lexing file '{}'", self.name);
-        let (maybe_tokens, errors) = inne::lex(&self.source, &self.name);
-        all_errors.extend(errors);
-        let Some(tokens) = maybe_tokens else {
-            return all_errors;
-        };
-        eprintln!("Parsing file '{}'", self.name);
-        let (maybe_ast, errors) = inne::parse(&tokens, &self.source);
-        all_errors.extend(errors);
-        let Some(ast) = maybe_ast else {
-            return all_errors;
-        };
-        eprintln!("Converting AST to HIR for file '{}'", self.name);
-        let hir = match inne::hir_from_ast(&ast) {
-            Ok(hir) => hir,
-            Err(errors) => {
-                all_errors.extend(errors);
-                return all_errors;
-            }
-        };
-        eprintln!("Converting HIR to Typed HIR for file '{}'", self.name);
-        let _typed_hir = match inne::typed_hir_from_hir(hir) {
-            Ok(typed_hir) => typed_hir,
-            Err(errors) => {
-                all_errors.extend(errors);
-                return all_errors;
-            }
-        };
-        eprintln!(
-            "Analyzing file '{}' yielded {} errors",
-            self.name,
-            all_errors.len()
-        );
-        // NOTE: THIR -> MIR currently does not produce diagnostics, so it is skipped
-        all_errors
-    }
-}
-
 struct Backend {
     client: Client,
-    files: RwLock<HashMap<Uri, File>>,
+    projects: RwLock<Vec<Project>>,
 }
 
 impl LanguageServer for Backend {
@@ -214,10 +143,27 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         let source = params.text_document.text;
         let version = params.text_document.version;
-        if let Some(file) = File::new(&uri, source, version) {
+        let Some(path) = uri_to_path(&uri) else {
+            eprintln!("The provided URI is not a file: '{}'", uri.as_str());
+            return;
+        };
+        let Some(root_path) = find_root(path) else {
+            return;
+        };
+        let mut projects = self.projects.write().await;
+        for project in projects.iter_mut() {
+            if let Some(file) = project.get_file_mut(&uri) {
+                file.source = source;
+                file.version = Some(version);
+                eprintln!("Updated file: '{}'", uri.as_str());
+                self.publish_diagnostics(&project).await;
+                return;
+            }
+        }
+        if let Some(project) = Project::new(root_path) {
             eprintln!("Registered file: '{}'", uri.as_str());
-            self.publish_diagnostics(&file).await;
-            self.files.write().await.insert(uri, file);
+            self.publish_diagnostics(&project).await;
+            projects.push(project);
         }
     }
 
@@ -225,16 +171,20 @@ impl LanguageServer for Backend {
         eprintln!("Received did_change event.");
         let start_instant = Instant::now();
         let uri = params.text_document.uri;
-        let mut guard = self.files.write().await;
-        let Some(file) = &mut guard.get_mut(&uri) else {
+        let mut projects = self.projects.write().await;
+        let Some(project) = projects
+            .iter_mut()
+            .find(|project| project.get_file(&uri).is_some())
+        else {
             eprintln!(
                 "ERROR: Unopened file received did_change notification: '{}'",
                 uri.as_str()
             );
             return;
         };
+        let file = project.get_file_mut(&uri).unwrap();
         let new_version = params.text_document.version;
-        if file.version >= new_version {
+        if file.version.is_some_and(|version| version >= new_version) {
             return;
         }
         let source = &mut file.source;
@@ -253,14 +203,14 @@ impl LanguageServer for Backend {
                 None => *source = change.text,
             }
         }
-        file.version = new_version;
+        file.version = Some(new_version);
         let end_instant = Instant::now();
         eprintln!(
             "Updated file ({:?}): '{}'",
             end_instant - start_instant,
             file.name
         );
-        self.publish_diagnostics(&file).await;
+        self.publish_diagnostics(project).await;
     }
 
     async fn completion(&self, _: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -286,17 +236,20 @@ impl LanguageServer for Backend {
     ) -> Result<Option<SemanticTokensResult>> {
         eprintln!("Semantic tokens (full) requested.");
         let uri = &params.text_document.uri;
-        let guard = self.files.read().await;
-        let Some(file) = guard.get(uri) else {
+        let projects_guard = self.projects.read().await;
+        let Some(file) = get_file(&projects_guard, uri) else {
             eprintln!("Semantic tokens: File '{}' is not open.", uri.as_str());
             return Ok(None); // TODO: file-not-open error
         };
         let Some(tokens) = extract_semantic_tokens(file) else {
             return Ok(None);
         };
-        let result_id = file.version.to_string();
+        let result_id = file
+            .version
+            .expect("Requested semantic tokens for an unopened file")
+            .to_string();
 
-        drop(guard); // Prevent permanent stall caused by trying to write while guard is held
+        drop(projects_guard); // Prevent permanent stall caused by trying to write while guard is held
         self.store_semantic_tokens(uri, result_id.clone(), tokens.clone())
             .await;
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
@@ -314,8 +267,8 @@ impl LanguageServer for Backend {
             params.previous_result_id
         );
         let uri = &params.text_document.uri;
-        let guard = self.files.read().await;
-        let Some(file) = guard.get(uri) else {
+        let projects_guard = self.projects.read().await;
+        let Some(file) = get_file(&projects_guard, uri) else {
             eprintln!("Semantic tokens: File '{}' is not open.", uri.as_str());
             return Ok(None); // TODO: file-not-open error
         };
@@ -330,10 +283,13 @@ impl LanguageServer for Backend {
         let Some(tokens) = extract_semantic_tokens(file) else {
             return Ok(None);
         };
-        let result_id = file.version.to_string();
+        let result_id = file
+            .version
+            .expect("Requested semantic tokens for an unopened file")
+            .to_string();
         let edits = semantic_tokens::compute_delta(old_semantic_tokens, &tokens);
 
-        drop(guard); // Prevent permanent stall caused by trying to write while guard is held
+        drop(projects_guard); // Prevent permanent stall caused by trying to write while guard is held
         self.store_semantic_tokens(uri, result_id.clone(), tokens.clone())
             .await;
         eprintln!(
@@ -349,10 +305,8 @@ impl LanguageServer for Backend {
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        let guard = self.files.read().await;
-        let Some(file) = guard.get(&params.text_document.uri) else {
-            return Err(jsonrpc::Error::invalid_params("Document not found."));
-        };
+        let projects = self.projects.read().await;
+        let file = get_file(&projects, &params.text_document.uri).unwrap();
         let mut output = String::with_capacity(file.source.len());
         match format::format(&file.source, &mut output) {
             Some(Ok(())) => Ok(Some(vec![TextEdit {
@@ -386,12 +340,13 @@ impl LanguageServer for Backend {
 }
 
 impl Backend {
-    async fn publish_diagnostics(&self, file: &File) {
-        eprintln!("Extracting diagnostics from file '{}'", file.name);
-        let diagnostics = extract_diagnostics(file);
-        self.client
-            .publish_diagnostics(file.uri.clone(), diagnostics, Some(file.version))
-            .await;
+    async fn publish_diagnostics(&self, project: &Project) {
+        eprintln!("Extracting diagnostics");
+        for (file, diagnostics) in extract_diagnostics(project) {
+            self.client
+                .publish_diagnostics(file.uri.clone(), diagnostics, file.version)
+                .await;
+        }
     }
 
     async fn store_semantic_tokens(
@@ -400,16 +355,17 @@ impl Backend {
         result_id: String,
         tokens: Vec<SemanticToken>,
     ) {
-        let mut guard = self.files.write().await;
-        let map = &mut guard.get_mut(file_uri).unwrap().semantic_tokens;
-        if map.len() > MAX_SEMANTIC_TOKENS_LISTS {
-            let (oldest_key, _) = map
-                .iter()
-                .min_by_key(|(_, (timestamp, _))| timestamp)
-                .unwrap();
-            map.remove(&oldest_key.clone());
+        for project in self.projects.write().await.iter_mut() {
+            let map = &mut project.get_file_mut(file_uri).unwrap().semantic_tokens;
+            if map.len() > MAX_SEMANTIC_TOKENS_LISTS {
+                let (oldest_key, _) = map
+                    .iter()
+                    .min_by_key(|(_, (timestamp, _))| timestamp)
+                    .unwrap();
+                map.remove(&oldest_key.clone());
+            }
+            map.insert(result_id.clone(), (Instant::now(), tokens.clone()));
         }
-        map.insert(result_id.clone(), (Instant::now(), tokens.clone()));
     }
 }
 
@@ -419,7 +375,7 @@ async fn main() {
     let stdout = tokio::io::stdout();
     let (service, socket) = LspService::new(|client| Backend {
         client,
-        files: RwLock::new(HashMap::new()),
+        projects: RwLock::new(Vec::new()),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }

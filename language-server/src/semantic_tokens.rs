@@ -42,7 +42,7 @@ pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
     let end_instant = Instant::now();
     let duration = end_instant - start_instant;
     eprintln!(
-        "Semantic tokens ({duration:?}, version {}) provided {} tokens.",
+        "Semantic tokens ({duration:?}, version {:?}) provided {} tokens.",
         file.version,
         data.len()
     );
@@ -185,12 +185,20 @@ impl<'src> Override<'_, 'src> {
                 self.expr(start);
                 self.expr(end);
             }
-            Expr::EmptyList(_) => {
-                self.r#type(Span::new(span.start + 1, span.end - 1, span.filename))
-            }
+            Expr::EmptyList(_) => self.r#type(Span::new(
+                span.start + 1,
+                span.end - 1,
+                span.filename,
+                span.source,
+            )),
             Expr::List(List { elements }) => elements.iter().for_each(|item| self.expr(&item)),
             Expr::EmptyMap(_) => {
-                self.r#type(Span::new(span.start + 1, span.end - 1, span.filename));
+                self.r#type(Span::new(
+                    span.start + 1,
+                    span.end - 1,
+                    span.filename,
+                    span.source,
+                ));
             }
             Expr::Map(Map { pairs }) => pairs.iter().for_each(|Pair { key, value }| {
                 self.expr(key);

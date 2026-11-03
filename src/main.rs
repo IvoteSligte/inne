@@ -1,6 +1,5 @@
 use std::{
     ffi::OsStr,
-    io,
     path::{Path, PathBuf},
 };
 
@@ -13,7 +12,7 @@ use inne::*;
 #[command(about = "Compiler for the Inne programming language", long_about = None)]
 struct Args {
     /// The name of the Inne file to run.
-    file: PathBuf,
+    file: Option<PathBuf>,
     /// The IR to emit for compiler debugging purposes.
     #[arg(long)]
     emit: Option<Ir>,
@@ -32,62 +31,73 @@ enum Ir {
 // TODO: display general diagnostics through ariadne as well
 // TODO: do not immediately return from main() when any errors are encountered
 
-fn read_file(path: impl AsRef<Path>, filename: &str) -> Option<String> {
-    match std::fs::read_to_string(path) {
-        Ok(source) => Some(source),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            eprintln!("Error: The file '{}' does not exist.", filename);
-            None
-        }
-        Err(err) if err.kind() == io::ErrorKind::IsADirectory => {
-            eprintln!("Error: '{}' is a directory, not a '.inne' file.", filename);
-            None
-        }
-        Err(err) => {
-            eprintln!("Error: Failed to read file '{}': {}", filename, err);
-            None
-        }
-    }
-}
-
 fn main() {
     let args = Args::parse();
-    // Human-readable filename.
-    let filename = args.file.as_os_str().to_string_lossy();
-    let Some(source) = read_file(&args.file, &filename) else {
-        return;
-    };
-    if args.file.extension() != Some(OsStr::new("inne")) {
-        eprintln!(
-            "Warning: The file '{}' does not seem to be a '.inne' file. Will try to compile it anyway.",
-            filename
-        );
-    }
-    let filename = format!("{}", args.file.display());
-    let (maybe_tokens, errors) = lex(&source, &filename);
-    eprint_errors(&errors, &source, "lexing");
-    let Some(tokens) = maybe_tokens else {
-        return;
-    };
-    if args.emit == Some(Ir::Tokens) {
-        eprintln!("Tokens for file '{filename}':");
-        for (token, span) in &tokens {
-            println!("{:<30} at {span}", format!("{:?}", token));
+    let root_path = match args.file.clone() {
+        Some(path) if !path.exists() => {
+            eprintln!("The file '{}' does not exist.", path.display());
+            return;
         }
-        return;
+        Some(path) if !path.is_file() => {
+            eprintln!(
+                "The file to be compiled '{}' is not a file.",
+                path.display()
+            );
+            return;
+        }
+        Some(path) => {
+            if path.extension() != Some(OsStr::new("inne")) {
+                eprintln!(
+                    "Warning: The file '{}' does not seem to be a '.inne' file. Will try to run it anyway.",
+                    path.display()
+                );
+            }
+            path
+        }
+        None => match project::find_root(None) {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                eprintln!(
+                    "Could not find file 'main.inne' in the current directory or in a parent directory."
+                );
+                return;
+            }
+            Err(err) => {
+                eprintln!("Internal error while searching for 'main.inne': {}", err);
+                return;
+            }
+        },
+    };
+    let modules = match project::read_modules(&root_path) {
+        Ok(modules) => modules,
+        Err(err) => {
+            eprintln!("Internal error while reading modules: {}", err);
+            return;
+        }
+    };
+    let mut module_asts = Vec::new();
+    for (path, source) in &modules {
+        let Some(module_ast) = lex_and_parse(&args, path, source) else {
+            return;
+        };
+        module_asts.push(module_ast);
     }
-    let (maybe_ast, errors) = parse(&tokens, &source);
-    eprint_errors(&errors, &source, "parsing");
-    let Some(ast) = maybe_ast else {
+    // NOTE: not sure if `path == root_path` is valid when they might be relative to different directories...
+    //       maybe use Path::canonicalize?
+    let Some(root_index) = module_asts
+        .iter()
+        .position(|(path, _, _)| *path == root_path)
+    else {
+        eprintln!("Internal error: could not find the root module in the read modules.");
         return;
     };
-    if args.emit == Some(Ir::Ast) {
-        todo!();
-    }
-    let hir = match hir_from_ast(&ast) {
+    let module_asts = module_asts
+        .iter()
+        .map(|(path, source, ast)| (*path, *source, ast));
+    let hir = match hir_from_ast_modules(module_asts, root_index) {
         Ok(hir) => hir,
         Err(errors) => {
-            eprint_errors(&errors, &source, "symbol resolution");
+            eprint_errors(&errors, "symbol resolution");
             return;
         }
     };
@@ -98,7 +108,7 @@ fn main() {
     let typed_hir = match typed_hir_from_hir(hir) {
         Ok(typed_hir) => typed_hir,
         Err(errors) => {
-            eprint_errors(&errors, &source, "type checking");
+            eprint_errors(&errors, "type checking");
             return;
         }
     };
@@ -108,7 +118,7 @@ fn main() {
     let mir = match mir_from_typed_hir(&typed_hir) {
         Ok(mir) => mir,
         Err(errors) => {
-            eprint_errors(&errors, &source, "control-flow analysis");
+            eprint_errors(&errors, "control-flow analysis");
             return;
         }
     };
@@ -119,8 +129,37 @@ fn main() {
     Interpreter::run(&mir);
 }
 
-pub fn eprint_errors(errors: &[Error], source: &str, stage: &str) {
+fn lex_and_parse<'src>(
+    args: &Args,
+    path: &'src Path,
+    source: &'src str,
+) -> Option<(&'src Path, &'src str, Ast<'src>)> {
+    let filename = path.as_os_str().to_str().unwrap();
+    let (maybe_tokens, errors) = lex(&source, filename);
+    eprint_errors(&errors, "lexing");
+    let Some(tokens) = maybe_tokens else {
+        return None;
+    };
+    if args.emit == Some(Ir::Tokens) {
+        eprintln!("Tokens for file '{filename}':");
+        for (token, span) in &tokens {
+            println!("{:<30} at {span}", format!("{:?}", token));
+        }
+        return None;
+    }
+    let (maybe_ast, errors) = parse(&tokens, &source);
+    eprint_errors(&errors, "parsing");
+    let Some(ast) = maybe_ast else {
+        return None;
+    };
+    if args.emit == Some(Ir::Ast) {
+        todo!();
+    }
+    Some((path, source, ast))
+}
+
+pub fn eprint_errors(errors: &[Error], stage: &str) {
     for error in errors {
-        error.eprint(source, stage);
+        error.eprint(stage);
     }
 }

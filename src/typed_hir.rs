@@ -37,7 +37,8 @@ const NOTHING_RETURN_TYPE: Spanned<Type> = (
     Span {
         start: 0,
         end: 0,
-        filename: "<constant>",
+        filename: "<filename>",
+        source: "<source>",
     },
 );
 

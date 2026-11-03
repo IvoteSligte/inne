@@ -27,8 +27,14 @@ impl<'a> Error<'a> {
         }
     }
 
-    pub fn eprint(&self, source: &str, stage: &str) {
-        let filename = self.span.filename;
+    pub fn source(&self) -> &'a str {
+        self.span.source
+    }
+
+    pub fn eprint(&self, stage: &str) {
+        let Span {
+            filename, source, ..
+        } = self.span;
         // ariadne::sources has lifetime issues that are resolved by inlining it.
         let sources = {
             let iter = [(filename, source)];

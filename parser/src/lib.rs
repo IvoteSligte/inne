@@ -9,18 +9,20 @@ pub use lexer::*;
 pub use parser::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Span<'a> {
+pub struct Span<'src> {
     pub start: usize,
     pub end: usize,
-    pub filename: &'a str,
+    pub filename: &'src str,
+    pub source: &'src str,
 }
 
-impl<'a> Span<'a> {
-    pub fn new(start: usize, end: usize, filename: &'a str) -> Self {
+impl<'src> Span<'src> {
+    pub fn new(start: usize, end: usize, filename: &'src str, source: &'src str) -> Self {
         Self {
             start,
             end,
             filename,
+            source,
         }
     }
 
@@ -30,6 +32,7 @@ impl<'a> Span<'a> {
             start: self.start,
             end: other.end,
             filename: self.filename,
+            source: self.source,
         }
     }
 

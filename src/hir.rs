@@ -1,4 +1,9 @@
-use std::{collections::HashMap, num::IntErrorKind};
+use std::{
+    collections::{HashMap, HashSet},
+    ffi::OsStr,
+    num::IntErrorKind,
+    path::Path,
+};
 
 use crate::{
     Error, Errors, Span, Spanned, ast, usize_newtype, util::write_comma_separated, value::Int,
@@ -288,8 +293,16 @@ pub struct Loop<'a> {
 }
 
 // TODO: return (Option<Hir<'a>>, Vec<Error>) instead because the HIR may be recoverable on error
-pub fn hir_from_ast<'a, 'b>(ast: &'b ast::Ast<'a>) -> Result<Hir<'a>, Vec<Error<'a>>> {
-    Constructor::map_ast(ast)
+/// Assumes that `modules` contains only paths with the `.inne` extension,
+/// that `modules` does not contain a module with the same path as the root,
+/// and that no two modules have the same path.
+///
+/// Paths should be valid UTF-8.
+pub fn hir_from_ast_modules<'ast, 'src: 'ast>(
+    modules: impl IntoIterator<Item = (&'src Path, &'src str, &'ast Ast<'src>)>,
+    root_index: usize,
+) -> Result<Hir<'src>, Vec<Error<'src>>> {
+    Constructor::map_ast_project(modules, root_index)
 }
 
 /// Using a separate type instead of having the fields and methods directly on [Constructor]
@@ -309,35 +322,133 @@ impl<'a> VarList<'a> {
     }
 }
 
+struct Module<'ast, 'src> {
+    path: &'src Path,
+    source: &'src str,
+    ast: &'ast Ast<'src>,
+    is_root: bool,
+    func_map: HashMap<&'src str, (FuncId, &'ast ast::Func<'src>)>,
+    type_map: HashMap<&'src str, (TypeId, Span<'src>, AstTypeDef<'ast, 'src>)>,
+}
+
+impl<'ast, 'src> Module<'ast, 'src> {
+    pub fn new(path: &'src Path, source: &'src str, ast: &'ast Ast<'src>, is_root: bool) -> Self {
+        Self {
+            path,
+            source,
+            ast,
+            is_root,
+            func_map: HashMap::new(),
+            type_map: HashMap::new(),
+        }
+    }
+}
+
 struct Constructor<'ast, 'src> {
+    // -- Outputs --
     vars: VarList<'src>,
     funcs: Vec<Func<'src>>,
     types: Vec<TypeDef<'src>>,
+    errors: Errors<'src>,
+
+    // -- Temporaries --
+    modules: Vec<Module<'ast, 'src>>,
+    /// The function map for the current module.
     func_map: HashMap<&'src str, (FuncId, &'ast ast::Func<'src>)>,
+    /// The type map for the current module.    
     type_map: HashMap<&'src str, (TypeId, Span<'src>, AstTypeDef<'ast, 'src>)>,
     generics: &'ast [Name<'src>],
     scopes: Vec<HashMap<&'src str, VarId>>,
-    errors: Errors<'src>,
 }
 
 impl<'ast, 'src> Constructor<'ast, 'src> {
-    pub fn map_ast(ast: &'ast Ast<'src>) -> Result<Hir<'src>, Vec<Error<'src>>> {
+    /// Assumes that `modules` contains only files with the `.inne` extension,
+    /// that `modules` contains exactly one module with the path `main.inne` (the root),
+    /// and that no two modules have the same path.
+    ///
+    /// Paths should be valid UTF-8.
+    #[must_use]
+    pub fn map_ast_project(
+        modules: impl IntoIterator<Item = (&'src Path, &'src str, &'ast Ast<'src>)>,
+        root_index: usize,
+    ) -> Result<Hir<'src>, Vec<Error<'src>>> {
+        let modules = modules
+            .into_iter()
+            .map(|(path, source, ast)| {
+                debug_assert!(path.extension() == Some(OsStr::new("inne")));
+                Module::new(path, source, ast, false)
+            })
+            .collect::<Vec<_>>();
+        debug_assert!(
+            modules
+                .iter()
+                .map(|module| module.path)
+                .collect::<HashSet<_>>()
+                .len()
+                == modules.len(),
+            "Every module must have a unique path."
+        );
+        debug_assert!(
+            modules
+                .iter()
+                .filter(|module| module.path.file_name() == Some(OsStr::new("main.inne")))
+                .count()
+                == 1,
+            "Exactly one 'main.inne' module must exist."
+        );
+        debug_assert!(
+            modules
+                .iter()
+                .all(|module| module.path.as_os_str().to_str().is_some()),
+            "All module paths must be valid UTF-8."
+        );
         let mut _self = Self {
             vars: VarList(Vec::new()),
             funcs: Vec::new(),
             types: Vec::new(),
+            errors: Errors::new(),
+            modules,
             func_map: HashMap::new(),
             type_map: HashMap::new(),
             generics: &[],
             scopes: Vec::new(),
-            errors: Errors::new(),
         };
+        let mut root_stmts = Vec::new();
+        for i in 0.._self.modules.len() {
+            let stmts = _self.map_module(i, _self.modules[root_index].path);
+            if _self.modules[i].is_root {
+                root_stmts = stmts;
+            }
+        }
+        if !_self.errors.is_empty() {
+            return Err(_self.errors.into_inner());
+        }
+        Ok(Hir {
+            vars: _self.vars.0,
+            funcs: _self.funcs,
+            types: _self.types,
+            stmts: root_stmts,
+        })
+    }
+
+    fn map_module(&mut self, index: usize, root_path: &Path) -> Vec<Stmt<'src>> {
+        debug_assert!(self.func_map.is_empty());
+        debug_assert!(self.type_map.is_empty());
+        debug_assert!(self.scopes.is_empty());
+        let Module {
+            ast,
+            path,
+            source,
+            is_root,
+            ..
+        } = self.modules[index];
+
         for stmt in &ast.stmts {
             match stmt {
                 ast::Stmt::Func(func) => {
                     let name = func.name;
-                    if let Some(&(_, prev_func_ast)) = _self.func_map.get(name.0) {
-                        _self.errors.add_with_context(
+                    if let Some(&(_, prev_func_ast)) = self.func_map.get(name.0) {
+                        self.errors.add_with_context(
                             format!(
                                 "Function '{}' was already defined. Functions must have unique names.",
                                 name.0
@@ -347,29 +458,33 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                             prev_func_ast.name.1,
                         );
                     } else {
-                        let id = FuncId(_self.func_map.len());
-                        _self.func_map.insert(name.0, (id, func));
+                        let id = FuncId(self.func_map.len());
+                        self.func_map.insert(name.0, (id, func));
                     }
                 }
                 ast::Stmt::Struct(r#struct) => {
-                    _self.add_type_to_map(r#struct.name, AstTypeDef::Struct(r#struct));
+                    self.add_type_to_map(r#struct.name, AstTypeDef::Struct(r#struct));
                 }
                 ast::Stmt::Enum(r#enum) => {
-                    _self.add_type_to_map(r#enum.name, AstTypeDef::Enum(r#enum));
+                    self.add_type_to_map(r#enum.name, AstTypeDef::Enum(r#enum));
+                }
+                _ if !is_root => {
+                    // TODO: better error message and span
+                    self.errors.add(
+                        format!("In files other than the project root ('{}'), only function, struct, and enum declarations are allowed.", root_path.display()),
+                        Span::new(0, 0, path.as_os_str().to_str().unwrap(), source),
+                    );
                 }
                 _ => {}
             }
         }
-        let stmts = _self.map_scope(&ast.stmts);
-        if !_self.errors.is_empty() {
-            return Err(_self.errors.into_inner());
-        }
-        Ok(Hir {
-            vars: _self.vars.0,
-            funcs: _self.funcs,
-            types: _self.types,
-            stmts,
-        })
+        let stmts = self.map_scope(&ast.stmts);
+        debug_assert!(self.modules[index].func_map.is_empty());
+        debug_assert!(self.modules[index].type_map.is_empty());
+        std::mem::swap(&mut self.modules[index].func_map, &mut self.func_map);
+        std::mem::swap(&mut self.modules[index].type_map, &mut self.type_map);
+        self.scopes.clear();
+        stmts
     }
 
     fn add_type_to_map(&mut self, name: Name<'src>, ast_type_def: AstTypeDef<'ast, 'src>) {
