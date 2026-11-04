@@ -20,21 +20,23 @@ fn directory_containing(path: &Path) -> std::io::Result<&Path> {
 
 /// Reads `.inne` files in the same directory as `relative_to`.
 /// `relative_to` may also be a directory path itself.
-pub fn read_modules(relative_to: impl AsRef<Path>) -> std::io::Result<Vec<(ModuleId, String)>> {
+///
+/// Returns a path to the project root directory and the modules in the project as (ID, text) pairs.
+pub fn read_modules(relative_to: &Path) -> std::io::Result<(&Path, Vec<(ModuleId, String)>)> {
     let path = relative_to.as_ref();
-    let folder_path = directory_containing(path)?;
+    let root_dir_path = directory_containing(path)?;
     // TODO: nested folders
     let mut files = Vec::new();
 
-    for result in std::fs::read_dir(folder_path)? {
+    for result in std::fs::read_dir(root_dir_path)? {
         let path = result?.path();
         if ModulePath::is_module_file(&path) {
             let source = std::fs::read_to_string(&path)?;
-            let id = ModuleId::new(path.strip_prefix(folder_path).unwrap());
+            let id = ModuleId::new(path.strip_prefix(root_dir_path).unwrap());
             files.push((id, source));
         }
     }
-    Ok(files)
+    Ok((root_dir_path, files))
 }
 
 /// Tries to find a file named `main.inne` in the current directory and parent directories.

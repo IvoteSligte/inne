@@ -12,8 +12,8 @@ pub struct Project {
 impl Project {
     /// Returns `None` on error.
     pub fn new(root_path: &Path) -> Option<Self> {
-        let modules = match inne::project::read_modules(&root_path) {
-            Ok(modules) => modules,
+        let (root_dir_path, modules) = match inne::project::read_modules(&root_path) {
+            Ok(out) => out,
             Err(err) => {
                 eprintln!("Failed to read project modules: {}", err);
                 return None;
@@ -24,8 +24,11 @@ impl Project {
                 .into_iter()
                 .map(|(id, source)| {
                     // NOTE: unwrap can theoretically fail if the file was removed since the last check
-                    let uri = Uri::from_file_path(id.as_path()).unwrap();
-                    File::new(&uri, source, i32::MIN)
+                    let path = root_dir_path.join(id.as_path());
+                    let uri = Uri::from_file_path(path).unwrap_or_else(|| {
+                        panic!("The file at '{}' does not exist", id.as_path().display())
+                    });
+                    File::new(&uri, id, source, i32::MIN)
                 })
                 .collect::<Option<Vec<_>>>()?,
         })
@@ -120,18 +123,14 @@ pub struct File {
 }
 
 impl File {
-    pub fn new(uri: &Uri, source: impl ToString, version: i32) -> Option<Self> {
+    pub fn new(uri: &Uri, id: ModuleId, source: impl ToString, version: i32) -> Option<Self> {
         let source = source.to_string();
         let name = uri.as_str().to_string(); // TODO: better human-readable name
-        let Some(path) = uri_to_path(uri) else {
-            eprintln!("The provided URI is not a file: '{}'", uri.as_str());
-            return None;
-        };
         Some(Self {
             version: Some(version),
             uri: uri.clone(),
             name,
-            id: ModuleId::new(path),
+            id,
             source,
             semantic_tokens: HashMap::new(),
         })

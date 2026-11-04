@@ -377,7 +377,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         let root_module_id = ModuleId::root();
         let modules = modules
             .into_iter()
-            .map(|(path, source, ast)| Module::new(path, source, ast, *path == root_module_id))
+            .map(|(id, source, ast)| Module::new(id, source, ast, *id == root_module_id))
             .collect::<Vec<_>>();
         debug_assert!(
             modules
@@ -390,7 +390,8 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         );
         debug_assert!(
             modules.iter().filter(|module| module.is_root).count() == 1,
-            "Exactly one root module must exist."
+            "Exactly one root module must exist. Modules: {:#?}",
+            modules.iter().map(|module| module.id).collect::<Vec<_>>()
         );
         let mut _self = Self {
             vars: VarList(Vec::new()),

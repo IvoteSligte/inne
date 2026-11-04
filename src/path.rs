@@ -101,6 +101,7 @@ impl ModuleId {
     /// that all segments are valid identifiers, and that the file extension is `.inne`
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
+        debug_assert!(path.is_relative());
         debug_assert!(path.as_os_str().to_str().is_some());
         assert!(
             path.extension() == Some(OsStr::new("inne")),
@@ -119,7 +120,10 @@ impl ModuleId {
         self.deref().parent().unwrap()
     }
 
-    /// Returns the path to the `.inne` file for this module.
+    /// Returns the path to the `.inne` file for this module
+    /// *relative to the project root directory*.
+    /// If the current working directory is not the root directory,
+    /// then [Path::exists] will likely return `false`.
     pub fn as_path(&self) -> &Path {
         self.0.as_path()
     }

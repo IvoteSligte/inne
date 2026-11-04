@@ -160,8 +160,21 @@ impl LanguageServer for Backend {
                 return;
             }
         }
-        if let Some(project) = Project::new(&root_path) {
-            eprintln!("Registered file: '{}'", uri.as_str());
+        if let Some(mut project) = Project::new(&root_path) {
+            let Some(file) = project.files.iter_mut().find(|file| file.uri == uri) else {
+                panic!(
+                    "Could not find file with URI '{}' in the newly loaded project with modules: {:#?}",
+                    uri.as_str(),
+                    project
+                        .files
+                        .iter()
+                        .map(|file| file.uri.as_str())
+                        .collect::<Vec<_>>()
+                );
+            };
+            file.source = source;
+            file.version = Some(version);
+            eprintln!("Created project containing new file: '{}'", uri.as_str());
             self.publish_diagnostics(&project).await;
             projects.push(project);
         }

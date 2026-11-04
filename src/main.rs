@@ -33,7 +33,7 @@ fn main() {
 
     match (|| {
         let root_path = find_project_root()?;
-        let files = read_modules_in_project(&root_path)?;
+        let (_, files) = read_modules_in_project(&root_path)?;
         let mut asts = Vec::new();
         for (id, source) in &files {
             let tokens = lex_module(id, source)?;

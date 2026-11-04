@@ -23,9 +23,9 @@ pub fn find_project_root() -> Option<PathBuf> {
     }
 }
 
-pub fn read_modules_in_project(root_path: &Path) -> Option<Vec<(ModuleId, String)>> {
+pub fn read_modules_in_project(root_path: &Path) -> Option<(&Path, Vec<(ModuleId, String)>)> {
     match project::read_modules(&root_path) {
-        Ok(modules) => Some(modules),
+        Ok(out) => Some(out),
         Err(err) => {
             eprintln!("Internal error while reading modules: {}", err);
             return None;

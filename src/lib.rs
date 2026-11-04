@@ -50,7 +50,7 @@ pub fn compile_and_run(root_path: Option<PathBuf>) -> bool {
     (|| {
         debug_assert!(root_path.as_ref().is_none_or(|path| path.is_file()));
         let root_path = root_path.or_else(find_project_root)?;
-        let files = read_modules_in_project(&root_path)?;
+        let (_, files) = read_modules_in_project(&root_path)?;
         let mut asts = Vec::new();
         for (id, source) in &files {
             let tokens = lex_module(id, source)?;
@@ -59,7 +59,7 @@ pub fn compile_and_run(root_path: Option<PathBuf>) -> bool {
         }
         let ast_modules = asts
             .iter()
-            .map(|(path, source, ast)| (*path, source.as_str(), ast));
+            .map(|(id, source, ast)| (*id, source.as_str(), ast));
         let hir = hir_from_asts(ast_modules)?;
         let typed_hir = typed_hir_from_hir(hir)?;
         let mir = mir_from_typed_hir(&typed_hir)?;
