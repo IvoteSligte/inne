@@ -30,7 +30,7 @@ pub enum Token<'src> {
     Ident(&'src str),
     Int(&'src str),
     Bool(bool),
-    Char(&'src str),
+    Char(char),
     String(&'src str),
     // TODO: change Op("<") and Op(">") to explicit Delimiter tokens
     Op(&'src str),
@@ -209,19 +209,31 @@ impl<'lexer, 'src> Cursor<'lexer, 'src> {
 
     /// Returns the length of the discovered character escape (if any),
     /// and reports an error if encountered.
-    fn take_escape<'a>(&mut self) -> bool {
+    fn take_escape<'a>(&mut self) -> Option<char> {
         let bytes = self.remaining().as_bytes();
         if bytes.is_empty() || bytes[0] != b'\\' {
-            return false;
+            return None;
         }
-        let Some(escaped) = bytes.get(1) else {
+        let Some(&escaped) = bytes.get(1) else {
+            self.push_error(
+                "Unexpected EOF; expected escape character",
+                self.end,
+                self.end + 1,
+            );
             self.skip(1);
-            return true;
+            return Some('?');
         };
         match escaped {
-            b'\\' | b'/' | b'"' | b'b' | b'f' | b'n' | b'r' | b't' => {
+            b'\\' | b'"' | b'n' | b'r' | b't' => {
                 self.skip(2);
-                true
+                Some(match escaped {
+                    b'\\' => '\\',
+                    b'"' => '"',
+                    b'n' => '\n',
+                    b'r' => '\r',
+                    b't' => '\t',
+                    _ => unreachable!(),
+                })
             }
             b'u' => {
                 let mut num_hex_digits = 0;
@@ -237,14 +249,25 @@ impl<'lexer, 'src> Cursor<'lexer, 'src> {
                         self.end,
                         self.end + 2 + num_hex_digits,
                     );
+                    self.skip(2 + num_hex_digits);
+                    return Some('?');
                 }
-                self.skip(2 + num_hex_digits);
-                true
+                let char = match char::from_u32(
+                    u32::from_str_radix(str::from_utf8(&bytes[2..6]).unwrap(), 16).unwrap(),
+                ) {
+                    Some(char) => char,
+                    None => {
+                        self.push_error("Invalid unicode character escape", self.end, self.end + 6);
+                        '?'
+                    }
+                };
+                self.skip(6);
+                Some(char)
             }
             _ => {
                 self.push_error("Invalid character escape", self.end, self.end + 2);
                 self.skip(2);
-                true
+                Some('?')
             }
         }
     }
@@ -379,11 +402,9 @@ impl<'src> Lexer<'src> {
         if !cursor.take_if(|c| c == '\'') {
             return false;
         }
-        if cursor.take_escape() {
-            // OK
-        } else if cursor.take().is_none() {
+        let Some(char) = cursor.take_escape().or_else(|| cursor.take()) else {
             return false;
-        }
+        };
         // An unfinished character is still treated as a character because its content is recoverable.
         let ends_with_apostrophe = cursor.take_if(|c| c == '\'');
         if !ends_with_apostrophe {
@@ -393,14 +414,10 @@ impl<'src> Lexer<'src> {
                 cursor.end,
             );
         }
-        let (mut text, span) = cursor.commit();
+        let (_, span) = cursor.commit();
         // Remove the opening and closing apostrophes from the character's content.
-        text = &text[1..];
-        if ends_with_apostrophe {
-            text = &text[..text.len() - 1];
-        }
         // TODO: just fill Token::Char with an actual char here (or '?' on failure)
-        self.tokens.push((Token::Char(text), span));
+        self.tokens.push((Token::Char(char), span));
         true
     }
 
@@ -410,7 +427,7 @@ impl<'src> Lexer<'src> {
             return false;
         }
         let ends_with_quote = loop {
-            if cursor.take_escape() {
+            if cursor.take_escape().is_some() {
                 // OK
             } else if cursor.take_if(|c| c == '"') {
                 break true;

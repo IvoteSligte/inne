@@ -1006,9 +1006,9 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                         }
                     }
                 }
-                ast::Expr::Int(s) => Expr::Int(self.parse_int((*s, *span))),
+                ast::Expr::Int(int_str) => Expr::Int(self.parse_int((*int_str, *span))),
                 ast::Expr::Bool(bool) => Expr::Bool(*bool),
-                ast::Expr::Char(s) => Expr::Char(self.parse_char((*s, *span))),
+                ast::Expr::Char(char) => Expr::Char(*char),
                 ast::Expr::String(string) => Expr::String(string),
                 ast::Expr::Range(ast::Range { start, end }) => Expr::Range(Range {
                     start: Box::new(self.map_expr(start)),
@@ -1131,18 +1131,6 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         };
         self.errors.add(message, span);
         0 // Default value
-    }
-
-    #[must_use]
-    fn parse_char(&mut self, (input, span): Spanned<'src, &'src str>) -> char {
-        match input.parse() {
-            Ok(char) => char,
-            Err(_) => {
-                self.errors
-                    .add(format!("Invalid character '{input:?}'"), span);
-                '?' // Default value
-            }
-        }
     }
 
     #[must_use]
