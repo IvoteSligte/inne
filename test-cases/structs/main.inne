@@ -1,8 +1,8 @@
 // Struct definition, construction, and field access.
 struct Point {
-    x: i64,
-    y: i64,
+    x: int,
+    y: int,
 }
 
-var point = Point { x: 3, y: 4 };
+var point = Point::{ x: 3, y: 4 };
 print(point.x, point.y);

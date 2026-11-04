@@ -271,6 +271,10 @@ impl<'src> Constructor<'src> {
                         thir::Expr::Member(thir::Member {
                             expr, field_index, ..
                         }) => {
+                            debug_assert!(
+                                *field_index != usize::MAX,
+                                "Unset field_index reached MIR"
+                            );
                             let expr_id = self.map_expr(&expr.0, builder);
                             builder.push_op(Op::PointToField {
                                 r#struct: expr_id,
@@ -542,14 +546,15 @@ impl<'src> Constructor<'src> {
             }
             thir::Expr::Member(thir::Member {
                 type_id: _,
-                field_index: member_index,
+                field_index,
                 expr,
                 member: _,
             }) => {
+                debug_assert!(*field_index != usize::MAX, "Unset field_index reached MIR");
                 let expr_id = self.map_expr(&expr.0, builder);
                 builder.push_op(Op::Member {
                     expr: expr_id,
-                    field_index: *member_index,
+                    field_index: *field_index,
                 })
             }
         }

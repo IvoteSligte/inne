@@ -543,6 +543,9 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
 
     fn check_call(&mut self, (call, span): Spanned<'src, &mut Call<'src>>) -> Type {
         if call.func_id == FuncId::PRINT {
+            for arg in &mut call.args {
+                self.check_expr(arg);
+            }
             // print(...) accepts any number of arguments of any type.
             return Type::Nothing;
         }
@@ -829,9 +832,9 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             .iter()
             .position(|field| field.name.0 == member.member.0)
         {
-            Some(member_index) => {
-                member.field_index = member_index;
-                r#struct.fields[member_index].r#type.0.clone()
+            Some(field_index) => {
+                member.field_index = field_index;
+                r#struct.fields[field_index].r#type.0.clone()
             }
             None => {
                 self.errors.add(

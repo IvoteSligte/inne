@@ -269,6 +269,7 @@ impl Format for Struct<'_> {
         self.name.fmt(f)?;
         if !self.fields.is_empty() {
             f.put_indent_lbrace()?;
+            f.put_newline()?;
             for field in &self.fields {
                 field.fmt(f)?;
                 f.put_comma()?;
@@ -496,7 +497,7 @@ impl Format for Pair<'_> {
 impl Format for StructLiteral<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         self.name.fmt(f)?;
-        f.put_space()?;
+        f.put(Token::ColonColon)?;
         f.put(Token::LBrace)?;
         f.put_space()?;
         write_comma_separated(f, &self.fields)?;
