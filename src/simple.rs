@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use parser::{Ast, SpannedToken};
 
-use crate::{Error, Hir, Mir, TypedHir, project};
+use crate::{Error, Hir, Mir, ModuleId, TypedHir, project};
 
 pub fn find_project_root() -> Option<PathBuf> {
     match project::find_root(None) {
@@ -23,9 +23,9 @@ pub fn find_project_root() -> Option<PathBuf> {
     }
 }
 
-pub fn read_files_in_project(root_path: &Path) -> Option<Vec<(PathBuf, String)>> {
-    match project::read_files(&root_path) {
-        Ok(files) => Some(files),
+pub fn read_modules_in_project(root_path: &Path) -> Option<Vec<(ModuleId, String)>> {
+    match project::read_modules(&root_path) {
+        Ok(modules) => Some(modules),
         Err(err) => {
             eprintln!("Internal error while reading modules: {}", err);
             return None;
@@ -33,9 +33,8 @@ pub fn read_files_in_project(root_path: &Path) -> Option<Vec<(PathBuf, String)>>
     }
 }
 
-pub fn lex_file<'src>(path: &'src Path, source: &'src str) -> Option<Vec<SpannedToken<'src>>> {
-    let filename = path.as_os_str().to_str().unwrap();
-    let (maybe_tokens, errors) = crate::lex(&source, filename);
+pub fn lex_module<'src>(id: &'src ModuleId, source: &'src str) -> Option<Vec<SpannedToken<'src>>> {
+    let (maybe_tokens, errors) = crate::lex(&source, id.as_path_str());
     eprint_errors(&errors, "lexing");
     maybe_tokens
 }
@@ -47,10 +46,9 @@ pub fn parse_tokens<'src>(tokens: &[SpannedToken<'src>]) -> Option<Ast<'src>> {
 }
 
 pub fn hir_from_asts<'ast, 'src: 'ast>(
-    asts: impl IntoIterator<Item = (&'src Path, &'src str, &'ast Ast<'src>)>,
-    root_path: &'src Path,
+    asts: impl IntoIterator<Item = (&'src ModuleId, &'src str, &'ast Ast<'src>)>,
 ) -> Option<Hir<'src>> {
-    match crate::hir_from_ast_modules(asts, root_path) {
+    match crate::hir_from_ast_modules(asts) {
         Ok(hir) => Some(hir),
         Err(errors) => {
             eprint_errors(&errors, "symbol resolution");

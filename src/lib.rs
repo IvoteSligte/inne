@@ -1,6 +1,7 @@
 pub mod hir;
 pub mod interpreter;
 pub mod mir;
+pub mod path;
 pub mod project;
 pub mod simple;
 pub mod typed_hir;
@@ -15,6 +16,7 @@ pub use hir::{Hir, hir_from_ast_modules};
 pub use interpreter::Interpreter;
 pub use mir::{Mir, mir_from_typed_hir};
 pub use parser::{self, Ast, LexError, ParseError, Span, Spanned, Token, ast};
+pub use path::*;
 pub use typed_hir::{TypedHir, typed_hir_from_hir};
 pub use value::Value;
 
@@ -48,17 +50,17 @@ pub fn compile_and_run(root_path: Option<PathBuf>) -> bool {
     (|| {
         debug_assert!(root_path.as_ref().is_none_or(|path| path.is_file()));
         let root_path = root_path.or_else(find_project_root)?;
-        let files = read_files_in_project(&root_path)?;
+        let files = read_modules_in_project(&root_path)?;
         let mut asts = Vec::new();
-        for (path, source) in &files {
-            let tokens = lex_file(path, source)?;
+        for (id, source) in &files {
+            let tokens = lex_module(id, source)?;
             let ast = parse_tokens(&tokens)?;
-            asts.push((path, source, ast));
+            asts.push((id, source, ast));
         }
         let ast_modules = asts
             .iter()
-            .map(|(path, source, ast)| (path.as_path(), source.as_str(), ast));
-        let hir = hir_from_asts(ast_modules, &root_path)?;
+            .map(|(path, source, ast)| (*path, source.as_str(), ast));
+        let hir = hir_from_asts(ast_modules)?;
         let typed_hir = typed_hir_from_hir(hir)?;
         let mir = mir_from_typed_hir(&typed_hir)?;
         Interpreter::run(&mir);

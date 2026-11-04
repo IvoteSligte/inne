@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::{ModuleId, ModulePath};
+
 fn directory_containing(path: &Path) -> std::io::Result<&Path> {
     if path.is_dir() {
         return Ok(path);
@@ -18,7 +20,7 @@ fn directory_containing(path: &Path) -> std::io::Result<&Path> {
 
 /// Reads `.inne` files in the same directory as `relative_to`.
 /// `relative_to` may also be a directory path itself.
-pub fn read_files(relative_to: impl AsRef<Path>) -> std::io::Result<Vec<(PathBuf, String)>> {
+pub fn read_modules(relative_to: impl AsRef<Path>) -> std::io::Result<Vec<(ModuleId, String)>> {
     let path = relative_to.as_ref();
     let folder_path = directory_containing(path)?;
     // TODO: nested folders
@@ -26,9 +28,10 @@ pub fn read_files(relative_to: impl AsRef<Path>) -> std::io::Result<Vec<(PathBuf
 
     for result in std::fs::read_dir(folder_path)? {
         let path = result?.path();
-        if path.is_file() && path.extension() == Some(OsStr::new("inne")) {
+        if ModulePath::is_module_file(&path) {
             let source = std::fs::read_to_string(&path)?;
-            files.push((path, source));
+            let id = ModuleId::new(path.strip_prefix(folder_path).unwrap());
+            files.push((id, source));
         }
     }
     Ok(files)

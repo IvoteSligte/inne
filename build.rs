@@ -44,7 +44,7 @@ fn main() -> std::io::Result<()> {
             "#[test]
 fn {test_name}() {{
     let root_path = std::path::PathBuf::from(\"{test_path_str}\");
-    assert!(inne::compile_and_run(Some(root_path)));
+    assert!(inne::compile_and_run(Some(root_path)), \"Unexpected compilation or execution error\");
 }}
 "
         )?;

@@ -2,18 +2,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use inne::Error;
+use inne::{Error, ModuleId};
 use tower_lsp_server::ls_types::*;
 
 pub struct Project {
     pub files: Vec<File>,
-    pub root_path: PathBuf,
 }
 
 impl Project {
     /// Returns `None` on error.
-    pub fn new(root_path: PathBuf) -> Option<Self> {
-        let modules = match inne::project::read_files(&root_path) {
+    pub fn new(root_path: &Path) -> Option<Self> {
+        let modules = match inne::project::read_modules(&root_path) {
             Ok(modules) => modules,
             Err(err) => {
                 eprintln!("Failed to read project modules: {}", err);
@@ -21,13 +20,11 @@ impl Project {
             }
         };
         Some(Self {
-            // NOTE: should root_path be canonicalized?
-            root_path,
             files: modules
                 .into_iter()
-                .map(|(path, source)| {
+                .map(|(id, source)| {
                     // NOTE: unwrap can theoretically fail if the file was removed since the last check
-                    let uri = Uri::from_file_path(path).unwrap();
+                    let uri = Uri::from_file_path(id.as_path()).unwrap();
                     File::new(&uri, source, i32::MIN)
                 })
                 .collect::<Option<Vec<_>>>()?,
@@ -67,8 +64,8 @@ impl Project {
         eprintln!("Converting ASTs to HIR");
         let asts = asts
             .iter()
-            .map(|(file, ast)| (file.path.as_path(), file.source.as_str(), ast));
-        let hir = match inne::hir_from_ast_modules(asts, &self.root_path) {
+            .map(|(file, ast)| (&file.id, file.source.as_str(), ast));
+        let hir = match inne::hir_from_ast_modules(asts) {
             Ok(hir) => hir,
             Err(errors) => {
                 all_errors.extend(errors);
@@ -114,8 +111,8 @@ pub struct File {
     pub uri: Uri,
     /// Human-readable filename.
     pub name: String,
-    /// Absolute path of the file.
-    pub path: PathBuf,
+    /// Unique identifier of the module.
+    pub id: ModuleId,
     /// Source-code contained in the file.
     pub source: String,
     /// The last-computed list of semantic tokens and its `result_id`.
@@ -134,7 +131,7 @@ impl File {
             version: Some(version),
             uri: uri.clone(),
             name,
-            path,
+            id: ModuleId::new(path),
             source,
             semantic_tokens: HashMap::new(),
         })

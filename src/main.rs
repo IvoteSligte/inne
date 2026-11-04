@@ -33,12 +33,12 @@ fn main() {
 
     match (|| {
         let root_path = find_project_root()?;
-        let files = read_files_in_project(&root_path)?;
+        let files = read_modules_in_project(&root_path)?;
         let mut asts = Vec::new();
-        for (path, source) in &files {
-            let tokens = lex_file(path, source)?;
+        for (id, source) in &files {
+            let tokens = lex_module(id, source)?;
             if args.emit == Some(Ir::Tokens) {
-                eprintln!("Tokens for file '{}':", path.display());
+                eprintln!("Tokens for file '{}':", id);
                 for (token, span) in &tokens {
                     println!("{:<30} at {span}", format!("{:?}", token));
                 }
@@ -48,12 +48,12 @@ fn main() {
             if args.emit == Some(Ir::Ast) {
                 todo!();
             }
-            asts.push((path, source, ast));
+            asts.push((id, source, ast));
         }
         let ast_modules = asts
             .iter()
-            .map(|(path, source, ast)| (path.as_path(), source.as_str(), ast));
-        let hir = hir_from_asts(ast_modules, &root_path)?;
+            .map(|(id, source, ast)| (*id, source.as_str(), ast));
+        let hir = hir_from_asts(ast_modules)?;
         if args.emit == Some(Ir::Hir) {
             println!("{}", hir);
             return Some(());

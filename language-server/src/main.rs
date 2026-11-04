@@ -160,7 +160,7 @@ impl LanguageServer for Backend {
                 return;
             }
         }
-        if let Some(project) = Project::new(root_path) {
+        if let Some(project) = Project::new(&root_path) {
             eprintln!("Registered file: '{}'", uri.as_str());
             self.publish_diagnostics(&project).await;
             projects.push(project);

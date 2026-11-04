@@ -1,12 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
-    ffi::OsStr,
     num::IntErrorKind,
+    ops::Deref,
     path::Path,
 };
 
 use crate::{
-    Error, Errors, Span, Spanned, ast, usize_newtype, util::write_comma_separated, value::Int,
+    Error, Errors, Span, Spanned, ast, path::ModuleId, path::ModulePath, usize_newtype,
+    util::write_comma_separated, value::Int,
 };
 
 pub use crate::ast::{AssignOp, BinaryOp, Name, UnaryOp};
@@ -301,10 +302,9 @@ pub struct Loop<'a> {
 ///
 /// Paths should be valid UTF-8.
 pub fn hir_from_ast_modules<'ast, 'src: 'ast>(
-    modules: impl IntoIterator<Item = (&'src Path, &'src str, &'ast Ast<'src>)>,
-    root_path: &'src Path,
+    modules: impl IntoIterator<Item = (&'src ModuleId, &'src str, &'ast Ast<'src>)>,
 ) -> Result<Hir<'src>, Vec<Error<'src>>> {
-    Constructor::map_ast_project(modules, root_path)
+    Constructor::map_ast_project(modules)
 }
 
 /// Using a separate type instead of having the fields and methods directly on [Constructor]
@@ -325,7 +325,7 @@ impl<'a> VarList<'a> {
 }
 
 struct Module<'ast, 'src> {
-    path: &'src Path,
+    id: &'src ModuleId,
     source: &'src str,
     ast: &'ast Ast<'src>,
     is_root: bool,
@@ -334,9 +334,9 @@ struct Module<'ast, 'src> {
 }
 
 impl<'ast, 'src> Module<'ast, 'src> {
-    pub fn new(path: &'src Path, source: &'src str, ast: &'ast Ast<'src>, is_root: bool) -> Self {
+    pub fn new(id: &'src ModuleId, source: &'src str, ast: &'ast Ast<'src>, is_root: bool) -> Self {
         Self {
-            path,
+            id,
             source,
             ast,
             is_root,
@@ -366,26 +366,23 @@ struct Constructor<'ast, 'src> {
 
 impl<'ast, 'src> Constructor<'ast, 'src> {
     /// Assumes that `modules` contains only files with the `.inne` extension,
-    /// that `modules` contains exactly one module with the path `main.inne` (the root),
+    /// that `modules` contains exactly one module with the path `main` (the root),
     /// and that no two modules have the same path.
     ///
     /// Paths should be valid UTF-8.
     #[must_use]
     pub fn map_ast_project(
-        modules: impl IntoIterator<Item = (&'src Path, &'src str, &'ast Ast<'src>)>,
-        root_path: &'src Path,
+        modules: impl IntoIterator<Item = (&'src ModuleId, &'src str, &'ast Ast<'src>)>,
     ) -> Result<Hir<'src>, Vec<Error<'src>>> {
+        let root_module_id = ModuleId::root();
         let modules = modules
             .into_iter()
-            .map(|(path, source, ast)| {
-                debug_assert!(path.extension() == Some(OsStr::new("inne")));
-                Module::new(path, source, ast, path == root_path)
-            })
+            .map(|(path, source, ast)| Module::new(path, source, ast, *path == root_module_id))
             .collect::<Vec<_>>();
         debug_assert!(
             modules
                 .iter()
-                .map(|module| module.path)
+                .map(|module| module.id)
                 .collect::<HashSet<_>>()
                 .len()
                 == modules.len(),
@@ -394,12 +391,6 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         debug_assert!(
             modules.iter().filter(|module| module.is_root).count() == 1,
             "Exactly one root module must exist."
-        );
-        debug_assert!(
-            modules
-                .iter()
-                .all(|module| module.path.as_os_str().to_str().is_some()),
-            "All module paths must be valid UTF-8."
         );
         let mut _self = Self {
             vars: VarList(Vec::new()),
@@ -413,7 +404,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
             scopes: Vec::new(),
         };
         for i in 0.._self.modules.len() {
-            _self.add_module_defs(i, root_path);
+            _self.add_module_defs(i);
         }
         let mut root_stmts = Vec::new();
         for i in 0.._self.modules.len() {
@@ -435,13 +426,13 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
 
     /// Registers function and type definitions for a module.
     /// This should be called before `Self::map_module_stmts`.
-    fn add_module_defs(&mut self, index: usize, root_path: &Path) {
+    fn add_module_defs(&mut self, index: usize) {
         debug_assert!(self.func_map.is_empty());
         debug_assert!(self.type_map.is_empty());
         debug_assert!(self.scopes.is_empty());
         let Module {
+            id: module_id,
             ast,
-            path,
             source,
             is_root,
             ..
@@ -475,8 +466,8 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                 _ if !is_root => {
                     // TODO: better error message and span
                     self.errors.add(
-                        format!("In files other than the project root ('{}'), only function, struct, and enum declarations are allowed.", root_path.display()),
-                        Span::new(0, 0, path.as_os_str().to_str().unwrap(), source),
+                        format!("In files other than the project root ('main.inne'), only function, struct, and enum declarations are allowed."),
+                        Span::new(0, 0, module_id.as_path_str(), source),
                     );
                 }
                 _ => {}
@@ -496,9 +487,9 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         let Module { ast, .. } = self.modules[index];
         std::mem::swap(&mut self.modules[index].func_map, &mut self.func_map);
         std::mem::swap(&mut self.modules[index].type_map, &mut self.type_map);
-        // NOTE: when nested folders are supported, then there are two paths for submodules of the current module:
-        //       'parent/' and 'parent/module/'
-        let current_path = self.modules[index].path.parent().unwrap().to_owned();
+        // NOTE: once nested folders are supported, then there will be two paths
+        //       for submodules of the current module: 'parent/' and 'parent/module/'
+        let current_path = self.modules[index].id.parent().to_owned();
 
         for stmt in &ast.stmts {
             let ast::Stmt::Import(ast::Import { path }) = stmt else {
@@ -514,7 +505,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
             }
             let mut search_path = current_path.clone();
             for (segment, _) in &path.0[0..path.0.len() - 1] {
-                search_path = search_path.join(segment);
+                search_path.push(ModulePath::new(Path::new(segment)));
             }
             let item_name = path.0.last().unwrap();
             match self.find_module(&search_path) {
@@ -530,21 +521,17 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                     self.errors.add(
                         format!(
                             "No function or type with the name '{}' found in '{}'",
-                            item_name.0,
-                            module.path.display()
+                            item_name.0, module.id
                         ),
                         item_name.1,
                     );
                     // TODO: register the item in an 'unknown_set' and use that to suppress errors related to unknown definitions
                     continue;
                 }
-                Err(invalid_path) => {
-                    // TODO: tighter span, print module::submodule style path instead.
+                Err(invalid_module_id) => {
+                    // TODO: tighter span (only around the failing module segment)
                     self.errors.add(
-                        format!(
-                            "This path expects a module at '{}', which does not exist.",
-                            invalid_path.display(),
-                        ),
+                        format!("Could not find a module named '{}'.", invalid_module_id),
                         path.1,
                     );
                     continue;
@@ -1158,22 +1145,20 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
     }
 
     #[must_use]
-    fn find_module<'m, 'p>(&'m self, path: &'p Path) -> Result<&'m Module<'ast, 'src>, &'p Path> {
-        debug_assert!(
-            path.components().next().is_some(),
-            "Path should not be empty"
-        );
-        let module_path = path.with_extension(".inne");
-        match self
-            .modules
-            .iter()
-            .find(|module| module.path.starts_with(&module_path))
-        {
+    fn find_module<'m, 'p>(
+        &'m self,
+        path: &'p ModulePath,
+    ) -> Result<&'m Module<'ast, 'src>, &'p ModulePath> {
+        debug_assert!(path.iter().next().is_some(), "Path should not be empty");
+        match self.modules.iter().find(|module| module.id.deref() == path) {
             Some(module) => Ok(module),
             None => {
                 let Some(parent) = path.parent() else {
                     return Err(path);
                 };
+                if parent == ModulePath::new(Path::new("")) {
+                    return Err(path);
+                }
                 match self.find_module(parent) {
                     Ok(_) => Err(path),
                     Err(parent_path) => Err(parent_path),
