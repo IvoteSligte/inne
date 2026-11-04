@@ -38,7 +38,7 @@ UTF-8 strings.
 
 Example: `"abcd\n\t\"Hello, World!""`
 
-These are essentially Python format strings (f-strings), but without the leading `f`.
+These are essentially Python format strings (f-strings), but without the leading `f`
 
 Example: `Hello, {name}!`
 
@@ -48,9 +48,11 @@ Example: `"This is a brace: {{"`
 
 ### Characters
 
-UTF-32 characters.
+UTF-32 characters. The following escape codes are supported: `\" \' \\ \n \r \t`
 
-`'d'` `'\n'`
+Example: `'d'`
+
+Example: `'\n'`
 
 ### Ranges
 

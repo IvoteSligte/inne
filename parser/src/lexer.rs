@@ -224,11 +224,12 @@ impl<'lexer, 'src> Cursor<'lexer, 'src> {
             return Some('?');
         };
         match escaped {
-            b'\\' | b'"' | b'n' | b'r' | b't' => {
+            b'\\' | b'"' | b'\'' | b'n' | b'r' | b't' => {
                 self.skip(2);
                 Some(match escaped {
                     b'\\' => '\\',
                     b'"' => '"',
+                    b'\'' => '\'',
                     b'n' => '\n',
                     b'r' => '\r',
                     b't' => '\t',

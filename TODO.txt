@@ -25,3 +25,4 @@ tooling:
 - docstrings
   - LSP: show docs on hover
 - standard library
+- improve tests by adding expected output
