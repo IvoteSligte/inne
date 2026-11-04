@@ -1,6 +1,6 @@
 language:
 - methods                       // low priority
-- imports
+- library imports
 - generics
   - struct generics
   - enum generics
