@@ -30,7 +30,7 @@ impl Project {
                     });
                     File::new(&uri, id, source, i32::MIN)
                 })
-                .collect::<Option<Vec<_>>>()?,
+                .collect::<Vec<_>>(),
         })
     }
 
@@ -123,17 +123,17 @@ pub struct File {
 }
 
 impl File {
-    pub fn new(uri: &Uri, id: ModuleId, source: impl ToString, version: i32) -> Option<Self> {
+    pub fn new(uri: &Uri, id: ModuleId, source: impl ToString, version: i32) -> Self {
         let source = source.to_string();
         let name = uri.as_str().to_string(); // TODO: better human-readable name
-        Some(Self {
+        Self {
             version: Some(version),
             uri: uri.clone(),
             name,
             id,
             source,
             semantic_tokens: HashMap::new(),
-        })
+        }
     }
 }
 

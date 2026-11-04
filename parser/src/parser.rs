@@ -2,6 +2,7 @@ use crate::{Span, Spanned, SpannedToken, Token, ast::*};
 
 // TODO: error recovery
 // TODO: list/map/struct/enum pattern matching in variable declarations
+// TODO: prevent duplicate error messages
 
 pub type ParseError<'a> = (String, Span<'a>);
 
@@ -509,9 +510,24 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     fn index_or_member_or_atom(&mut self) -> Option<SpannedExpr<'src>> {
         let mut left = self.atom()?;
         loop {
-            if let Some((index, _)) =
-                self.atomic_spanned(|s| s.delimited_by(BRACKETS, Parser::expr).flatten())
-            {
+            if let Some((index, _)) = self.atomic_spanned(|s| {
+                s.delimited_by(BRACKETS, |s| {
+                    let expr = s.expr()?;
+                    if s.take_if_eq(Token::DotDot).is_none() {
+                        return Some(expr);
+                    }
+                    let end = s.must("range end value", |s| s.expr())?;
+                    let span = expr.1.union(end.1);
+                    Some((
+                        Expr::Range(Range {
+                            start: Box::new(expr),
+                            end: Box::new(end),
+                        }),
+                        span,
+                    ))
+                })
+                .flatten()
+            }) {
                 let span = left.1.union(index.1);
                 left = (
                     Expr::Index(Index {

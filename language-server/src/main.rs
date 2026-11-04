@@ -369,7 +369,10 @@ impl Backend {
         tokens: Vec<SemanticToken>,
     ) {
         for project in self.projects.write().await.iter_mut() {
-            let map = &mut project.get_file_mut(file_uri).unwrap().semantic_tokens;
+            let Some(file) = project.get_file_mut(file_uri) else {
+                continue;
+            };
+            let map = &mut file.semantic_tokens;
             if map.len() > MAX_SEMANTIC_TOKENS_LISTS {
                 let (oldest_key, _) = map
                     .iter()
