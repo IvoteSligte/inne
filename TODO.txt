@@ -15,6 +15,10 @@ language:
 - format strings
 - allow global code that does not depend on code from other files in the same project (to prevent cycles) // low priority
 - panic, assert                 // low priority
+- builtin list/map functions
+  - contains
+  - list push
+    - this requires changing slicing if `array[0..1].push(item)` should be valid
 
 tooling:
 - autocomplete
