@@ -409,7 +409,7 @@ impl<'src> Lexer<'src> {
         let ends_with_apostrophe = cursor.take_if(|c| c == '\'');
         if !ends_with_apostrophe {
             cursor.push_error(
-                "found an unfinished character, add an apostrophe (') to complete it",
+                "Found an unfinished character, add an apostrophe (') to complete it",
                 cursor.start,
                 cursor.end,
             );
@@ -433,7 +433,7 @@ impl<'src> Lexer<'src> {
                 break true;
             } else if cursor.take().is_none() {
                 cursor.push_error(
-                    "found an unfinished string, add a quote '\"' to complete it",
+                    "Found an unfinished string, add a quote '\"' to complete it",
                     cursor.start,
                     cursor.end,
                 );

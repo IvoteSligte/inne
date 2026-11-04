@@ -81,7 +81,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         let maybe = self.atomic(func);
         if maybe.is_none() {
             let span = self.src[self.end].1;
-            self.errors.push((format!("failed to parse {label}"), span))
+            self.errors.push((format!("Failed to parse {label}"), span))
         }
         maybe
     }
@@ -91,7 +91,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         if maybe.is_none() {
             let span = self.src[self.end].1;
             self.errors
-                .push((format!("expected token '{token}'"), span));
+                .push((format!("Expected token '{token}'"), span));
         }
         maybe
     }
@@ -621,7 +621,7 @@ pub fn parse<'src>(source: &[SpannedToken<'src>]) -> (Ast<'src>, Vec<ParseError<
     let end = parser.end;
     if end < source.len() {
         errors.push((
-            format!("expected function, struct, variable declaration, import or expression"),
+            format!("Expected function, struct, variable declaration, import or expression"),
             source[end].1,
         ));
     }
