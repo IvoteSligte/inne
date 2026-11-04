@@ -31,7 +31,7 @@ impl<'a> Error<'a> {
         self.span.source
     }
 
-    pub fn eprint(&self, stage: &str) {
+    pub fn eprint(&self) {
         let Span {
             filename, source, ..
         } = self.span;
@@ -47,7 +47,7 @@ impl<'a> Error<'a> {
         };
         Report::build(ReportKind::Error, (filename, self.span.into_range()))
             .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
-            .with_message(format!("during {stage}, {}", self.message))
+            .with_message(&self.message)
             .with_label(
                 Label::new((filename, self.span.into_range()))
                     .with_message(&self.message)
