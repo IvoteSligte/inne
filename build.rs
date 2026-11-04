@@ -1,13 +1,18 @@
 use std::io::Write;
 use std::path::Path;
 
-// Generates a test case for each .inne file in ./test-cases/
-fn main() -> std::io::Result<()> {
+fn create_tests_for_directory(
+    dir_name: &str,
+    output_file_name: &str,
+    assertion: &str,
+) -> std::io::Result<()> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let out_dir = std::env::var("OUT_DIR").unwrap();
-    let cases_dir = Path::new(&manifest_dir).join("test-cases");
-    println!("cargo::rerun-if-changed={}", cases_dir.display());
-
+    let cases_dir = Path::new(&manifest_dir).join(dir_name);
+    println!(
+        "cargo::rerun-if-changed={}",
+        cases_dir.as_os_str().to_str().unwrap()
+    );
     let mut test_cases = std::fs::read_dir(&cases_dir)?
         .map(|entry| {
             entry
@@ -17,7 +22,7 @@ fn main() -> std::io::Result<()> {
         .collect::<Vec<_>>();
     test_cases.sort();
 
-    let mut output_file = std::fs::File::create(Path::new(&out_dir).join("test_cases.rs"))?;
+    let mut output_file = std::fs::File::create(Path::new(&out_dir).join(output_file_name))?;
     for test_dir_path in test_cases {
         assert!(
             test_dir_path.is_dir(),
@@ -44,11 +49,26 @@ fn main() -> std::io::Result<()> {
             "#[test]
 fn {test_name}() {{
     let root_path = std::path::PathBuf::from(\"{test_path_str}\");
-    assert!(inne::compile_and_run(Some(root_path)), \"Unexpected compilation or execution error\");
+    let success = inne::compile_and_run(Some(root_path));
+    {assertion}
 }}
 "
         )?;
     }
+    Ok(())
+}
 
+// Generates a test case for each .inne file in ./test-cases/
+fn main() -> std::io::Result<()> {
+    create_tests_for_directory(
+        "test-cases",
+        "test_cases.rs",
+        "assert!(success, \"Unexpected compilation or execution error\");",
+    )?;
+    create_tests_for_directory(
+        "test-failure-cases",
+        "test_failure_cases.rs",
+        "assert!(!success, \"Expected compilation or execution error\");",
+    )?;
     Ok(())
 }
