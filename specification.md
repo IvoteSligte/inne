@@ -1,6 +1,6 @@
 # Inne Language Specification
 
-Like Python, Inne allows top-level code. Global variables are accessible from inside functions.
+Like Python, Inne allows top-level code.
 
 The syntax is roughly based on Rust's. Semicolons are optional, but recommended. By convention, variables and functions are written in `snake_case`, and user-defined types in `PascalCase`.
 
@@ -121,6 +121,8 @@ Example: `Name::Struct(5 + 6)`
 ## Functions
 
 Functions may not be defined inside other functions.
+
+Global variables are not accessible from inside functions.
 
 Functions are not first-class, so they cannot be passed to other functions.
 

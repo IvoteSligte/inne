@@ -1,4 +1,4 @@
-// Functions can access and update top-level variables.
+// Should fail: Functions cannot access top-level variables.
 var counter = 0;
 
 func increment() {
