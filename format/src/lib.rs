@@ -180,7 +180,6 @@ impl Format for Stmt<'_> {
                 match &value.0 {
                     Some((value, _)) => {
                         f.put_keyword(Token::Return)?;
-                        f.put_space()?;
                         value.fmt(f)?;
                         f.put_semi()
                     }
@@ -195,7 +194,7 @@ impl Format for Stmt<'_> {
                 f.put_space()?;
                 for (i, segment) in import.path.0.iter().enumerate() {
                     if i > 0 {
-                        f.put_comma()?;
+                        f.put(Token::ColonColon)?;
                         f.put_space()?;
                     }
                     segment.fmt(f)?;

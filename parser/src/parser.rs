@@ -1,8 +1,7 @@
 use crate::{Span, Spanned, SpannedToken, Token, ast::*};
 
-// TODO: error recovery
+// TODO: error recovery and consequently prevent duplicate error messages
 // TODO: list/map/struct/enum pattern matching in variable declarations
-// TODO: prevent duplicate error messages
 
 pub type ParseError<'a> = (String, Span<'a>);
 
@@ -109,6 +108,9 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         &mut self,
         pred: impl Fn(Token<'src>) -> Option<T>,
     ) -> Option<Spanned<'src, T>> {
+        if !self.errors.is_empty() {
+            return None;
+        }
         if let Some((token, span)) = self.peek()
             && let Some(value) = pred(token)
         {
@@ -619,7 +621,7 @@ pub fn parse<'src>(source: &[SpannedToken<'src>]) -> (Ast<'src>, Vec<ParseError<
     // This check allows us to assume that source[0] is valid.
     let stmts = parser.repeated(Parser::stmt);
     let end = parser.end;
-    if end < source.len() {
+    if end < source.len() && errors.is_empty() {
         errors.push((
             format!("Expected function, struct, variable declaration, import or expression"),
             source[end].1,
