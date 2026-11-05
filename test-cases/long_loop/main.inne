@@ -1,12 +1,12 @@
 // Infinite loop.
 
-var i = 0;
+var i = 0
 loop {
-    print(i);
-    i += 1;
+    print(i)
+    i += 1
 
     if i > 1000 {
-        break;
+        break
     }
 }
 

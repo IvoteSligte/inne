@@ -73,6 +73,8 @@ pub enum Token<'src> {
     At,
     Hashtag,
     Dollar,
+    // Special
+    Newline,
 }
 
 impl Token<'_> {
@@ -200,6 +202,7 @@ impl std::fmt::Display for Token<'_> {
             At => "@",
             Hashtag => "#",
             Dollar => "$",
+            Newline => "\\n",
         })
     }
 }
@@ -535,9 +538,16 @@ impl<'src> Lexer<'src> {
     }
 
     fn inne_whitespace(&mut self) {
-        rule!(self, cursor, if cursor.take_while(|c| c.is_ascii_whitespace()), {
+        rule!(self, cursor, if cursor.take_while(|c| c.is_ascii_whitespace() && c != '\n'), {
             cursor.commit();
         });
+    }
+
+    fn inne_newline(&mut self) -> bool {
+        rule!(self, cursor, if cursor.take_if(|c| c == '\n'), {
+            let (_, span) = cursor.commit();
+            self.tokens.push((Token::Newline, span));
+        })
     }
 
     /// Returns `false` at end-of-file.
@@ -549,7 +559,8 @@ impl<'src> Lexer<'src> {
 
         self.inne_whitespace(); // Skip whitespace
         while self.start < self.src.len() {
-            if self.inne_comment()
+            if self.inne_newline()
+                || self.inne_comment()
                 || self.inne_symbol()
                 || self.inne_operator()
                 || self.inne_keyword()
@@ -574,6 +585,46 @@ impl<'src> Lexer<'src> {
     }
 }
 
+fn filter_newlines<'src>(tokens: &mut Vec<SpannedToken<'src>>) {
+    let mut dst = 0;
+    for src in 0..tokens.len() {
+        let (token, _) = tokens[src];
+        if token != Token::Newline {
+            tokens[dst] = tokens[src];
+            dst += 1;
+            continue;
+        }
+        if src == 0 {
+            continue;
+        }
+        let (prev, _) = tokens[src - 1];
+        if matches!(
+            prev,
+            RBrace
+                | RParen
+                | RBracket
+                | Return
+                | Continue
+                | Break
+                | Ident(_)
+                | Int(_)
+                | Bool(_)
+                | String(_)
+                | Char(_)
+        ) {
+            tokens[dst] = tokens[src];
+            dst += 1;
+            continue;
+        }
+        if src + 1 < tokens.len() && tokens[src + 1].0.is_operator() {
+            tokens[dst] = tokens[src];
+            dst += 1;
+            continue;
+        }
+    }
+    tokens.truncate(dst);
+}
+
 /// Note that this will still produce a list of tokens even when errors have been encountered.
 pub fn lex<'src>(
     src: &'src str,
@@ -588,5 +639,6 @@ pub fn lex<'src>(
     };
     while lexer.inne_token() {}
     debug_assert_eq!(lexer.start, src.len());
+    filter_newlines(&mut lexer.tokens);
     (lexer.tokens, lexer.errors)
 }

@@ -1,11 +1,11 @@
 // Should fail: Functions cannot access top-level variables.
-var counter = 0;
+var counter = 0
 
 func increment() {
-    counter += 1;
-    return;
+    counter += 1
+    return
 }
 
-increment();
-increment();
-print(counter);
+increment()
+increment()
+print(counter)

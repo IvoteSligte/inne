@@ -1,9 +1,9 @@
 
-var x = 0;
-x += 1;
+var x = 0
+x += 1
 
 func hello_world() {
-    print("Hello, World!");
+    print("Hello, World!")
 }
 
 hello_world()

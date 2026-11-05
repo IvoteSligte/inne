@@ -395,8 +395,11 @@ impl<'parent, 'src> Parser<'parent, 'src> {
                 let (_, span) = self.take_if_eq(Token::Break)?;
                 Some(Stmt::Break(span))
             })
-            .inspect(|_| {
-                let _ = self.take_if_eq(Token::Semi);
+            .and_then(|stmt| {
+                if self.end < self.src.len() {
+                    self.take_if_eq(Token::Newline)?;
+                }
+                Some(stmt)
             })
     }
 

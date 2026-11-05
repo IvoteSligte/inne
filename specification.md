@@ -2,21 +2,21 @@
 
 Like Python, Inne allows top-level code.
 
-The syntax is roughly based on Rust's. Semicolons are optional, but recommended. By convention, variables and functions are written in `snake_case`, and user-defined types in `PascalCase`.
+The syntax is roughly based on Rust's. Statements are newline-delimited as in Go. By convention, variables and functions are written in `snake_case`, and user-defined types in `PascalCase`.
 
 Example:
 
 ```
-var counter = 0;
+var counter = 0
 
 func greet(name: string) {
     // Increment the global counter.
-    counter += 1;
+    counter += 1
     
-    print("Hello, {name}!");
+    print("Hello, {name}!")
 }
 
-greet("User");
+greet("User")
 
 ```
 
@@ -152,7 +152,7 @@ Arithmetic operators: `+`, `-`, `*`, `/`
 
 ## Variables
 
-A variable definition is written as `var name = value;`.
+A variable definition is written as `var name = value`.
 
 Tuples, lists, and maps can be destructured as in Python.
 
@@ -164,11 +164,11 @@ Variables and indexed lists/maps can be used as assignment target.
 
 The target's type must be the same as the value's type. There is no type coersion.
 
-Example: `variable = value;` or `list[index] = value;` or `map[key] = value;`
+Example: `variable = value` or `list[index] = value` or `map[key] = value`
 
 All binary operators, except `and`, `or`, and `not`, can be used in an assignment.
 
-Example: `number += value;` or `string += value;` or `number /= value;`
+Example: `number += value` or `string += value` or `number /= value`
 
 ## Control-flow
 
@@ -208,11 +208,11 @@ The compiler first searches for dependencies in the project specification with t
 Failing to find a dependency, it looks for a file in the current directory.  
 Following this, it looks for a file in a folder with the same name as the current file (minus the file extension). This is called a submodule.
 
-Example: `import file;`
+Example: `import file`
 
 Submodules can be accessed with `::`
 
-Example: `import file::submodule::subsubmodule;`
+Example: `import file::submodule::subsubmodule`
 
 ## Projects
 

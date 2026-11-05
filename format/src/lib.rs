@@ -78,10 +78,6 @@ impl Writer<'_> {
         self.write(Token::RBrace)
     }
 
-    pub fn put_semi(&mut self) -> Result {
-        self.put(Token::Semi)
-    }
-
     pub fn put_comma(&mut self) -> Result {
         self.put(Token::Comma)
     }
@@ -165,27 +161,22 @@ impl Format for Stmt<'_> {
             While,
             Loop;
             Expr(expr) => {
-                expr.fmt(f)?;
-                f.put_semi()
+                expr.fmt(f)
             },
             Break(_span) => {
-                f.put(Token::Break)?;
-                f.put_semi()
+                f.put(Token::Break)
             },
             Continue(_span) => {
-                f.put(Token::Continue)?;
-                f.put_semi()
+                f.put(Token::Continue)
             },
             Return(value) => {
                 match &value.0 {
                     Some((value, _)) => {
                         f.put_keyword(Token::Return)?;
-                        value.fmt(f)?;
-                        f.put_semi()
+                        value.fmt(f)
                     }
                     None => {
-                        f.put(Token::Return)?;
-                        f.put_semi()
+                        f.put(Token::Return)
                     }
                 }
             },
@@ -199,7 +190,7 @@ impl Format for Stmt<'_> {
                     }
                     segment.fmt(f)?;
                 }
-                f.put_semi()
+                Ok(())
             }
         )
     }
@@ -326,8 +317,7 @@ impl Format for VarDecl<'_> {
         f.put_space()?;
         f.put(Token::Eq)?;
         f.put_space()?;
-        self.value.fmt(f)?;
-        f.put_semi()
+        self.value.fmt(f)
     }
 }
 
@@ -596,8 +586,7 @@ impl Format for Assign<'_> {
         f.put_space()?;
         self.op.fmt(f)?;
         f.put_space()?;
-        self.value.fmt(f)?;
-        f.put_semi()
+        self.value.fmt(f)
     }
 }
 

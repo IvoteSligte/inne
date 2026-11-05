@@ -4,5 +4,5 @@ struct Point {
     y: int,
 }
 
-var point = Point::{ x: 3, y: 4 };
-print(point.x, point.y);
+var point = Point::{ x: 3, y: 4 }
+print(point.x, point.y)

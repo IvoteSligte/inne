@@ -1,5 +1,5 @@
 // Import test.
 // Requires the sibling module helper.inne
 
-import helper::function;
-print(function());
+import helper::function
+print(function())

@@ -4,7 +4,7 @@ enum Result {
     Value(int)
 }
 
-var result = Result::Value(23);
+var result = Result::Value(23)
 if var Result::Value(number) = result {
-    print(number);
+    print(number)
 }

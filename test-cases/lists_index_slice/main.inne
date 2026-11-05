@@ -1,8 +1,8 @@
 // Typed empty lists, indexing, slicing, and indexed assignment.
 
-var empty = [<int>];
-var numbers = [10, 20, 30, 40];
-print(numbers[0]);
-print(numbers[1..3]);
-numbers[2] = 99;
-print(numbers[2]);
+var empty = [<int>]
+var numbers = [10, 20, 30, 40]
+print(numbers[0])
+print(numbers[1..3])
+numbers[2] = 99
+print(numbers[2])
