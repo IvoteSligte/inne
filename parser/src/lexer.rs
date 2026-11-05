@@ -67,7 +67,6 @@ pub enum Token<'src> {
     DotDot,
     Comma,
     Arrow,
-    Semi,
     Colon,
     ColonColon,
     At,
@@ -196,7 +195,6 @@ impl std::fmt::Display for Token<'_> {
             DotDot => "..",
             Comma => ",",
             Arrow => "->",
-            Semi => ";",
             Colon => ":",
             ColonColon => "::",
             At => "@",
@@ -452,7 +450,6 @@ impl<'src> Lexer<'src> {
             || self.symbol(".", Dot)
             || self.symbol(",", Comma)
             || self.symbol("->", Arrow)
-            || self.symbol(";", Semi)
             || self.symbol("::", ColonColon)
             || self.symbol(":", Colon)
             || self.symbol("@", At)
@@ -571,6 +568,12 @@ impl<'src> Lexer<'src> {
             {
                 success = true;
                 break;
+            }
+            if rule!(self, cursor, if cursor.take_prefix(";"), {
+                let (_, span) = cursor.commit();
+                self.errors.push(("Semicolons are not allowed", span));
+            }) {
+                continue;
             }
             self.start += 1;
             end_invalid += 1;

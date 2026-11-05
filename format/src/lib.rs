@@ -35,10 +35,7 @@ impl Writer<'_> {
 
     fn skip_to(&mut self, token: Token<'_>) -> Result {
         // Some tokens are not guaranteed to appear in the input, so we ignore them.
-        if matches!(
-            token,
-            Token::Semi | Token::Comma | Token::Arrow | Token::Colon
-        ) {
+        if matches!(token, Token::Comma | Token::Arrow | Token::Colon) {
             return Ok(());
         }
         let mid = self
