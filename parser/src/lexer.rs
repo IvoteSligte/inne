@@ -32,9 +32,27 @@ pub enum Token<'src> {
     Bool(bool),
     Char(char),
     String(&'src str),
-    // TODO: change Op("<") and Op(">") to explicit Delimiter tokens
-    Op(&'src str),
     Comment(&'src str),
+    // Unary and Binary Operators
+    Plus,
+    Minus, // Unary+Binary
+    Star,
+    Slash,
+    Percent,
+    LAngleEq,
+    RAngleEq,
+    EqEq,
+    BangEq,
+    Not, // Unary
+    And,
+    Or,
+    // Assignment Operators
+    Eq,
+    PlusEq,
+    MinusEq,
+    StarEq,
+    SlashEq,
+    PercentEq,
     // Delimiters
     LBrace,
     RBrace,
@@ -42,6 +60,8 @@ pub enum Token<'src> {
     RParen,
     LBracket,
     RBracket,
+    LAngle, // Also an operator
+    RAngle, // Also an operator
     // Punctuation
     Dot,
     DotDot,
@@ -76,6 +96,41 @@ impl Token<'_> {
                 | Ref
                 | Copy
                 | ShallowCopy
+                | And
+                | Or
+                | Not
+        )
+    }
+
+    pub fn is_operator(self) -> bool {
+        matches!(
+            self,
+            Plus | Minus
+                | Star
+                | Slash
+                | Percent
+                | LAngleEq
+                | RAngleEq
+                | EqEq
+                | BangEq
+                | Not
+                | And
+                | Or
+                | Eq
+                | PlusEq
+                | MinusEq
+                | StarEq
+                | SlashEq
+                | PercentEq
+                | LAngle
+                | RAngle
+        )
+    }
+
+    pub fn is_delimiter(self) -> bool {
+        matches!(
+            self,
+            LBrace | RBrace | LParen | RParen | LBracket | RBracket | LAngle | RAngle
         )
     }
 }
@@ -108,14 +163,33 @@ impl std::fmt::Display for Token<'_> {
             Char(char) => return write!(f, "{char:?}"),
             // NOTE: does this escape backslashes? since the input may contain \n, we should not escape backslashes.
             String(string) => return write!(f, "{string:?}"),
-            Op(op) => op,
             Comment(comment) => return write!(f, "{comment}"),
+            Plus => "+",
+            Minus => "-",
+            Star => "*",
+            Slash => "/",
+            Percent => "%",
+            LAngleEq => "<=",
+            RAngleEq => ">=",
+            EqEq => "==",
+            BangEq => "!=",
+            Not => "!",
+            And => "&&",
+            Or => "||",
+            Eq => "=",
+            PlusEq => "+=",
+            MinusEq => "-=",
+            StarEq => "*=",
+            SlashEq => "/=",
+            PercentEq => "%=",
             LBrace => "{",
             RBrace => "}",
             LParen => "(",
             RParen => ")",
             LBracket => "[",
             RBracket => "]",
+            LAngle => "<",
+            RAngle => ">",
             Dot => ".",
             DotDot => "..",
             Comma => ",",
@@ -319,26 +393,26 @@ impl<'src> Lexer<'src> {
     // --- Inne-specific lexing functions ---
 
     fn inne_operator(&mut self) -> bool {
-        self.keyword("and", Op("and"))
-            || self.keyword("or", Op("or"))
-            || self.keyword("not", Op("not"))
-            || self.symbol("==", Op("=="))
-            || self.symbol("!=", Op("!="))
-            || self.symbol("<=", Op("<="))
-            || self.symbol(">=", Op(">="))
-            || self.symbol("+=", Op("+="))
-            || self.symbol("-=", Op("-="))
-            || self.symbol("*=", Op("*="))
-            || self.symbol("/=", Op("/="))
-            || self.symbol("%=", Op("%="))
-            || self.symbol("=", Op("="))
-            || self.symbol("%", Op("%"))
-            || self.symbol("*", Op("*"))
-            || self.symbol("/", Op("/"))
-            || self.symbol("+", Op("+"))
-            || self.symbol("-", Op("-"))
-            || self.symbol("<", Op("<"))
-            || self.symbol(">", Op(">"))
+        self.keyword("and", And)
+            || self.keyword("or", Or)
+            || self.keyword("not", Not)
+            || self.symbol("==", EqEq)
+            || self.symbol("!=", BangEq)
+            || self.symbol("<=", LAngleEq)
+            || self.symbol(">=", RAngleEq)
+            || self.symbol("+=", PlusEq)
+            || self.symbol("-=", MinusEq)
+            || self.symbol("*=", StarEq)
+            || self.symbol("/=", SlashEq)
+            || self.symbol("%=", PercentEq)
+            || self.symbol("=", Eq)
+            || self.symbol("%", Percent)
+            || self.symbol("*", Star)
+            || self.symbol("/", Slash)
+            || self.symbol("+", Plus)
+            || self.symbol("-", Minus)
+            || self.symbol("<", LAngle)
+            || self.symbol(">", RAngle)
     }
 
     fn inne_keyword(&mut self) -> bool {

@@ -8,7 +8,7 @@ pub type ParseError<'a> = (String, Span<'a>);
 const PARENS: (Token<'static>, Token<'static>) = (Token::LParen, Token::RParen);
 const BRACKETS: (Token<'static>, Token<'static>) = (Token::LBracket, Token::RBracket);
 const BRACES: (Token<'static>, Token<'static>) = (Token::LBrace, Token::RBrace);
-const ANGLES: (Token<'static>, Token<'static>) = (Token::Op("<"), Token::Op(">"));
+const ANGLES: (Token<'static>, Token<'static>) = (Token::LAngle, Token::RAngle);
 
 struct Parser<'parent, 'src> {
     src: &'parent [SpannedToken<'src>],
@@ -50,14 +50,11 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     /// This also parses single instances of `func`.
     fn parse_binary(
         &mut self,
-        op_map: impl Fn(&str) -> Option<BinaryOp>,
+        op_map: impl Fn(Token) -> Option<BinaryOp>,
         func: impl Fn(&mut Parser<'_, 'src>) -> Option<SpannedExpr<'src>>,
     ) -> Option<SpannedExpr<'src>> {
         let mut left = func(self)?;
-        while let Some(op) = self.take_if_map(|t| match t {
-            Token::Op(op) => op_map(op),
-            _ => None,
-        }) {
+        while let Some(op) = self.take_if_map(&op_map) {
             let right = func(self)?;
             let span = left.1.union(right.1);
             left = (
@@ -283,7 +280,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     fn var_decl(&mut self) -> Option<Stmt<'src>> {
         self.take_if_eq(Token::Var)?;
         let name = self.must("variable name", |s| s.ident())?;
-        self.must("=", |s| s.take_if_eq(Token::Op("=")))?;
+        self.must("=", |s| s.take_if_eq(Token::Eq))?;
         let value = self.must("value", |s| s.expr())?;
         Some(Stmt::VarDecl(VarDecl { name, value }))
     }
@@ -358,12 +355,12 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         self.atomic(|s| {
             let target = s.expr()?;
             let op = s.take_if_map(|token| match token {
-                Token::Op("=") => Some(AssignOp::Assign),
-                Token::Op("+=") => Some(AssignOp::Add),
-                Token::Op("-=") => Some(AssignOp::Sub),
-                Token::Op("*=") => Some(AssignOp::Mul),
-                Token::Op("/=") => Some(AssignOp::Div),
-                Token::Op("%=") => Some(AssignOp::Mod),
+                Token::Eq => Some(AssignOp::Assign),
+                Token::PlusEq => Some(AssignOp::Add),
+                Token::MinusEq => Some(AssignOp::Sub),
+                Token::StarEq => Some(AssignOp::Mul),
+                Token::SlashEq => Some(AssignOp::Div),
+                Token::PercentEq => Some(AssignOp::Mod),
                 _ => None,
             })?;
             let value = s.must("value", |s| s.expr())?;
@@ -561,8 +558,8 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     fn unary(&mut self) -> Option<SpannedExpr<'src>> {
         self.atomic_spanned(|s| {
             let op = s.take_if_map(|t| match t {
-                Token::Op("-") => Some(UnaryOp::Neg),
-                Token::Op("not") => Some(UnaryOp::Not),
+                Token::Minus => Some(UnaryOp::Neg),
+                Token::Not => Some(UnaryOp::Not),
                 _ => None,
             })?;
             let expr = Box::new(s.must("value", |s| s.index_or_member_or_atom())?);
@@ -576,11 +573,11 @@ impl<'parent, 'src> Parser<'parent, 'src> {
 
     fn binary_or_unary_or_index_or_member_or_atom(&mut self) -> Option<SpannedExpr<'src>> {
         macro_rules! parser {
-            ($name:ident, match { $($lit:literal => $op:ident),*$(,)? }, $prev:expr$(,)?) => {
+            ($name:ident, match { $($tok:ident => $op:ident),*$(,)? }, $prev:expr$(,)?) => {
                 fn $name<'src>(s: &mut Parser<'_, 'src>) -> Option<SpannedExpr<'src>> {
                     s.parse_binary(
                         |op| match op {
-                            $($lit => Some(BinaryOp::$op),)*
+                            $(Token::$tok => Some(BinaryOp::$op),)*
                             _ => None,
                         },
                         $prev,
@@ -590,14 +587,14 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         }
         parser!(
             product,
-            match { "*" => Mul, "/" => Div, "%" => Mod },
+            match { Star => Mul, Slash => Div, Percent => Mod },
             |s| s.unary_or_index_or_member_or_atom(),
         );
-        parser!(sum, match { "+" => Add, "-" => Sub }, product);
-        parser!(ordering, match { "<" => Lt, "<=" => Leq, ">" => Gt, ">=" => Geq }, sum);
-        parser!(equal, match { "==" => Eq, "!=" => NotEq }, ordering);
-        parser!(and, match { "and" => And }, equal);
-        parser!(or, match { "or" => Or }, and);
+        parser!(sum, match { Plus => Add, Minus => Sub }, product);
+        parser!(ordering, match { LAngle => Lt, LAngleEq => Leq, RAngle => Gt, RAngleEq => Geq }, sum);
+        parser!(equal, match { EqEq => Eq, BangEq => NotEq }, ordering);
+        parser!(and, match { And => And }, equal);
+        parser!(or, match { Or => Or }, and);
         or(self)
     }
 

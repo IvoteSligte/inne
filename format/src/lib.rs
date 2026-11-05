@@ -225,9 +225,9 @@ impl Format for Type<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         self.name.fmt(f)?;
         if !self.generics.is_empty() {
-            f.put(Token::Op("<"))?;
+            f.put(Token::LAngle)?;
             write_comma_separated(f, &self.generics)?;
-            f.put(Token::Op(">"))?;
+            f.put(Token::RAngle)?;
         }
         Ok(())
     }
@@ -238,9 +238,9 @@ impl Format for Func<'_> {
         f.put_keyword(Token::Func)?;
         self.name.fmt(f)?;
         if !self.generics.is_empty() {
-            f.put(Token::Op("<"))?;
+            f.put(Token::LAngle)?;
             write_comma_separated(f, &self.generics)?;
-            f.put(Token::Op(">"))?;
+            f.put(Token::RAngle)?;
         }
         f.put(Token::LParen)?;
         write_comma_separated(f, &self.params)?;
@@ -324,7 +324,7 @@ impl Format for VarDecl<'_> {
         f.put_keyword(Token::Var)?;
         self.name.fmt(f)?;
         f.put_space()?;
-        f.put(Token::Op("="))?;
+        f.put(Token::Eq)?;
         f.put_space()?;
         self.value.fmt(f)?;
         f.put_semi()
@@ -451,9 +451,9 @@ impl Format for Call<'_> {
 impl Format for EmptyList<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         f.put(Token::LBracket)?;
-        f.put(Token::Op("<"))?;
+        f.put(Token::LAngle)?;
         self.element_type.fmt(f)?;
-        f.put(Token::Op(">"))?;
+        f.put(Token::RAngle)?;
         f.put(Token::RBracket)
     }
 }
@@ -469,12 +469,12 @@ impl Format for List<'_> {
 impl Format for EmptyMap<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         f.put(Token::LBrace)?;
-        f.put(Token::Op("<"))?;
+        f.put(Token::LAngle)?;
         self.key_type.fmt(f)?;
         f.put_comma()?;
         f.put_space()?;
         self.value_type.fmt(f)?;
-        f.put(Token::Op(">"))?;
+        f.put(Token::RAngle)?;
         f.put(Token::RBrace)
     }
 }

@@ -21,10 +21,10 @@ pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
             Token::Ident(_) => tt::VARIABLE, // default for identifiers
             Token::Int(_) | Token::Bool(_) => tt::NUMBER,
             Token::String(_) | Token::Char(_) => tt::STRING,
-            Token::Op("and") | Token::Op("or") | Token::Op("not") => tt::KEYWORD,
-            Token::Op(_) => tt::OPERATOR,
-            Token::Comment(_) => tt::COMMENT,
             _ if token.is_keyword() => tt::KEYWORD,
+            _ if token.is_operator() => tt::OPERATOR,
+            _ if token.is_delimiter() => tt::DELIMITER,
+            Token::Comment(_) => tt::COMMENT,
             _ => return None,
         };
         Some((span.start, (*span, token_type)))
@@ -36,6 +36,9 @@ pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
             r#override.stmt(stmt);
         }
     } else {
+        // TODO: Backup pass that uses token-only heuristics to determine token type.
+        //       Example: `function(` makes `function` tt::FUNCTION.
+
         eprintln!("Semantic tokens: Failed to parse file '{}'.", file.name);
     }
     let data = to_semantic_tokens(&file.source, semantic_tokens.into_values()).collect::<Vec<_>>();
