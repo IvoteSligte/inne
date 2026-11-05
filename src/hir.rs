@@ -133,7 +133,6 @@ pub enum Type {
     Int,
     // TODO: Float
     Bool,
-    String,
     Char,
     Range,
     List(Box<Self>),
@@ -147,6 +146,10 @@ impl Type {
         id: TypeId::UNKNOWN,
         generics: Vec::new(),
     };
+
+    pub fn string() -> Self {
+        Self::List(Box::new(Self::Char))
+    }
 
     pub fn is_known(&self) -> bool {
         *self != Type::UNKNOWN && !matches!(self, Type::Generic(_))
@@ -1059,9 +1062,9 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         let num_generics = generics.len();
         let r#type = match name.0 {
             "int" => Type::Int,
-            "string" => Type::String,
             "bool" => Type::Bool,
             "char" => Type::Char,
+            "string" => Type::string(),
             "list" => {
                 let element = generics.into_iter().next().unwrap_or(Type::UNKNOWN);
                 if num_generics != 1 {

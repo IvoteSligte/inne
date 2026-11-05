@@ -10,16 +10,12 @@ pub enum Value {
     Nothing,
     Int(Int),
     Bool(bool),
-    String {
-        ptr: Ptr<String>,
-        start: usize,
-        end: usize,
-    },
     Char(char),
     List {
         ptr: Ptr<List>,
         start: usize,
         end: usize,
+        is_string: bool,
     },
     Map(Ptr<Map>),
     Range {
@@ -38,10 +34,6 @@ pub enum Value {
         ptr: Ptr<List>,
         index: usize,
     },
-    StringIndexPointer {
-        ptr: Ptr<String>,
-        index: usize,
-    },
     MapValuePointer {
         ptr: Ptr<Map>,
         key: Box<Value>,
@@ -50,21 +42,13 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn new_list(elements: impl IntoIterator<Item = Value>) -> Self {
+    pub fn new_list(elements: impl IntoIterator<Item = Value>, is_string: bool) -> Self {
         let elements = elements.into_iter().collect::<List>();
         Self::List {
             start: 0,
             end: elements.len(),
             ptr: create_pointer(elements),
-        }
-    }
-
-    pub fn new_string(chars: impl IntoIterator<Item = char>) -> Self {
-        let chars = chars.into_iter().collect::<String>();
-        Self::String {
-            start: 0,
-            end: chars.len(),
-            ptr: create_pointer(chars),
+            is_string,
         }
     }
 
@@ -83,7 +67,6 @@ impl Value {
 
 type Ptr<T> = Rc<RefCell<T>>;
 
-pub type String = Vec<char>;
 pub type List = Vec<Value>;
 pub type Map = BTreeMap<Value, Value>;
 

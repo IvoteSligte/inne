@@ -483,7 +483,9 @@ impl<'src> Constructor<'src> {
             thir::Expr::Var(var_id) => builder.get_local(*var_id),
             thir::Expr::Int(int) => builder.push_constant(Value::Int(*int)),
             thir::Expr::Bool(bool) => builder.push_constant(Value::Bool(*bool)),
-            thir::Expr::String(string) => builder.push_constant(Value::new_string(string.chars())),
+            thir::Expr::String(string) => {
+                builder.push_constant(Value::new_list(string.chars().map(Value::Char), true))
+            }
             thir::Expr::Char(char) => builder.push_constant(Value::Char(*char)),
             thir::Expr::Range(thir::Range { start, end }) => {
                 let start = self.map_expr(&start.0, builder);
@@ -742,20 +744,31 @@ impl std::fmt::Display for Value {
             Value::Nothing => f.write_str("Nothing"),
             Value::Int(int) => write!(f, "{int}"),
             Value::Bool(bool) => write!(f, "{bool}"),
-            Value::String { ptr, start, end } => {
-                f.write_str("\"")?;
-                ptr.borrow()[*start..*end]
-                    .iter()
-                    .map(|c| write!(f, "{c}"))
-                    .collect::<std::fmt::Result>()?;
-                f.write_str("\"")
-            }
             Value::Char(char) => write!(f, "{char:?}"),
-            Value::List { ptr, start, end } => {
-                let list = &ptr.borrow()[*start..*end];
-                f.write_str("[")?;
-                write_comma_separated(f, list.iter())?;
-                f.write_str("]")
+            Value::List {
+                ptr,
+                start,
+                end,
+                is_string,
+            } => {
+                if *is_string {
+                    f.write_str("\"")?;
+                    ptr.borrow()[*start..*end]
+                        .iter()
+                        .map(|value| {
+                            let Value::Char(char) = value else {
+                                unreachable!()
+                            };
+                            write!(f, "{char}")
+                        })
+                        .collect::<std::fmt::Result>()?;
+                    f.write_str("\"")
+                } else {
+                    let list = &ptr.borrow()[*start..*end];
+                    f.write_str("[")?;
+                    write_comma_separated(f, list.iter())?;
+                    f.write_str("]")
+                }
             }
             Value::Map(ptr) => {
                 let map = ptr.borrow();
@@ -798,7 +811,6 @@ impl std::fmt::Display for Value {
             Value::LocalPointer(_)
             | Value::FieldPointer { .. }
             | Value::ListIndexPointer { .. }
-            | Value::StringIndexPointer { .. }
             | Value::MapValuePointer { .. } => unimplemented!(),
             // Iterators are not used as constants so they should be unreachable.
             Value::MapIter(_) => unimplemented!(),

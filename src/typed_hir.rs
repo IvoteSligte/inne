@@ -267,7 +267,6 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 let (iter_type, _) = self.check_expr(iter);
                 let var_type = match iter_type {
                     Type::Range => Type::Int,
-                    Type::String => Type::Char,
                     Type::List(elem_type) => *elem_type,
                     Type::Map { key, value: _ } => *key,
                     _ => {
@@ -364,7 +363,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 Expr::Var(var_id) => return (self.vars[var_id.get()].r#type.clone(), true),
                 Expr::Int(_) => Type::Int,
                 Expr::Bool(_) => Type::Bool,
-                Expr::String(_) => Type::String,
+                Expr::String(_) => Type::string(),
                 Expr::Char(_) => Type::Char,
                 Expr::Range(Range { start, end }) => {
                     self.check_expr(start);
@@ -744,18 +743,6 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             _ => {}
         }
         match expr_type {
-            Type::String => {
-                match index_type {
-                    Type::Int => Type::Char,
-                    Type::Range => Type::String,
-                    index_type => {
-                        if index_type.is_known() {
-                            self.errors.add(format!("Only int and range can be used to index into strings, not '{}'.", self.display(&index_type)), index.index.1);
-                        }
-                        Type::UNKNOWN
-                    }
-                }
-            }
             Type::List(ref element_type) => match index_type {
                 Type::Int => element_type.deref().clone(),
                 Type::Range => expr_type,
@@ -763,7 +750,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     if index_type.is_known() {
                         self.errors.add(
                             format!(
-                                "Only int and range can be used to index into lists, not '{}'.",
+                                "Only int and range can be used to index into lists and strings, not '{}'.",
                                 self.display(&index_type)
                             ),
                             index.index.1,
@@ -972,7 +959,7 @@ impl<'a> std::fmt::Display for Display<'a, &'a Type> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self(checker, r#type) = self;
         match r#type {
-            Type::Nothing | Type::Int | Type::Bool | Type::String | Type::Char | Type::Range => {
+            Type::Nothing | Type::Int | Type::Bool | Type::Char | Type::Range => {
                 hir::Display(*r#type).fmt(f)
             }
             Type::List(element) => {

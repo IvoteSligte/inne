@@ -12,9 +12,9 @@ impl std::fmt::Display for Display<&Type> {
             Type::Nothing => "nothing",
             Type::Int => "int",
             Type::Bool => "bool",
-            Type::String => "string",
             Type::Char => "char",
             Type::Range => "range",
+            Type::List(element) if **element == Type::Char => "string",
             Type::List(element) => return write!(f, "List<{}>", Display(element.as_ref())),
             Type::Map { key, value } => {
                 return write!(

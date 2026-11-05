@@ -88,33 +88,25 @@ impl<'a> Interpreter<'a> {
                     Value::FieldPointer { ptr, field_index } => {
                         ptr.borrow_mut().fields[*field_index] = value;
                     }
-                    Value::List { ptr, start, end } => {
+                    Value::List {
+                        ptr,
+                        start,
+                        end,
+                        is_string: _,
+                    } => {
                         let dst = &mut ptr.borrow_mut()[*start..*end];
                         match value {
-                            Value::List { ptr, start, end } => {
-                                dst.clone_from_slice(&ptr.borrow()[start..end])
-                            }
+                            Value::List {
+                                ptr,
+                                start,
+                                end,
+                                is_string: _,
+                            } => dst.clone_from_slice(&ptr.borrow()[start..end]),
                             // TOOD: also allow copying from Pointer::Slice and Value::String (if list element type is char)
                             _ => unreachable!(),
                         }
                     }
-                    Value::String { ptr, start, end } => {
-                        let dst = &mut ptr.borrow_mut()[*start..*end];
-                        match value {
-                            Value::String { ptr, start, end } => {
-                                dst.copy_from_slice(&ptr.borrow()[start..end])
-                            }
-                            // TOOD: also allow copying from Pointer::StringSlice and List(char)
-                            _ => unreachable!(),
-                        }
-                    }
                     Value::ListIndexPointer { ptr, index } => ptr.borrow_mut()[*index] = value,
-                    Value::StringIndexPointer { ptr: string, index } => {
-                        string.borrow_mut()[*index] = match value {
-                            Value::Char(char) => char,
-                            _ => unreachable!(),
-                        };
-                    }
                     Value::MapValuePointer { ptr, key } => {
                         ptr.borrow_mut().insert((**key).clone(), value);
                     }
@@ -215,10 +207,16 @@ impl<'a> Interpreter<'a> {
             // in the foot by modifying the original collection is way too easy
             &Op::IntoIter(iter) => match self.get_local(iter) {
                 &Value::Range { start, end } => Value::Range { start, end },
-                Value::List { ptr, start, end } => Value::List {
+                Value::List {
+                    ptr,
+                    start,
+                    end,
+                    is_string,
+                } => Value::List {
                     ptr: ptr.clone(),
                     start: *start,
                     end: *end,
+                    is_string: *is_string,
                 },
                 Value::Map(ptr) => {
                     Value::MapIter(value::MapIter(value::Map::into_keys(ptr.borrow().clone())))
@@ -236,7 +234,12 @@ impl<'a> Interpreter<'a> {
                         }
                         is_not_empty
                     }
-                    Value::List { ptr, start, end } => {
+                    Value::List {
+                        ptr,
+                        start,
+                        end,
+                        is_string: _,
+                    } => {
                         let is_not_empty = start < end;
                         if is_not_empty {
                             let value = ptr.borrow()[*start].clone();
@@ -261,6 +264,7 @@ impl<'a> Interpreter<'a> {
                 local_ids
                     .iter()
                     .map(|&local_id| self.get_local(local_id).clone()),
+                false,
             ),
             Op::Map(pairs) => Value::new_map(pairs.iter().map(|&pair| {
                 (
@@ -271,25 +275,19 @@ impl<'a> Interpreter<'a> {
             // TODO: require that the user explicitly specifies copy/ref instead of doing these expensive copies by default
             &Op::Index { expr, index } => match (self.get_local(expr), self.get_local(index)) {
                 // TODO: out-of-bounds checks
-                (Value::String { ptr, start, end: _ }, &Value::Int(i)) => {
-                    Value::Char(ptr.borrow()[*start + i as usize])
-                }
                 (
-                    Value::String { ptr, start, end: _ },
-                    &Value::Range {
-                        start: range_start,
-                        end: range_end,
+                    Value::List {
+                        ptr, start, end: _, ..
                     },
-                ) => Value::String {
-                    ptr: ptr.clone(),
-                    start: *start + range_start as usize,
-                    end: *start + range_end as usize,
-                },
-                (Value::List { ptr, start, end: _ }, &Value::Int(i)) => {
-                    ptr.borrow()[*start + i as usize].clone()
-                }
+                    &Value::Int(i),
+                ) => ptr.borrow()[*start + i as usize].clone(),
                 (
-                    Value::List { ptr, start, end: _ },
+                    Value::List {
+                        ptr,
+                        start,
+                        end: _,
+                        is_string,
+                    },
                     &Value::Range {
                         start: range_start,
                         end: range_end,
@@ -298,6 +296,7 @@ impl<'a> Interpreter<'a> {
                     ptr: ptr.clone(),
                     start: *start + range_start as usize,
                     end: *start + range_end as usize,
+                    is_string: *is_string,
                 },
                 // TODO: "key not in map" check
                 (Value::Map(ptr), key) => ptr.borrow()[key].clone(),
@@ -338,31 +337,19 @@ impl<'a> Interpreter<'a> {
             // TODO: check Int->usize casts and out-of-bounds
             {
                 match (self.get_local(*collection), self.get_local(*index)) {
-                    (Value::String { ptr, start, end: _ }, &Value::Int(index)) => {
-                        Value::StringIndexPointer {
-                            ptr: ptr.clone(),
-                            index: *start + index as usize,
-                        }
-                    }
-                    (
-                        Value::String { ptr, start, end: _ },
-                        &Value::Range {
-                            start: range_start,
-                            end: range_end,
-                        },
-                    ) => Value::String {
-                        ptr: ptr.clone(),
-                        start: *start + range_start as usize,
-                        end: *start + range_end as usize,
-                    },
-                    (Value::List { ptr, start, end: _ }, &Value::Int(index)) => {
+                    (Value::List { ptr, start, .. }, &Value::Int(index)) => {
                         Value::ListIndexPointer {
                             ptr: ptr.clone(),
                             index: *start + index as usize,
                         }
                     }
                     (
-                        Value::List { ptr, start, end: _ },
+                        Value::List {
+                            ptr,
+                            start,
+                            end: _,
+                            is_string,
+                        },
                         &Value::Range {
                             start: range_start,
                             end: range_end,
@@ -371,6 +358,7 @@ impl<'a> Interpreter<'a> {
                         ptr: ptr.clone(),
                         start: *start + range_start as usize,
                         end: *start + range_end as usize,
+                        is_string: *is_string,
                     },
                     (Value::Map(ptr), key) => Value::MapValuePointer {
                         ptr: ptr.clone(),
@@ -407,31 +395,38 @@ impl<'a> Interpreter<'a> {
             Value::Nothing => print!("Nothing"),
             Value::Int(int) => print!("{}", int),
             Value::Bool(bool) => print!("{}", bool),
-            Value::String { ptr, start, end } => {
-                let string = &ptr.borrow()[*start..*end];
-                if is_nested {
-                    print!("\"");
-                    for char in string {
+            Value::Char(char) => print!("{char}"),
+            Value::List {
+                ptr,
+                start,
+                end,
+                is_string,
+            } => {
+                if *is_string {
+                    let string = &ptr.borrow()[*start..*end];
+                    if is_nested {
+                        print!("\"");
+                    }
+                    for value in string {
+                        let Value::Char(char) = value else {
+                            unreachable!();
+                        };
                         print!("{}", char.escape_default());
                     }
-                    print!("\"");
+                    if is_nested {
+                        print!("\"");
+                    }
                 } else {
-                    for char in string {
-                        print!("{}", char);
+                    let list = &ptr.borrow()[*start..*end];
+                    print!("[");
+                    for (i, elem) in list.iter().enumerate() {
+                        if i > 0 {
+                            print!(", ");
+                        }
+                        self.print(elem, true);
                     }
+                    print!("]");
                 }
-            }
-            Value::Char(char) => print!("{char}"),
-            Value::List { ptr, start, end } => {
-                let list = &ptr.borrow()[*start..*end];
-                print!("[");
-                for (i, elem) in list.iter().enumerate() {
-                    if i > 0 {
-                        print!(", ");
-                    }
-                    self.print(elem, true);
-                }
-                print!("]");
             }
             Value::Map(ptr) => {
                 let map = ptr.borrow();
@@ -487,7 +482,6 @@ impl<'a> Interpreter<'a> {
             Value::LocalPointer(_)
             | Value::FieldPointer { .. }
             | Value::ListIndexPointer { .. }
-            | Value::StringIndexPointer { .. }
             | Value::MapValuePointer { .. } => unimplemented!(),
             // MapIter is not exposed to the user and therefore never printed.
             Value::MapIter(_) => unimplemented!(),
@@ -499,14 +493,17 @@ impl<'a> Interpreter<'a> {
             Value::Nothing => Value::Nothing,
             Value::Int(int) => Value::Int(*int),
             Value::Bool(bool) => Value::Bool(*bool),
-            Value::String { ptr, start, end } => {
-                Value::new_string(ptr.borrow()[*start..*end].iter().copied())
-            }
             Value::Char(char) => Value::Char(*char),
-            Value::List { ptr, start, end } => Value::new_list(
+            Value::List {
+                ptr,
+                start,
+                end,
+                is_string,
+            } => Value::new_list(
                 ptr.borrow()[*start..*end]
                     .iter()
                     .map(|element| self.deepcopy(element)),
+                *is_string,
             ),
             Value::Map(map) => Value::new_map(
                 (*map.borrow())
@@ -544,7 +541,6 @@ impl<'a> Interpreter<'a> {
                 self.deepcopy(&ptr.borrow().fields[*field_index])
             }
             Value::ListIndexPointer { ptr, index } => self.deepcopy(&ptr.borrow()[*index]),
-            Value::StringIndexPointer { ptr, index } => Value::Char(ptr.borrow()[*index]),
             Value::MapValuePointer { ptr, key } => self.deepcopy(&ptr.borrow()[key]),
             Value::MapIter(_) => unimplemented!("Map iterators should not be copied"),
         }
