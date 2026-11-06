@@ -283,6 +283,7 @@ impl Format for Enum<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         f.put_keyword(Token::Enum)?;
         self.name.fmt(f)?;
+        write_generics!(f, self.generics);
         if !self.variants.is_empty() {
             f.put_indent_lbrace()?;
             for variant in &self.variants {

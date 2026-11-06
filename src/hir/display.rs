@@ -34,6 +34,7 @@ impl std::fmt::Display for Display<&Type> {
                 return Ok(());
             }
             Type::Generic(id) => return write!(f, "#{id}"),
+            Type::UnknownGeneric => "?",
         })
     }
 }

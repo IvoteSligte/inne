@@ -34,52 +34,52 @@ impl FuncId {
     pub const PRINT: Self = Self(usize::MAX - 1);
 }
 
-pub struct VarInfo<'a> {
-    pub name: &'a str,
-    pub span: Span<'a>,
+pub struct VarInfo<'src> {
+    pub name: &'src str,
+    pub span: Span<'src>,
 }
 
-pub struct Hir<'a> {
+pub struct Hir<'src> {
     /// Essentially `HashMap<DefId, DefInfo>`, but all [DefId]`s are consecutive.
-    pub vars: Vec<VarInfo<'a>>,
-    pub funcs: Vec<Func<'a>>,
-    pub types: Vec<TypeDef<'a>>,
-    pub stmts: Vec<Stmt<'a>>,
+    pub vars: Vec<VarInfo<'src>>,
+    pub funcs: Vec<Func<'src>>,
+    pub types: Vec<TypeDef<'src>>,
+    pub stmts: Vec<Stmt<'src>>,
 }
 
-pub enum Stmt<'a> {
-    VarDecl(VarDecl<'a>),
-    Expr(SpannedExpr<'a>),
-    Assign(Assign<'a>),
-    If(If<'a>),
-    For(For<'a>),
-    While(While<'a>),
-    Loop(Loop<'a>),
-    Break(Span<'a>),
-    Continue(Span<'a>),
-    Return(Spanned<'a, Option<SpannedExpr<'a>>>),
+pub enum Stmt<'src> {
+    VarDecl(VarDecl<'src>),
+    Expr(SpannedExpr<'src>),
+    Assign(Assign<'src>),
+    If(If<'src>),
+    For(For<'src>),
+    While(While<'src>),
+    Loop(Loop<'src>),
+    Break(Span<'src>),
+    Continue(Span<'src>),
+    Return(Spanned<'src, Option<SpannedExpr<'src>>>),
 }
 
-pub type Block<'a> = Vec<Stmt<'a>>;
+pub type Block<'src> = Vec<Stmt<'src>>;
 
-pub struct Func<'a> {
+pub struct Func<'src> {
     pub id: FuncId,
-    pub name: Name<'a>,
-    pub generics: Vec<Name<'a>>,
-    pub params: Vec<Param<'a>>,
-    pub return_type: Option<Spanned<'a, Type>>,
-    pub body: Block<'a>,
+    pub name: Name<'src>,
+    pub generics: Vec<Name<'src>>,
+    pub params: Vec<Param<'src>>,
+    pub return_type: Option<Spanned<'src, Type>>,
+    pub body: Block<'src>,
 }
 
-pub struct Param<'a> {
+pub struct Param<'src> {
     pub var_id: VarId,
-    pub name: Name<'a>,
-    pub r#type: Spanned<'a, Type>,
+    pub name: Name<'src>,
+    pub r#type: Spanned<'src, Type>,
 }
 
-pub enum TypeDef<'a> {
-    Struct(Struct<'a>),
-    Enum(Enum<'a>),
+pub enum TypeDef<'src> {
+    Struct(Struct<'src>),
+    Enum(Enum<'src>),
 }
 
 impl TypeDef<'_> {
@@ -97,22 +97,23 @@ pub enum AstTypeDef<'ast, 'src> {
     Enum(&'ast ast::Enum<'src>),
 }
 
-pub struct Struct<'a> {
+pub struct Struct<'src> {
     pub type_id: TypeId,
-    pub name: Name<'a>,
-    pub generics: Vec<Name<'a>>,
-    pub fields: Vec<Field<'a>>,
+    pub name: Name<'src>,
+    pub generics: Vec<Name<'src>>,
+    pub fields: Vec<Field<'src>>,
 }
 
-pub struct Field<'a> {
-    pub name: Name<'a>,
-    pub r#type: Spanned<'a, Type>,
+pub struct Field<'src> {
+    pub name: Name<'src>,
+    pub r#type: Spanned<'src, Type>,
 }
 
-pub struct Enum<'a> {
+pub struct Enum<'src> {
     pub type_id: TypeId,
-    pub name: Name<'a>,
-    pub variants: Vec<Variant<'a>>,
+    pub name: Name<'src>,
+    pub generics: Vec<Name<'src>>,
+    pub variants: Vec<Variant<'src>>,
 }
 
 pub struct Variant<'a> {
@@ -137,9 +138,17 @@ pub enum Type {
     Char,
     Range,
     List(Box<Self>),
-    Map { key: Box<Self>, value: Box<Self> },
-    Named { id: TypeId, generics: Vec<Self> },
+    Map {
+        key: Box<Self>,
+        value: Box<Self>,
+    },
+    Named {
+        id: TypeId,
+        generics: Vec<Self>,
+    },
     Generic(GenericId),
+    /// Value of a generic that is not used by an enum variant.
+    UnknownGeneric,
 }
 
 impl Type {
@@ -153,7 +162,7 @@ impl Type {
     }
 
     pub fn is_known(&self) -> bool {
-        *self != Type::UNKNOWN && !matches!(self, Type::Generic(_))
+        *self != Type::UNKNOWN && !matches!(self, Type::Generic(_) | Type::UnknownGeneric)
     }
 
     pub fn or<'a>(&'a self, other: &'a Self) -> &'a Type {
@@ -699,7 +708,11 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                         fields,
                     }));
                 }
-                ast::Stmt::Enum(ast::Enum { name, variants }) => {
+                ast::Stmt::Enum(ast::Enum {
+                    name,
+                    generics,
+                    variants,
+                }) => {
                     if self.scopes.len() > 1 {
                         // TODO: add outer function as context
                         self.errors
@@ -715,20 +728,23 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                         }
                     }
                     let (type_id, _, _) = *self.type_map.get(name.0).unwrap();
-                    let variants = variants
-                        .iter()
-                        .map(|variant| Variant {
-                            name: variant.name,
-                            payload: variant
-                                .payload
-                                .as_ref()
-                                .map(|payload| self.map_type(payload)),
-                        })
-                        .collect();
+                    let variants = self.with_generics(generics, |_self| {
+                        variants
+                            .iter()
+                            .map(|variant| Variant {
+                                name: variant.name,
+                                payload: variant
+                                    .payload
+                                    .as_ref()
+                                    .map(|payload| _self.map_type(payload)),
+                            })
+                            .collect()
+                    });
                     debug_assert_eq!(self.types.len(), type_id.get());
                     self.types.push(TypeDef::Enum(Enum {
                         type_id,
                         name: *name,
+                        generics: generics.clone(),
                         variants,
                     }));
                 }

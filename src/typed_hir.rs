@@ -392,9 +392,10 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     self.verify_generic_constraints(&generic_constraints, generics, r#struct.name);
                     Type::Named {
                         id: *type_id,
-                        generics: (0..generics.len())
-                            .map(|i| generic_constraints.get(&GenericId(i)).unwrap()[0].0.clone())
-                            .collect(),
+                        generics: generic_values_from_constraints(
+                            generics.len(),
+                            &generic_constraints,
+                        ),
                     }
                 }
                 Expr::VariantLiteral(VariantLiteral {
@@ -407,15 +408,14 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     let TypeDef::Enum(r#enum) = &self.types[type_id.get()] else {
                         unreachable!();
                     };
-                    let expected_payload_type = r#enum.variants[*variant_index]
-                        .payload
-                        .as_ref()
-                        .map(|(r#type, _)| r#type);
+                    let expected_payload_type = r#enum.variants[*variant_index].payload.as_ref();
                     let payload_type = payload
                         .as_mut()
                         .map(|payload| (self.check_expr(payload).0, payload.1));
+                    let generics = &r#enum.generics;
+                    let mut generic_constraints = HashMap::new();
                     match (expected_payload_type, payload_type) {
-                        (Some(expected), Some((found, payload_span))) => {
+                        (Some((expected, expected_span)), Some((found, found_span))) => {
                             if types_not_equal(expected, &found) {
                                 self.errors.add(
                                     format!(
@@ -423,11 +423,19 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                                         self.display(&expected),
                                         self.display(&found)
                                     ),
-                                    payload_span,
+                                    found_span,
+                                );
+                            } else if !generics.is_empty() {
+                                extract_generic_constraints(
+                                    &found,
+                                    found_span,
+                                    expected,
+                                    *expected_span,
+                                    &mut generic_constraints,
                                 );
                             }
                         }
-                        (Some(expected), None) => {
+                        (Some((expected, _)), None) => {
                             self.errors.add(
                                 format!(
                                     "This enum variant requires a payload of type '{}'",
@@ -442,9 +450,13 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                         }
                         (None, None) => {} // OK
                     }
+                    self.verify_generic_constraints(&generic_constraints, generics, r#enum.name);
                     Type::Named {
                         id: *type_id,
-                        generics: Vec::new(), // NOTE: currently, enums do not have generics
+                        generics: generic_values_from_constraints(
+                            generics.len(),
+                            &generic_constraints,
+                        ),
                     }
                 }
             },
@@ -866,6 +878,18 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
     }
 }
 
+fn generic_values_from_constraints(
+    num_generics: usize,
+    generic_constraints: &HashMap<GenericId, Vec<(Type, Span<'_>)>>,
+) -> Vec<Type> {
+    (0..num_generics)
+        .map(|i| match generic_constraints.get(&GenericId(i)) {
+            Some(r#types) => r#types[0].0.clone(),
+            None => Type::UnknownGeneric,
+        })
+        .collect()
+}
+
 /// Returns a literal string of "s" if the given value is exactly 1.
 /// Useful for conditionally pluralizing words.
 fn s_if_not_1(n: usize) -> &'static str {
@@ -1007,6 +1031,7 @@ impl<'a> std::fmt::Display for Display<'a, &'a Type> {
                 let name = func.generics[generic_id.get()];
                 f.write_str(name.0)
             }
+            Type::UnknownGeneric => f.write_str("?"),
         }
     }
 }

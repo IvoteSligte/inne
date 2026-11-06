@@ -1,0 +1,9 @@
+
+enum Result<O, E> {
+    Ok(O),
+    Err(E)
+}
+
+print(Result::Ok("Hi"))
+print(Result::Err("PANIC!!!!!"))
+

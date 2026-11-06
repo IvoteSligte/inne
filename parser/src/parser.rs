@@ -285,10 +285,15 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     fn r#enum(&mut self) -> Option<Stmt<'src>> {
         self.take_if_eq(Token::Enum)?;
         let name = self.must("enum name", |s| s.ident())?;
+        let generics = self.generics();
         let variants = self.must("enum variants", |s| {
             s.delimited_by(BRACES, |s| s.separated_by_comma(Parser::variant))
         })?;
-        Some(Stmt::Enum(Enum { name, variants }))
+        Some(Stmt::Enum(Enum {
+            name,
+            generics,
+            variants,
+        }))
     }
 
     fn var_decl(&mut self) -> Option<Stmt<'src>> {

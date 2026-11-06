@@ -98,8 +98,15 @@ impl<'src> Override<'_, 'src> {
                     self.r#type(r#type.1);
                 }
             }
-            Stmt::Enum(Enum { name, variants }) => {
+            Stmt::Enum(Enum {
+                name,
+                generics,
+                variants,
+            }) => {
                 self.set(tt::ENUM, name.1);
+                for generic in generics {
+                    self.set(tt::TYPE, generic.1);
+                }
                 for Variant { name, payload } in variants {
                     self.set(tt::ENUM_MEMBER, name.1);
                     if let Some(payload) = payload.as_ref() {

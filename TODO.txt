@@ -1,8 +1,6 @@
 language:
 - methods                       // low priority
 - library imports
-- generics
-  - enum generics
 - type aliases                  // low priority
   - make 'string' an alias of 'list<char>'
 - move semantics

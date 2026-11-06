@@ -72,6 +72,7 @@ pub struct Field<'a> {
 #[derive(Debug)]
 pub struct Enum<'a> {
     pub name: Name<'a>,
+    pub generics: Vec<Name<'a>>,
     pub variants: Vec<Variant<'a>>,
 }
 
