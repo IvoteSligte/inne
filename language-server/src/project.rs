@@ -28,7 +28,7 @@ impl Project {
                     let uri = Uri::from_file_path(path).unwrap_or_else(|| {
                         panic!("The file at '{}' does not exist", id.as_path().display())
                     });
-                    File::new(&uri, id, source, i32::MIN)
+                    File::new(&uri, id, source, None)
                 })
                 .collect::<Vec<_>>(),
         })
@@ -90,7 +90,7 @@ impl Project {
 }
 
 /// Finds the root of a project, given the path to a file in it.
-pub fn find_root(path_to_file: PathBuf) -> Option<PathBuf> {
+pub fn find_root(path_to_file: &Path) -> Option<PathBuf> {
     match inne::project::find_root(Some(path_to_file)) {
         // NOTE: unwrap can theoretically fail if the file was removed since the last check
         Ok(Some(path)) => Some(path.canonicalize().unwrap()),
@@ -123,11 +123,11 @@ pub struct File {
 }
 
 impl File {
-    pub fn new(uri: &Uri, id: ModuleId, source: impl ToString, version: i32) -> Self {
+    pub fn new(uri: &Uri, id: ModuleId, source: impl ToString, version: Option<i32>) -> Self {
         let source = source.to_string();
         let name = uri.as_str().to_string(); // TODO: better human-readable name
         Self {
-            version: Some(version),
+            version,
             uri: uri.clone(),
             name,
             id,

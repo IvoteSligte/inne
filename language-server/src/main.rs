@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use diagnostics::extract_diagnostics;
+use inne::ModuleId;
 use semantic_tokens::extract_semantic_tokens;
 use tokio::sync::RwLock;
 use tower_lsp_server::jsonrpc::{self, Result};
@@ -147,7 +148,11 @@ impl LanguageServer for Backend {
             eprintln!("The provided URI is not a file: '{}'", uri.as_str());
             return;
         };
-        let Some(root_path) = find_root(path) else {
+        let Some(root_path) = find_root(&path) else {
+            eprintln!(
+                "Could not find project root for newly opened file: '{}'",
+                path.display()
+            );
             return;
         };
         let mut projects = self.projects.write().await;
@@ -161,20 +166,24 @@ impl LanguageServer for Backend {
             }
         }
         if let Some(mut project) = Project::new(&root_path) {
-            let Some(file) = project.files.iter_mut().find(|file| file.uri == uri) else {
-                panic!(
-                    "Could not find file with URI '{}' in the newly loaded project with modules: {:#?}",
-                    uri.as_str(),
+            match project.files.iter_mut().find(|file| file.uri == uri) {
+                Some(file) => {
+                    file.source = source;
+                    file.version = Some(version);
+                    eprintln!("Created project containing new file: '{}'", uri.as_str());
+                }
+                None => {
+                    eprintln!(
+                        "Could not find file at '{}' in the newly loaded project. Creating new virtual file.",
+                        path.display(),
+                    );
+                    let relative_path = path.strip_prefix(root_path.parent().unwrap()).unwrap();
+                    let id = ModuleId::new(relative_path);
                     project
                         .files
-                        .iter()
-                        .map(|file| file.uri.as_str())
-                        .collect::<Vec<_>>()
-                );
-            };
-            file.source = source;
-            file.version = Some(version);
-            eprintln!("Created project containing new file: '{}'", uri.as_str());
+                        .push(File::new(&uri, id, source, Some(version)));
+                }
+            }
             self.publish_diagnostics(&project).await;
             projects.push(project);
         }

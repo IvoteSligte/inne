@@ -963,7 +963,11 @@ impl<'a> std::fmt::Display for Display<'a, &'a Type> {
                 hir::Display(*r#type).fmt(f)
             }
             Type::List(element) => {
-                write!(f, "list<{}>", self.with(element))
+                if **element == Type::Char {
+                    f.write_str("string")
+                } else {
+                    write!(f, "list<{}>", self.with(element))
+                }
             }
             Type::Map { key, value } => {
                 write!(f, "map<{}, {}>", self.with(key), self.with(value))

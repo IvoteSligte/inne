@@ -42,7 +42,7 @@ pub fn read_modules(relative_to: &Path) -> std::io::Result<(&Path, Vec<(ModuleId
 /// Tries to find a file named `main.inne` in the current directory and parent directories.
 /// If `relative_to` is `Some`, then the directory containing `relative_to` is used as starting point.
 /// Returns `Ok(None)` if it cannot be found, otherwise the canonical path to the file.
-pub fn find_root(relative_to: Option<PathBuf>) -> std::io::Result<Option<PathBuf>> {
+pub fn find_root(relative_to: Option<&Path>) -> std::io::Result<Option<PathBuf>> {
     let relative_to = match relative_to {
         Some(path) => directory_containing(&path)?.to_path_buf(),
         None => std::env::current_dir()?,

@@ -75,8 +75,17 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         func: impl FnOnce(&mut Parser<'_, 'src>) -> Option<T>,
     ) -> Option<T> {
         let maybe = self.atomic(func);
-        if maybe.is_none() {
-            let span = self.src[self.end].1;
+        if maybe.is_none() && !self.src.is_empty() {
+            let span = match self.src.get(self.end) {
+                Some((_, span)) => *span,
+                None => {
+                    let (_, last_span) = self.src.last().unwrap();
+                    Span {
+                        start: last_span.end - 1,
+                        ..*last_span
+                    }
+                }
+            };
             self.errors.push((format!("Failed to parse {label}"), span))
         }
         maybe

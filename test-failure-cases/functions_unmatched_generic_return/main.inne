@@ -1,0 +1,4 @@
+
+func function<T>(value: T) -> T {
+    return "This is not an instance of 'T'"
+}
