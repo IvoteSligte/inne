@@ -10,6 +10,16 @@ use inne::{Spanned, Token, ast::*, lex, parse, parser::SpannedToken};
 //       If statements were in the input with (at least) one line in between them,
 //       then they should have a line in between them in the formatted code.
 
+macro_rules! write_generics {
+    ($f:expr, $generics:expr) => {
+        if !$generics.is_empty() {
+            $f.put(Token::LAngle)?;
+            write_comma_separated($f, &$generics)?;
+            $f.put(Token::RAngle)?;
+        }
+    };
+}
+
 struct Writer<'src> {
     tokens: &'src [SpannedToken<'src>],
     output: IndentWriter<'static, String>,
@@ -212,11 +222,7 @@ impl Format for Block<'_> {
 impl Format for Type<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         self.name.fmt(f)?;
-        if !self.generics.is_empty() {
-            f.put(Token::LAngle)?;
-            write_comma_separated(f, &self.generics)?;
-            f.put(Token::RAngle)?;
-        }
+        write_generics!(f, self.generics);
         Ok(())
     }
 }
@@ -225,11 +231,7 @@ impl Format for Func<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         f.put_keyword(Token::Func)?;
         self.name.fmt(f)?;
-        if !self.generics.is_empty() {
-            f.put(Token::LAngle)?;
-            write_comma_separated(f, &self.generics)?;
-            f.put(Token::RAngle)?;
-        }
+        write_generics!(f, self.generics);
         f.put(Token::LParen)?;
         write_comma_separated(f, &self.params)?;
         f.put(Token::RParen)?;
@@ -254,6 +256,7 @@ impl Format for Struct<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         f.put_keyword(Token::Struct)?;
         self.name.fmt(f)?;
+        write_generics!(f, self.generics);
         if !self.fields.is_empty() {
             f.put_indent_lbrace()?;
             f.put_newline()?;

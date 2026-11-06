@@ -59,6 +59,7 @@ pub struct Param<'a> {
 #[derive(Debug)]
 pub struct Struct<'a> {
     pub name: Name<'a>,
+    pub generics: Vec<Name<'a>>,
     pub fields: Vec<Field<'a>>,
 }
 

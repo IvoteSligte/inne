@@ -448,14 +448,19 @@ impl<'a> Interpreter<'a> {
                     unreachable!();
                 };
                 debug_assert_eq!(field_names.len(), r#struct.fields.len());
-                print!("{} {{", name);
-                for (i, (name, value)) in std::iter::zip(field_names, &r#struct.fields).enumerate()
-                {
-                    if i > 0 {
-                        print!(", ");
+                print!("{}::{{", name);
+                if !field_names.is_empty() {
+                    print!(" ");
+                    for (i, (name, value)) in
+                        std::iter::zip(field_names, &r#struct.fields).enumerate()
+                    {
+                        if i > 0 {
+                            print!(", ");
+                        }
+                        print!("{name}: ");
+                        self.print(value, true);
                     }
-                    print!("{name}: ");
-                    self.print(value, true);
+                    print!(" ");
                 }
                 print!("}}");
             }

@@ -100,6 +100,7 @@ pub enum AstTypeDef<'ast, 'src> {
 pub struct Struct<'a> {
     pub type_id: TypeId,
     pub name: Name<'a>,
+    pub generics: Vec<Name<'a>>,
     pub fields: Vec<Field<'a>>,
 }
 
@@ -368,6 +369,7 @@ struct Constructor<'ast, 'src> {
     type_map: HashMap<&'src str, (TypeId, Span<'src>, AstTypeDef<'ast, 'src>)>,
 
     generics: &'ast [Name<'src>],
+    used_generics: Vec<bool>,
     scopes: Vec<HashMap<&'src str, VarId>>,
 }
 
@@ -409,6 +411,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
             type_map: HashMap::new(),
             modules,
             generics: &[],
+            used_generics: Vec::new(),
             scopes: Vec::new(),
         };
         for i in 0.._self.modules.len() {
@@ -583,6 +586,26 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
         value
     }
 
+    fn with_generics<T>(
+        &mut self,
+        generics: &'ast [Name<'src>],
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        debug_assert!(self.generics.is_empty());
+        self.generics = generics;
+        self.used_generics = vec![false; generics.len()];
+        let value = f(self);
+        for (&generic, &used) in std::iter::zip(self.generics, &self.used_generics) {
+            if !used {
+                self.errors
+                    .add(format!("Unused generic type '{}'", generic.0), generic.1);
+            }
+        }
+        self.generics = &[];
+        self.used_generics = Vec::new();
+        value
+    }
+
     #[must_use]
     fn map_scope(&mut self, stmts: &'ast [ast::Stmt<'src>]) -> Vec<Stmt<'src>> {
         self.in_scope(|_self| _self.map_stmts(stmts))
@@ -621,25 +644,29 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                     // Get ID of function using previously registered mapping.
                     let (id, _) = *self.func_map.get(name.0).unwrap();
                     self.in_scope(|_self| {
-                        // TODO: warn about unused generics
-                        _self.generics = generics.as_slice();
-                        let params = params.iter().map(|param| _self.map_param(param)).collect();
-                        let return_type =
-                            return_type.as_ref().map(|r#type| _self.map_type(&r#type));
-                        let body = _self.map_stmts(&body);
-                        _self.funcs.push(Func {
-                            id,
-                            name: *name,
-                            generics: generics.clone(),
-                            params,
-                            return_type,
-                            body,
+                        _self.with_generics(generics, |_self| {
+                            let params =
+                                params.iter().map(|param| _self.map_param(param)).collect();
+                            let return_type =
+                                return_type.as_ref().map(|r#type| _self.map_type(&r#type));
+                            let body = _self.map_stmts(&body);
+                            _self.funcs.push(Func {
+                                id,
+                                name: *name,
+                                generics: generics.clone(),
+                                params,
+                                return_type,
+                                body,
+                            });
                         });
-                        _self.generics = &[];
                     });
                     self.scopes = global_scopes;
                 }
-                ast::Stmt::Struct(ast::Struct { name, fields }) => {
+                ast::Stmt::Struct(ast::Struct {
+                    name,
+                    generics,
+                    fields,
+                }) => {
                     if self.scopes.len() > 1 {
                         // TODO: add outer function as context
                         self.errors
@@ -655,17 +682,20 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                         }
                     }
                     let (type_id, _, _) = *self.type_map.get(name.0).unwrap();
-                    let fields = fields
-                        .iter()
-                        .map(|field| Field {
-                            name: field.name,
-                            r#type: self.map_type(&field.r#type),
-                        })
-                        .collect();
+                    let fields = self.with_generics(generics, |_self| {
+                        fields
+                            .iter()
+                            .map(|field| Field {
+                                name: field.name,
+                                r#type: _self.map_type(&field.r#type),
+                            })
+                            .collect()
+                    });
                     debug_assert_eq!(self.types.len(), type_id.get());
                     self.types.push(TypeDef::Struct(Struct {
                         type_id,
                         name: *name,
+                        generics: generics.clone(),
                         fields,
                     }));
                 }
@@ -1099,6 +1129,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
             _ if let Some(generic_index) =
                 self.generics.iter().position(|generic| generic.0 == name.0) =>
             {
+                self.used_generics[generic_index] = true;
                 if num_generics != 0 {
                     self.errors
                         .add("A generic parameter cannot take generic arguments", *span);

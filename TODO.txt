@@ -2,7 +2,6 @@ language:
 - methods                       // low priority
 - library imports
 - generics
-  - struct generics
   - enum generics
 - type aliases                  // low priority
   - make 'string' an alias of 'list<char>'
@@ -26,3 +25,5 @@ tooling:
   - LSP: show docs on hover
 - standard library
 - improve tests by adding expected output
+- formatter consistency tests
+- define comment syntax in LSP (if possible, otherwise in editor extensions)

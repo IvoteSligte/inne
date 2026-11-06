@@ -84,8 +84,15 @@ impl<'src> Override<'_, 'src> {
                     self.stmt(stmt);
                 }
             }
-            Stmt::Struct(Struct { name, fields }) => {
+            Stmt::Struct(Struct {
+                name,
+                generics,
+                fields,
+            }) => {
                 self.set(tt::STRUCT, name.1);
+                for generic in generics {
+                    self.set(tt::TYPE, generic.1);
+                }
                 for Field { name, r#type } in fields {
                     self.set(tt::PROPERTY, name.1);
                     self.r#type(r#type.1);

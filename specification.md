@@ -92,6 +92,17 @@ struct Name {
 
 The trailing comma is optional for the last field.
 
+Structs may have generics.
+
+Example:
+```
+struct Node<T> {
+    value: T,
+    left: Option<Node<T>>,
+    right: Option<Node<T>>
+}
+```
+
 Structs are instantiated using `Name::{ ... }` syntax.
 
 Example:
@@ -102,6 +113,8 @@ Name::{
 }
 ```
 
+Generics are automatically inferred from field values.
+
 ### Enums
 
 Enums have variants, which may contain a payload.
@@ -110,7 +123,7 @@ Example:
 ```
 enum Name {
     Unit,
-    Struct(int)
+    WithPayload(int)
 }
 ```
 
@@ -118,7 +131,22 @@ Enums are instantiated using `Name::Variant` or `Name::Variant(payload)` syntax.
 
 Example: `Name::Unit`
 
-Example: `Name::Struct(5 + 6)`
+Example: `Name::WithPayload(5 + 6)`
+
+Enums may have generics.
+
+When instantiating, generics are inferred when possible. Unused generics have the special compiler-internal type `?`, which can be converted to any other type.
+
+Example:
+```
+enum Result<O, E> {
+    Ok(O),
+    Err(E),
+}
+
+Result::Ok(int)      // has type Result<int, ?>
+Result::Err("Error") // has type Result<?, string>
+```
 
 ## Functions
 
@@ -133,6 +161,31 @@ The syntax follows Rust's, but uses the `func` keyword instead of `fn`.
 Explicit returns (with the `return` keyword) are mandatory.
 
 A `return` without value is allowed in the global scope.
+
+Functions without a return type specified implicitly return `Nothing`.
+
+Functions may be annotated with generic types. A generic used in the return type must also be used in at least one parameter's type.
+
+Example:
+```
+func greet(name: string) {
+    print("Hello, {name}!")
+}
+```
+
+Example:
+```
+func square(number: int) -> int {
+    return number * number
+}
+```
+
+Example:
+```
+func create_list<T>(item: T) -> list<T> {
+    return [item]
+}
+```
 
 ### Built-in Functions
 

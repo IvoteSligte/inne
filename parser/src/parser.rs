@@ -271,10 +271,15 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     fn r#struct(&mut self) -> Option<Stmt<'src>> {
         self.take_if_eq(Token::Struct)?;
         let name = self.must("struct name", |s| s.ident())?;
+        let generics = self.generics();
         let fields = self.must("struct fields", |s| {
             s.delimited_by(BRACES, |s| s.separated_by_comma(Parser::field))
         })?;
-        Some(Stmt::Struct(Struct { name, fields }))
+        Some(Stmt::Struct(Struct {
+            name,
+            generics,
+            fields,
+        }))
     }
 
     fn r#enum(&mut self) -> Option<Stmt<'src>> {

@@ -1,0 +1,14 @@
+
+struct Pair<L, R>{
+    left: L,
+    right: R,
+}
+
+print(Pair::{
+    left: "Left!",
+    right: 10000,
+})
+
+var pair = Pair::{ left: true, right: false }
+
+print(pair, pair.left, pair.right)

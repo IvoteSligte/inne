@@ -14,7 +14,7 @@ pub fn write_comma_separated(
 macro_rules! usize_newtype {
     ($name:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-        pub struct $name(usize);
+        pub struct $name(pub usize);
 
         impl $name {
             pub fn get(self) -> usize {

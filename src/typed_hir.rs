@@ -113,21 +113,6 @@ struct TypeChecker<'src, 'hir> {
 
 impl<'src, 'hir> TypeChecker<'src, 'hir> {
     fn check_func_signature(&mut self, func: &'hir FuncSignature<'hir, 'src>) {
-        /// Calls `func` for every generic in `r#type`.
-        fn foreach_generic(r#type: &Type, func: &mut impl FnMut(GenericId)) {
-            match r#type {
-                Type::List(element) => foreach_generic(element, func),
-                Type::Map { key, value } => {
-                    foreach_generic(key, func);
-                    foreach_generic(value, func);
-                }
-                Type::Named { id: _, generics } => generics
-                    .iter()
-                    .for_each(|generic| foreach_generic(generic, func)),
-                Type::Generic(generic_id) => func(*generic_id),
-                _ => {}
-            }
-        }
         self.current_func_signature = Some(func);
         let FuncSignature {
             name,
@@ -378,25 +363,38 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     let TypeDef::Struct(r#struct) = &self.types[type_id.get()] else {
                         unreachable!();
                     };
+                    let generics = &r#struct.generics;
+                    let mut generic_constraints = HashMap::new();
                     // NOTE: this assumes that the field and struct field have been matched in HIR
                     //       (which may not be true if error recovery is used)
                     for (field, struct_field) in std::iter::zip(fields, &r#struct.fields) {
-                        let (value_type, _) = self.check_expr(&mut field.value);
-                        if types_not_equal(&value_type, &struct_field.r#type.0) {
+                        let (field_type, _) = self.check_expr(&mut field.value);
+                        if types_not_equal(&field_type, &struct_field.r#type.0) {
                             self.errors.add(
                                 format!(
                                     "The field '{}' has type '{}', but the provided value has type '{}'",
                                     struct_field.name.0,
                                     self.display(&struct_field.r#type.0),
-                                    self.display(&value_type),
+                                    self.display(&field_type),
                                 ),
                                 field.value.1,
                             );
+                        } else if !generics.is_empty() {
+                            extract_generic_constraints(
+                                &field_type,
+                                field.value.1,
+                                &struct_field.r#type.0,
+                                struct_field.name.1,
+                                &mut generic_constraints,
+                            );
                         }
                     }
+                    self.verify_generic_constraints(&generic_constraints, generics, r#struct.name);
                     Type::Named {
                         id: *type_id,
-                        generics: Vec::new(), // NOTE: currently, structs do not have generics
+                        generics: (0..generics.len())
+                            .map(|i| generic_constraints.get(&GenericId(i)).unwrap()[0].0.clone())
+                            .collect(),
                     }
                 }
                 Expr::VariantLiteral(VariantLiteral {
@@ -605,51 +603,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 );
             }
         }
-
-        // --- Check that generics with the same name are equal ---
-
-        for (generic_id, pairs) in generic_constraints {
-            if pairs.len() <= 1 {
-                continue;
-            }
-            let (first_type, first_span) = &pairs[0];
-            for (r#type, span) in &pairs[1..] {
-                if r#type == first_type {
-                    continue;
-                }
-                let generic = generics[generic_id.get()];
-                if span == first_span {
-                    self.errors.add_with_context(
-                            format!(
-                                "This argument requires that generic '{}' of function '{}' is both '{}' and '{}'",
-                                generic.0,
-                                func_name.0,
-                                self.display(&    first_type),
-                                self.display(&                                r#type),
-                            ),
-                            *span,
-                            "Generic defined here:",
-                            generic.1,
-                        );
-                } else {
-                    self.errors.add_with_contexts(
-                            format!(
-                                "This argument requires that generic '{}' of function '{}' is '{}', but another requires that it is '{}'",
-                                generic.0,
-                                func_name.0,
-                                self.display(&    first_type),
-                                self.display(&                                r#type),
-                            ),
-                            *first_span,
-                            vec![
-                                ("The other argument:".to_string(), *span),
-                                ("Generic defined here:".to_string(), generic.1)
-                            ],
-                        );
-                }
-                break;
-            }
-        }
+        self.verify_generic_constraints(&generic_constraints, generics, func_name);
         return_type.0.clone()
     }
 
@@ -857,6 +811,56 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         }
     }
 
+    fn verify_generic_constraints(
+        &mut self,
+        constraints: &HashMap<GenericId, Vec<(Type, Span<'src>)>>,
+        generics: &[Name<'src>],
+        def_name: Name<'src>,
+    ) {
+        for (generic_id, pairs) in constraints {
+            if pairs.len() <= 1 {
+                continue;
+            }
+            let (first_type, first_span) = &pairs[0];
+            for (r#type, span) in &pairs[1..] {
+                if r#type == first_type {
+                    continue;
+                }
+                let generic = generics[generic_id.get()];
+                if span == first_span {
+                    self.errors.add_with_context(
+                            format!(
+                                "This argument requires that generic '{}' of function '{}' is both '{}' and '{}'",
+                                generic.0,
+                                def_name.0,
+                                self.display(&first_type),
+                                self.display(&r#type),
+                            ),
+                            *span,
+                            "Generic defined here:",
+                            generic.1,
+                        );
+                } else {
+                    self.errors.add_with_contexts(
+                            format!(
+                                "This argument requires that generic '{}' of function '{}' is '{}', but another requires that it is '{}'",
+                                generic.0,
+                                def_name.0,
+                                self.display(&first_type),
+                                self.display(&r#type),
+                            ),
+                            *first_span,
+                            vec![
+                                ("The other argument:".to_string(), *span),
+                                ("Generic defined here:".to_string(), generic.1)
+                            ],
+                        );
+                }
+                break;
+            }
+        }
+    }
+
     fn display<'a>(&'a self, r#type: &'a Type) -> Display<'a, &'a Type> {
         Display(self, r#type)
     }
@@ -943,6 +947,22 @@ fn extract_generic_constraints<'src>(
                 );
             }
         }
+        _ => {}
+    }
+}
+
+/// Calls `func` for every generic in `r#type`.
+fn foreach_generic(r#type: &Type, func: &mut impl FnMut(GenericId)) {
+    match r#type {
+        Type::List(element) => foreach_generic(element, func),
+        Type::Map { key, value } => {
+            foreach_generic(key, func);
+            foreach_generic(value, func);
+        }
+        Type::Named { id: _, generics } => generics
+            .iter()
+            .for_each(|generic| foreach_generic(generic, func)),
+        Type::Generic(generic_id) => func(*generic_id),
         _ => {}
     }
 }
