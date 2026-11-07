@@ -590,37 +590,36 @@ impl<'src> Lexer<'src> {
 
 fn filter_newlines<'src>(tokens: &mut Vec<SpannedToken<'src>>) {
     let mut dst = 0;
+    let mut maybe_prev = None; // The previous retained token, if any.
     for src in 0..tokens.len() {
         let (token, _) = tokens[src];
         if token != Token::Newline {
             tokens[dst] = tokens[src];
+            maybe_prev = Some(tokens[src].0);
             dst += 1;
             continue;
         }
-        if src == 0 {
-            continue;
-        }
-        let (prev, _) = tokens[src - 1];
-        if matches!(
-            prev,
-            RBrace
-                | RParen
-                | RBracket
-                | Return
-                | Continue
-                | Break
-                | Ident(_)
-                | Int(_)
-                | Bool(_)
-                | String(_)
-                | Char(_)
-        ) {
+        if let Some(prev) = maybe_prev
+            && matches!(
+                prev,
+                RBrace
+                    | RParen
+                    | RBracket
+                    | Return
+                    | Continue
+                    | Break
+                    | Ident(_)
+                    | Int(_)
+                    | Bool(_)
+                    | String(_)
+                    | Char(_)
+            )
+            && !tokens.get(src + 1).is_some_and(|(token, _)| {
+                token.is_operator() || matches!(token, RParen | RBracket | RBrace)
+            })
+        {
             tokens[dst] = tokens[src];
-            dst += 1;
-            continue;
-        }
-        if src + 1 < tokens.len() && tokens[src + 1].0.is_operator() {
-            tokens[dst] = tokens[src];
+            maybe_prev = Some(tokens[src].0);
             dst += 1;
             continue;
         }

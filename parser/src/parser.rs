@@ -415,7 +415,11 @@ impl<'parent, 'src> Parser<'parent, 'src> {
                 Some(Stmt::Break(span))
             })
             .and_then(|stmt| {
-                if self.end < self.src.len() {
+                if self
+                    .src
+                    .get(self.end)
+                    .is_some_and(|(token, _)| *token != Token::RBrace)
+                {
                     self.take_if_eq(Token::Newline)?;
                 }
                 Some(stmt)
