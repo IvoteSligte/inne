@@ -162,7 +162,7 @@ impl Type {
     }
 
     pub fn is_known(&self) -> bool {
-        *self != Type::UNKNOWN && !matches!(self, Type::Generic(_) | Type::UnknownGeneric)
+        *self != Type::UNKNOWN && *self != Type::UnknownGeneric
     }
 
     pub fn or<'a>(&'a self, other: &'a Self) -> &'a Type {

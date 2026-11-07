@@ -72,24 +72,27 @@ pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Erro
                 )
             })
             .unzip::<_, _, Vec<_>, Vec<_>>();
-        let mut type_checker = TypeChecker {
+        let mut checker = TypeChecker {
             errors: Errors::new(),
             vars,
             func_signatures: &func_signatures,
             current_func_signature: None,
+            current_generics: &[],
             types: &hir.types,
         };
         for signature in &func_signatures {
-            type_checker.check_func_signature(signature);
+            checker.check_func_signature(signature);
         }
-        type_checker.check_stmts(&mut hir.stmts);
-        type_checker.check_types();
+        checker.check_stmts(&mut hir.stmts);
+        checker.check_types();
         for (func_signature, func_body) in std::iter::zip(&func_signatures, func_bodies) {
-            type_checker.current_func_signature = Some(func_signature);
-            type_checker.check_stmts(func_body);
-            type_checker.current_func_signature = None;
+            checker.current_func_signature = Some(func_signature);
+            checker.with_generics(func_signature.generics, |checker| {
+                checker.check_stmts(func_body)
+            });
+            checker.current_func_signature = None;
         }
-        (type_checker.errors, type_checker.vars)
+        (checker.errors, checker.vars)
     };
     if !errors.is_empty() {
         return Err(errors.into_inner());
@@ -108,48 +111,51 @@ struct TypeChecker<'src, 'hir> {
     vars: Vec<VarInfo<'src>>,
     func_signatures: &'hir [FuncSignature<'hir, 'src>],
     current_func_signature: Option<&'hir FuncSignature<'hir, 'src>>,
+    current_generics: &'hir [Name<'src>],
     types: &'hir [TypeDef<'src>],
 }
 
 impl<'src, 'hir> TypeChecker<'src, 'hir> {
     fn check_func_signature(&mut self, func: &'hir FuncSignature<'hir, 'src>) {
         self.current_func_signature = Some(func);
-        let FuncSignature {
-            name,
-            generics,
-            params,
-            return_type,
-        } = *func;
-        let mut ambiguous_generics = vec![true; generics.len()];
-        for param in params {
-            self.check_type(&param.r#type);
-            self.vars[param.var_id.get()].r#type = param.r#type.0.clone();
+        self.with_generics(func.generics, |_self| {
+            let FuncSignature {
+                name,
+                generics,
+                params,
+                return_type,
+            } = *func;
+            let mut ambiguous_generics = vec![true; generics.len()];
+            for param in params {
+                _self.check_type(&param.r#type);
+                _self.vars[param.var_id.get()].r#type = param.r#type.0.clone();
 
-            foreach_generic(&param.r#type.0, &mut |generic_id| {
-                // A generic that is used by a parameter is unambiguous because the passed argument determines its type.
-                ambiguous_generics[generic_id.get()] = false;
+                foreach_generic(&param.r#type.0, &mut |generic_id| {
+                    // A generic that is used by a parameter is unambiguous because the passed argument determines its type.
+                    ambiguous_generics[generic_id.get()] = false;
+                });
+            }
+            foreach_generic(&return_type.0, &mut |generic_id| {
+                if ambiguous_generics[generic_id.get()] {
+                    _self.errors.add(
+                        format!(
+                            "Generic type '{}' is ambiguous. Generics in the return type of a function must also be used by a parameter.",
+                            generics[generic_id.get()].0,
+                        ),
+                        return_type.1,
+                    )
+                }
             });
-        }
-        foreach_generic(&return_type.0, &mut |generic_id| {
-            if ambiguous_generics[generic_id.get()] {
-                self.errors.add(
-                format!(
-                    "Generic type '{}' is ambiguous. Generics in the return type of a function must also be used by a parameter.",
-                    generics[generic_id.get()].0,
-                ),
-                return_type.1,
-            )
+            if name.0 == "main" {
+                if !params.is_empty() {
+                    _self.errors
+                        .add("The 'main' function may not have any parameters.", name.1);
+                } else if not_equal(&return_type.0, &Type::Nothing) {
+                    _self.errors
+                        .add("The 'main' function may not return anything.", name.1);
+                }
             }
         });
-        if name.0 == "main" {
-            if !params.is_empty() {
-                self.errors
-                    .add("The 'main' function may not have any parameters.", name.1);
-            } else if return_type.0 != Type::Nothing {
-                self.errors
-                    .add("The 'main' function may not return anything.", name.1);
-            }
-        }
         self.current_func_signature = None;
     }
 
@@ -157,18 +163,18 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
     fn check_types(&mut self) {
         for type_def in self.types {
             match type_def {
-                TypeDef::Struct(r#struct) => {
+                TypeDef::Struct(r#struct) => self.with_generics(&r#struct.generics, |_self| {
                     for field in &r#struct.fields {
-                        self.check_type(&field.r#type);
+                        _self.check_type(&field.r#type);
                     }
-                }
-                TypeDef::Enum(r#enum) => {
+                }),
+                TypeDef::Enum(r#enum) => self.with_generics(&r#enum.generics, |_self| {
                     for variant in &r#enum.variants {
                         if let Some(payload) = &variant.payload {
-                            self.check_type(payload);
+                            _self.check_type(payload);
                         }
                     }
-                }
+                }),
             }
         }
     }
@@ -196,11 +202,10 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 if !target_is_assignable {
                     self.errors.add(
                         "The left side of an assignment must be a variable, list or map element, or struct field.",
-                        // FIXME: this span does not include the .expr part of an index?
                         target.1,
                     );
                 }
-                if target_type.is_known() && value_type.is_known() && target_type != value_type {
+                if not_equal(&target_type, &value_type) {
                     self.errors.add(
                         format!(
                             "Expected a value of type '{}', but found a value of type '{}'",
@@ -210,19 +215,17 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                         value.1,
                     );
                 }
-                if target_type.is_known() {
-                    use AssignOp::*;
-                    match op {
-                        Assign => {}
-                        Add | Sub | Mul | Div | Mod => {
-                            if target_type != Type::Int {
-                                // TODO: simplify error message (also in Binary)
-                                let message = format!(
-                                    "Cannot apply arithmetic operator to values of type '{}'",
-                                    self.display(&target_type)
-                                );
-                                self.errors.add(message, *op_span);
-                            }
+                use AssignOp::*;
+                match op {
+                    Assign => {}
+                    Add | Sub | Mul | Div | Mod => {
+                        if not_equal(&target_type, &Type::Int) {
+                            // TODO: simplify error message (also in Binary)
+                            let message = format!(
+                                "Cannot apply arithmetic operator to values of type '{}'",
+                                self.display(&target_type)
+                            );
+                            self.errors.add(message, *op_span);
                         }
                     }
                 }
@@ -230,7 +233,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             Stmt::If(If { choices, r#else }) => {
                 for Choice { cond, then } in choices {
                     let (cond_type, _) = self.check_expr(cond);
-                    if cond_type != Type::Bool {
+                    if not_equal(&cond_type, &Type::Bool) {
                         let message = format!(
                             "If-conditions must be booleans ('bool'). Found '{}'.",
                             self.display(&cond_type)
@@ -268,7 +271,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             }
             Stmt::While(While { cond, body }) => {
                 let (cond_type, _) = self.check_expr(cond);
-                if cond_type != Type::Bool {
+                if not_equal(&cond_type, &Type::Bool) {
                     let message = format!(
                         "While-conditions must be booleans ('bool'). Found '{}'.",
                         self.display(&cond_type)
@@ -291,7 +294,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     .current_func_signature
                     .map(|func| &func.return_type.0)
                     .unwrap_or(&Type::Nothing);
-                if value_type != *expected_return_type {
+                if not_equal(&value_type, expected_return_type) {
                     // TODO: add function return type span as context
                     self.errors.add(
                         format!(
@@ -369,12 +372,12 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     //       (which may not be true if error recovery is used)
                     for (field, struct_field) in std::iter::zip(fields, &r#struct.fields) {
                         let (field_type, _) = self.check_expr(&mut field.value);
-                        if types_not_equal(&field_type, &struct_field.r#type.0) {
+                        if does_not_conform_to(&field_type, &struct_field.r#type.0) {
                             self.errors.add(
                                 format!(
                                     "The field '{}' has type '{}', but the provided value has type '{}'",
                                     struct_field.name.0,
-                                    self.display(&struct_field.r#type.0),
+                                    self.display_with_generics(&struct_field.r#type.0, &r#struct.generics),
                                     self.display(&field_type),
                                 ),
                                 field.value.1,
@@ -389,7 +392,13 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                             );
                         }
                     }
-                    self.verify_generic_constraints(&generic_constraints, generics, r#struct.name);
+                    self.verify_generic_constraints(
+                        &generic_constraints,
+                        generics,
+                        r#struct.name,
+                        "field",
+                        "struct",
+                    );
                     Type::Named {
                         id: *type_id,
                         generics: generic_values_from_constraints(
@@ -416,11 +425,11 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     let mut generic_constraints = HashMap::new();
                     match (expected_payload_type, payload_type) {
                         (Some((expected, expected_span)), Some((found, found_span))) => {
-                            if types_not_equal(expected, &found) {
+                            if does_not_conform_to(&found, expected) {
                                 self.errors.add(
                                     format!(
                                         "Expected '{}' as payload type, but found '{}'",
-                                        self.display(&expected),
+                                        self.display_with_generics(&expected, &r#enum.generics),
                                         self.display(&found)
                                     ),
                                     found_span,
@@ -439,7 +448,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                             self.errors.add(
                                 format!(
                                     "This enum variant requires a payload of type '{}'",
-                                    self.display(&expected)
+                                    self.display_with_generics(&expected, &r#enum.generics)
                                 ),
                                 *span,
                             );
@@ -450,7 +459,13 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                         }
                         (None, None) => {} // OK
                     }
-                    self.verify_generic_constraints(&generic_constraints, generics, r#enum.name);
+                    self.verify_generic_constraints(
+                        &generic_constraints,
+                        generics,
+                        r#enum.name,
+                        "value",
+                        "enum",
+                    );
                     Type::Named {
                         id: *type_id,
                         generics: generic_values_from_constraints(
@@ -469,7 +484,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         let (right_type, _) = self.check_expr(&mut binary.right);
         let or_type = left_type.or(&right_type); // Known if either one is known
 
-        if or_type.is_known() && left_type != right_type {
+        if not_equal(&left_type, &right_type) {
             self.errors.add(
                 format!(
                     "Both sides must be of the same type. Left is '{}' and right is '{}'.",
@@ -482,7 +497,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         use BinaryOp::*;
         match binary.op.0 {
             Add | Sub | Div | Mul | Mod => {
-                if or_type.is_known() && *or_type != Type::Int {
+                if not_equal(or_type, &Type::Int) {
                     self.errors.add(
                         format!(
                             "Cannot apply arithmetic operator to values of type '{}'",
@@ -494,7 +509,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 or_type.clone()
             }
             Lt | Leq | Gt | Geq => {
-                if or_type.is_known() && *or_type != Type::Int {
+                if not_equal(or_type, &Type::Int) {
                     self.errors.add(
                         format!(
                             "Cannot apply comparison operator to values of type '{}'",
@@ -506,7 +521,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 Type::Bool
             }
             And | Or => {
-                if or_type.is_known() && *or_type != Type::Bool {
+                if not_equal(or_type, &Type::Bool) {
                     self.errors.add(
                         format!(
                             "Cannot apply boolean operator to values of type '{}'",
@@ -525,7 +540,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         let (expr_type, _) = self.check_expr(&mut unary.expr);
         match unary.op.0 {
             UnaryOp::Neg => {
-                if expr_type.is_known() && expr_type != Type::Int {
+                if not_equal(&expr_type, &Type::Int) {
                     self.errors.add(
                         format!(
                             "Only integers can be negated. Cannot negate '{}'.",
@@ -536,7 +551,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 }
             }
             UnaryOp::Not => {
-                if expr_type.is_known() && expr_type != Type::Bool {
+                if not_equal(&expr_type, &Type::Bool) {
                     self.errors.add(
                         format!(
                             "Only booleans can be inverted. Cannot invert '{}'.",
@@ -598,7 +613,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         for (arg, param) in std::iter::zip(args, params) {
             let (arg_type, _) = self.check_expr(arg);
             let (param_type, _) = &param.r#type;
-            if types_not_equal(&arg_type, param_type) {
+            if not_equal(&arg_type, param_type) {
                 let message = format!(
                     "Expected a value of type '{}' but found a value of type '{}'",
                     self.display(&arg_type),
@@ -615,7 +630,13 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 );
             }
         }
-        self.verify_generic_constraints(&generic_constraints, generics, func_name);
+        self.verify_generic_constraints(
+            &generic_constraints,
+            generics,
+            func_name,
+            "argument",
+            "function",
+        );
         return_type.0.clone()
     }
 
@@ -631,7 +652,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         let first_element_span = list.elements[0].1;
         for element in &mut list.elements[1..] {
             let (element_type, _) = self.check_expr(element);
-            if types_not_equal(&first_element_type, &element_type) {
+            if not_equal(&first_element_type, &element_type) {
                 self.errors.add_with_context(
                     format!(
                         "All elements of a list should have the same type, but this one has type '{}'",
@@ -665,7 +686,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             macro_rules! check {
                 ($first_type:expr, $first_span:expr, $var:ident, $str:literal) => {{
                     let (r#type, _) = self.check_expr($var);
-                    if types_not_equal($first_type, &r#type) {
+                    if not_equal($first_type, &r#type) {
                         self.errors.add_with_context(
                             format!(
                                 "All map {}s should have the same type, but this {} has type '{}'",
@@ -729,7 +750,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 key: key_type,
                 value: value_type,
             } => {
-                if index_type.is_known() && key_type.is_known() && index_type != *key_type {
+                if not_equal(&index_type, &key_type) {
                     self.errors.add(
                         format!(
                             "The map's key type is '{}', but '{}' was used to access it.",
@@ -823,11 +844,25 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         }
     }
 
+    fn with_generics<T>(
+        &mut self,
+        generics: &'hir [Name<'src>],
+        func: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        debug_assert!(self.current_generics.is_empty());
+        self.current_generics = generics;
+        let value = func(self);
+        self.current_generics = &[];
+        value
+    }
+
     fn verify_generic_constraints(
         &mut self,
         constraints: &HashMap<GenericId, Vec<(Type, Span<'src>)>>,
-        generics: &[Name<'src>],
+        def_generics: &[Name<'src>],
         def_name: Name<'src>,
+        item_text: &'static str,
+        def_text: &'static str,
     ) {
         for (generic_id, pairs) in constraints {
             if pairs.len() <= 1 {
@@ -838,43 +873,56 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 if r#type == first_type {
                     continue;
                 }
-                let generic = generics[generic_id.get()];
+                let generic = def_generics[generic_id.get()];
                 if span == first_span {
                     self.errors.add_with_context(
-                            format!(
-                                "This argument requires that generic '{}' of function '{}' is both '{}' and '{}'",
-                                generic.0,
-                                def_name.0,
-                                self.display(&first_type),
-                                self.display(&r#type),
-                            ),
-                            *span,
-                            "Generic defined here:",
-                            generic.1,
-                        );
+                        // TODO: change text 'argument'/'function' when enum/struct is used
+                        format!(
+                            "This {item_text} requires that generic '{}' of {def_text} '{}' is both '{}' and '{}'",
+                            generic.0,
+                            def_name.0,
+                            self.display(&first_type),
+                            self.display(&r#type),
+                        ),
+                        *span,
+                        "Generic defined here:",
+                        generic.1,
+                    );
                 } else {
                     self.errors.add_with_contexts(
-                            format!(
-                                "This argument requires that generic '{}' of function '{}' is '{}', but another requires that it is '{}'",
-                                generic.0,
-                                def_name.0,
-                                self.display(&first_type),
-                                self.display(&r#type),
-                            ),
-                            *first_span,
-                            vec![
-                                ("The other argument:".to_string(), *span),
-                                ("Generic defined here:".to_string(), generic.1)
-                            ],
-                        );
+                        format!(
+                            "This {item_text} requires that generic '{}' of {def_text} '{}' is '{}', but another requires that it is '{}'",
+                            generic.0,
+                            def_name.0,
+                            self.display(&first_type),
+                            self.display(&r#type),
+                        ),
+                        *first_span,
+                        vec![
+                            ("The other argument:".to_string(), *span),
+                            ("Generic defined here:".to_string(), generic.1)
+                        ],
+                    );
                 }
                 break;
             }
         }
     }
 
-    fn display<'a>(&'a self, r#type: &'a Type) -> Display<'a, &'a Type> {
-        Display(self, r#type)
+    fn display_with_generics<'a>(
+        &'a self,
+        r#type: &'a Type,
+        generics: &'a [Name<'a>],
+    ) -> Display<'a, 'a, &'a Type> {
+        Display {
+            types: &self.types,
+            generic_names: generics,
+            value: r#type,
+        }
+    }
+
+    fn display<'a>(&'a self, r#type: &'a Type) -> Display<'a, 'a, &'a Type> {
+        self.display_with_generics(r#type, self.current_generics)
     }
 }
 
@@ -899,74 +947,73 @@ fn s_if_not_1(n: usize) -> &'static str {
 /// Returns `true` if the types are definitively not equal.
 ///
 /// This function also returns `false` if either type is unknown.
-fn types_not_equal(left: &Type, right: &Type) -> bool {
+fn not_equal(left: &Type, right: &Type) -> bool {
     left.is_known() && right.is_known() && left != right
 }
 
+/// Returns `true` if `r#type` does not conform to `other`.
+/// This means that the types are not equal *and* `other` is not a generic type.
+///
+/// This function also returns `false` if either type is unknown.
+fn does_not_conform_to(r#type: &Type, other: &Type) -> bool {
+    r#type.is_known() && other.is_known() && !matches!(other, Type::Generic(_)) && r#type != other
+}
+
 fn extract_generic_constraints<'src>(
-    left: &Type,
-    left_span: Span<'src>,
-    right: &Type,
-    right_span: Span<'src>,
+    value_type: &Type,
+    value_span: Span<'src>,
+    def_type: &Type,
+    def_span: Span<'src>,
     constraints: &mut HashMap<GenericId, Vec<(Type, Span<'src>)>>,
 ) {
-    match (left, right) {
-        (Type::Generic(generic_id), _) if *right != Type::UNKNOWN => {
+    if !value_type.is_known() || !def_type.is_known() {
+        return;
+    }
+    match (value_type, def_type) {
+        (Type::Generic(generic_id), _) => {
             constraints
                 .entry(*generic_id)
                 .or_default()
-                .push((right.clone(), right_span));
+                .push((def_type.clone(), def_span));
         }
-        (_, Type::Generic(generic_id)) if *left != Type::UNKNOWN => {
-            constraints
-                .entry(*generic_id)
-                .or_default()
-                .push((left.clone(), left_span));
-        }
-        (Type::List(left_element), Type::List(right_element)) => {
+        (Type::List(value_element), Type::List(def_element)) => {
             extract_generic_constraints(
-                left_element,
-                left_span,
-                right_element,
-                right_span,
+                value_element,
+                value_span,
+                def_element,
+                def_span,
                 constraints,
             );
         }
         (
             Type::Map {
-                key: left_key,
-                value: left_value,
+                key: value_key,
+                value: value_value,
             },
             Type::Map {
-                key: right_key,
-                value: right_value,
+                key: def_key,
+                value: def_value,
             },
         ) => {
-            extract_generic_constraints(left_key, left_span, right_key, right_span, constraints);
-            extract_generic_constraints(
-                left_value,
-                left_span,
-                right_value,
-                right_span,
-                constraints,
-            );
+            extract_generic_constraints(value_key, value_span, def_key, def_span, constraints);
+            extract_generic_constraints(value_value, value_span, def_value, def_span, constraints);
         }
         (
             Type::Named {
-                id: left_id,
-                generics: left_generics,
+                id: value_id,
+                generics: value_generics,
             },
             Type::Named {
-                id: right_id,
-                generics: right_generics,
+                id: def_id,
+                generics: def_generics,
             },
-        ) if *left_id != TypeId::UNKNOWN && left_id == right_id => {
-            for (left_generic, right_generic) in std::iter::zip(left_generics, right_generics) {
+        ) if *value_id != TypeId::UNKNOWN && value_id == def_id => {
+            for (value_generic, def_generic) in std::iter::zip(value_generics, def_generics) {
                 extract_generic_constraints(
-                    left_generic,
-                    left_span,
-                    right_generic,
-                    right_span,
+                    value_generic,
+                    value_span,
+                    def_generic,
+                    def_span,
                     constraints,
                 );
             }
@@ -991,17 +1038,25 @@ fn foreach_generic(r#type: &Type, func: &mut impl FnMut(GenericId)) {
     }
 }
 
-struct Display<'a, T>(&'a TypeChecker<'a, 'a>, T);
+struct Display<'hir, 'src, T> {
+    types: &'hir [TypeDef<'src>],
+    generic_names: &'hir [(&'src str, Span<'src>)],
+    value: T,
+}
 
-impl<T> Display<'_, T> {
+impl<T> Display<'_, '_, T> {
     fn with(&self, value: T) -> Self {
-        Self(self.0, value)
+        Self { value, ..*self }
     }
 }
 
-impl<'a> std::fmt::Display for Display<'a, &'a Type> {
+impl std::fmt::Display for Display<'_, '_, &'_ Type> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self(checker, r#type) = self;
+        let Self {
+            types,
+            generic_names,
+            value: r#type,
+        } = self;
         match r#type {
             Type::Nothing | Type::Int | Type::Bool | Type::Char | Type::Range => {
                 hir::Display(*r#type).fmt(f)
@@ -1017,7 +1072,7 @@ impl<'a> std::fmt::Display for Display<'a, &'a Type> {
                 write!(f, "map<{}, {}>", self.with(key), self.with(value))
             }
             Type::Named { id, generics } => {
-                let name = checker.types[id.get()].name();
+                let name = types[id.get()].name();
                 f.write_str(name.0)?;
                 if !generics.is_empty() {
                     f.write_str("<")?;
@@ -1027,8 +1082,7 @@ impl<'a> std::fmt::Display for Display<'a, &'a Type> {
                 Ok(())
             }
             Type::Generic(generic_id) => {
-                let func = checker.current_func_signature.unwrap();
-                let name = func.generics[generic_id.get()];
+                let name = generic_names[generic_id.get()];
                 f.write_str(name.0)
             }
             Type::UnknownGeneric => f.write_str("?"),
