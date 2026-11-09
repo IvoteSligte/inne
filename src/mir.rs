@@ -40,6 +40,7 @@ usize_newtype!(LocalId);
 
 impl BlockId {
     pub const FINISHED: Self = Self(usize::MAX);
+    pub const DEFAULT: Self = Self(usize::MAX - 1);
 }
 
 impl LocalId {
@@ -121,15 +122,20 @@ pub enum Op {
         type_id: TypeId,
         fields: Vec<LocalId>,
     },
+    Member {
+        expr: LocalId,
+        field_index: usize,
+    },
     Enum {
         type_id: TypeId,
         variant_index: usize,
         payload: Option<LocalId>,
     },
-    Member {
+    IsVariant {
         expr: LocalId,
-        field_index: usize,
+        variant_index: usize,
     },
+    GetPayload(LocalId),
     Print {
         args: Vec<LocalId>,
     },
@@ -328,6 +334,49 @@ impl<'src> Constructor<'src> {
                     if let Some(r#else) = r#else {
                         self.map_scope(r#else, loop_block_ids, builder);
                         builder.jump_to(end_block_id);
+                    }
+                }
+                thir::Stmt::Match(thir::Match { expr, arms }) => {
+                    let expr_id = self.map_expr(&expr.0, builder);
+                    let end_block_id = if arms.is_empty() {
+                        // There is no branch if there are no match arms,
+                        // so there is no 'end' block either.
+                        BlockId::DEFAULT
+                    } else {
+                        builder.create_block()
+                    };
+                    for (i, thir::MatchArm { pattern, body }) in arms.iter().enumerate() {
+                        match pattern {
+                            thir::Pattern::Variant {
+                                variant_index,
+                                name: _,
+                                payload,
+                            } => {
+                                debug_assert_ne!(*variant_index, usize::MAX);
+                                let next_block_id = if i + 1 == arms.len() {
+                                    end_block_id
+                                } else {
+                                    builder.create_block()
+                                };
+                                let cond_id = builder.push_op(Op::IsVariant {
+                                    expr: expr_id,
+                                    variant_index: *variant_index,
+                                });
+                                // Since matches are always complete, the last arm's condition
+                                // is always true, so we skip the check.
+                                if i + 1 < arms.len() {
+                                    // If the condition is false, skip its 'body' block.
+                                    let body_block_id = builder.create_block();
+                                    builder.cond_jump_to(cond_id, body_block_id, next_block_id);
+                                }
+                                if let Some((var_id, _)) = payload {
+                                    let payload_id = builder.push_op(Op::GetPayload(expr_id));
+                                    builder.declare(*var_id, payload_id);
+                                }
+                                self.map_scope(body, loop_block_ids, builder);
+                                builder.push_jump(end_block_id, next_block_id);
+                            }
+                        }
                     }
                 }
                 // TODO: warn about modifying a collection that is being iterated over
@@ -987,7 +1036,12 @@ impl std::fmt::Display for Stmt {
                 field_index,
             } => write!(f, "PointToField(_{struct}, _{field_index})"),
             Copy(local_id) => write!(f, "Copy(_{local_id})"),
-            Member { expr, field_index } => write!(f, "Member(_{expr}, _{field_index})"),
+            Member { expr, field_index } => write!(f, "Member(_{expr}, field {field_index})"),
+            IsVariant {
+                expr,
+                variant_index,
+            } => write!(f, "IsVariant(_{expr}, variant {variant_index})"),
+            GetPayload(expr) => write!(f, "GetPayload(_{expr})"),
         }
     }
 }

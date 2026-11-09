@@ -6,10 +6,12 @@ language:
 - move semantics
   - pass-by-reference ('ref') or value (default) in functions
 - pattern matching/destructuring
-  - if var Enum(x) = expr
+  - if var Enum(x) = expr       // low priority
   - while var Enum(x) = expr    // low priority
   - var Enum(x) = expr else ... // low priority
-  - match                       // low priority
+  - var { x, y } = expr         // low priority
+  - match primitive types       // low priority
+  - match guards                // low priority
 - allow global code that does not depend on code from other files in the same project (to prevent cycles) // low priority
 - panic, assert                 // low priority
 - builtin list/map functions

@@ -240,6 +240,7 @@ impl<'src> Lexer<'src> {
             || self.keyword("var", Var)
             || self.keyword("if", If)
             || self.keyword("else", Else)
+            || self.keyword("match", Match)
             || self.keyword("for", For)
             || self.keyword("while", While)
             || self.keyword("loop", Loop)

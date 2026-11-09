@@ -79,7 +79,8 @@ impl Writer<'_> {
     pub fn put_indent_lbrace(&mut self) -> Result {
         self.skip_to(Token::LBrace)?;
         write!(&mut self.output, "{INDENT}")?;
-        self.write(Token::LBrace)
+        self.write(Token::LBrace)?;
+        self.put_newline()
     }
 
     pub fn put_dedent_rbrace(&mut self) -> Result {
@@ -167,6 +168,7 @@ impl Format for Stmt<'_> {
             VarDecl,
             Assign,
             If,
+            Match,
             For,
             While,
             Loop;
@@ -195,7 +197,7 @@ impl Format for Stmt<'_> {
                 f.put_space()?;
                 for (i, segment) in import.path.0.iter().enumerate() {
                     if i > 0 {
-                        f.put(Token::ColonColon)?;
+                        f.put(Token::Slash)?;
                         f.put_space()?;
                     }
                     segment.fmt(f)?;
@@ -213,7 +215,6 @@ impl Format for Block<'_> {
             return f.put(Token::RBrace);
         }
         f.put_indent_lbrace()?;
-        f.put_newline()?;
         for stmt in self {
             stmt.fmt(f)?;
             f.put_newline()?;
@@ -260,12 +261,11 @@ impl Format for Struct<'_> {
         f.put_keyword(Token::Struct)?;
         self.name.fmt(f)?;
         write_generics!(f, self.generics);
+        f.put_space()?;
         if !self.fields.is_empty() {
             f.put_indent_lbrace()?;
-            f.put_newline()?;
             for field in &self.fields {
                 field.fmt(f)?;
-                f.put_comma()?;
                 f.put_newline()?;
             }
             f.put_dedent_rbrace()
@@ -287,11 +287,11 @@ impl Format for Enum<'_> {
         f.put_keyword(Token::Enum)?;
         self.name.fmt(f)?;
         write_generics!(f, self.generics);
+        f.put_space()?;
         if !self.variants.is_empty() {
             f.put_indent_lbrace()?;
             for variant in &self.variants {
                 variant.fmt(f)?;
-                f.put_comma()?;
                 f.put_newline()?;
             }
             f.put_dedent_rbrace()
@@ -491,7 +491,7 @@ impl Format for Pair<'_> {
 impl Format for StructLiteral<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         self.name.fmt(f)?;
-        f.put(Token::ColonColon)?;
+        f.put(Token::Colon)?;
         f.put(Token::LBrace)?;
         f.put_space()?;
         write_comma_separated(f, &self.fields)?;
@@ -509,7 +509,7 @@ impl Format for FieldLiteral<'_> {
 impl Format for VariantLiteral<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
         self.enum_name.fmt(f)?;
-        f.put(Token::ColonColon)?;
+        f.put(Token::Colon)?;
         self.name.fmt(f)?;
         if let Some(payload) = self.payload.as_ref() {
             f.put(Token::LParen)?;
@@ -636,6 +636,45 @@ impl Format for If<'_> {
             r#else.fmt(f)?;
         }
         Ok(())
+    }
+}
+
+impl Format for Match<'_> {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        f.put_keyword(Token::Match)?;
+        self.expr.0.fmt(f)?;
+        f.put_space()?;
+        f.put_indent_lbrace()?;
+        for arm in &self.arms {
+            arm.fmt(f)?;
+            f.put_newline()?;
+        }
+        f.put_dedent_rbrace()?;
+        Ok(())
+    }
+}
+
+impl Format for MatchArm<'_> {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        self.pattern.fmt(f)?;
+        f.put_space()?;
+        self.body.fmt(f)
+    }
+}
+
+impl Format for Pattern<'_> {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        match self {
+            Pattern::Variant { name, payload } => {
+                name.fmt(f)?;
+                if let Some(payload_name) = payload {
+                    f.put(Token::LParen)?;
+                    payload_name.fmt(f)?;
+                    f.put(Token::RParen)?;
+                }
+                Ok(())
+            }
+        }
     }
 }
 

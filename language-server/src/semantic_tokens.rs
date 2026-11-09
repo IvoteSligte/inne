@@ -84,9 +84,7 @@ impl<'src> Override<'_, 'src> {
                 if let Some((_, type_span)) = return_type {
                     self.set(tt::TYPE, *type_span);
                 }
-                for stmt in body {
-                    self.stmt(stmt);
-                }
+                self.block(body);
             }
             Stmt::Struct(Struct {
                 name,
@@ -138,47 +136,55 @@ impl<'src> Override<'_, 'src> {
                 r#else,
             }) => {
                 self.expr(cond);
-                for stmt in then {
-                    self.stmt(stmt);
-                }
+                self.block(then);
                 for (cond, then) in else_ifs {
                     self.expr(cond);
-                    for stmt in then {
-                        self.stmt(stmt);
-                    }
+                    self.block(then);
                 }
                 if let Some(r#else) = r#else {
-                    for stmt in r#else {
-                        self.stmt(stmt);
-                    }
+                    self.block(r#else);
+                }
+            }
+            Stmt::Match(Match { expr, arms }) => {
+                self.expr(expr);
+                for MatchArm { pattern, body } in arms {
+                    self.pattern(pattern);
+                    self.block(body);
                 }
             }
             Stmt::For(For { var: _, iter, body }) => {
                 self.expr(iter);
-                for stmt in body {
-                    self.stmt(stmt);
-                }
+                self.block(body);
             }
             Stmt::While(While { cond, body }) => {
                 self.expr(cond);
-                for stmt in body {
-                    self.stmt(stmt);
-                }
+                self.block(body);
             }
-            Stmt::Loop(Loop { body }) => {
-                for stmt in body {
-                    self.stmt(stmt);
-                }
-            }
-            Stmt::Return((Some(expr), _)) => {
-                self.expr(expr);
-            }
+            Stmt::Loop(Loop { body }) => self.block(body),
+            Stmt::Return((Some(expr), _)) => self.expr(expr),
             Stmt::Return((None, _)) => {}
             Stmt::Break(_) => {}
             Stmt::Continue(_) => {}
             Stmt::Import(Import { path }) => {
                 for (_, span) in &path.0 {
                     self.set(tt::NAMESPACE, *span);
+                }
+            }
+        }
+    }
+
+    fn block(&mut self, body: &Vec<Stmt<'src>>) {
+        for stmt in body {
+            self.stmt(stmt);
+        }
+    }
+
+    fn pattern(&mut self, pattern: &Pattern<'src>) {
+        match pattern {
+            Pattern::Variant { name, payload } => {
+                self.set(tt::ENUM_MEMBER, name.1);
+                if let Some(payload_name) = payload {
+                    self.set(tt::VARIABLE, payload_name.1);
                 }
             }
         }

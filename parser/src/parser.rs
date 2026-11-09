@@ -161,7 +161,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     /// Allows a trailing separator.
     fn separated_by<T>(
         &mut self,
-        separator: Token<'src>,
+        separator: impl Fn(Token<'src>) -> bool,
         func: impl Fn(&mut Self) -> Option<T>,
     ) -> Vec<T> {
         let Some(first) = func(self) else {
@@ -169,7 +169,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         };
         let mut values = vec![first];
         // This greedily consumes the separator before querying `func`.
-        while self.take_if_eq(separator).is_some()
+        while self.take_if(&separator).is_some()
             && let Some(value) = func(self)
         {
             values.push(value);
@@ -180,9 +180,14 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     /// This function is non-atomic.
     /// If `func` consumes a token and still returns `None`, then that token is permanently gone.
     ///
-    /// Allows a trailing comma.
-    fn separated_by_comma<T>(&mut self, func: impl Fn(&mut Self) -> Option<T>) -> Vec<T> {
-        self.separated_by(Token::Comma, func)
+    /// Parses items separated by commas or newlines.
+    ///
+    /// Allows a trailing comma or newline.
+    fn separated_by_default<T>(&mut self, func: impl Fn(&mut Self) -> Option<T>) -> Vec<T> {
+        self.separated_by(
+            |token| token == Token::Comma || token == Token::Newline,
+            func,
+        )
     }
 
     // --- Inne-specific methods ---
@@ -199,7 +204,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         self.atomic_spanned(|s| {
             let name = s.ident()?;
             let generics = s
-                .delimited_by(ANGLES, |s| s.separated_by_comma(Parser::r#type))
+                .delimited_by(ANGLES, |s| s.separated_by_default(Parser::r#type))
                 .unwrap_or_default();
             Some(Type { name, generics })
         })
@@ -230,7 +235,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     }
 
     fn generics(&mut self) -> Vec<Name<'src>> {
-        self.delimited_by(ANGLES, |s| s.separated_by_comma(Parser::ident))
+        self.delimited_by(ANGLES, |s| s.separated_by_default(Parser::ident))
             .unwrap_or_default()
     }
 
@@ -242,7 +247,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         self.take_if_eq(Token::Import)?;
         let path = self.must("import path", |s| {
             s.spanned(|s| {
-                let path = s.separated_by(Token::ColonColon, |s| s.ident());
+                let path = s.separated_by(|token| token == Token::Slash, |s| s.ident());
                 (!path.is_empty()).then_some(path)
             })
         })?;
@@ -254,7 +259,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         let name = self.must("function name", |s| s.ident())?;
         let generics = self.generics();
         let params = self.must("function parameters", |s| {
-            s.delimited_by(PARENS, |s| s.separated_by_comma(Parser::param))
+            s.delimited_by(PARENS, |s| s.separated_by_default(Parser::param))
         })?;
         let _ = self.take_if_eq(Token::Arrow);
         let return_type = self.r#type();
@@ -273,7 +278,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         let name = self.must("struct name", |s| s.ident())?;
         let generics = self.generics();
         let fields = self.must("struct fields", |s| {
-            s.delimited_by(BRACES, |s| s.separated_by_comma(Parser::field))
+            s.delimited_by(BRACES, |s| s.separated_by_default(Parser::field))
         })?;
         Some(Stmt::Struct(Struct {
             name,
@@ -287,7 +292,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         let name = self.must("enum name", |s| s.ident())?;
         let generics = self.generics();
         let variants = self.must("enum variants", |s| {
-            s.delimited_by(BRACES, |s| s.separated_by_comma(Parser::variant))
+            s.delimited_by(BRACES, |s| s.separated_by_default(Parser::variant))
         })?;
         Some(Stmt::Enum(Enum {
             name,
@@ -302,13 +307,6 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         self.must("=", |s| s.take_if_eq(Token::Eq))?;
         let value = self.must("value", |s| s.expr())?;
         Some(Stmt::VarDecl(VarDecl { name, value }))
-    }
-
-    fn if_stmt_head(&mut self) -> Option<(SpannedExpr<'src>, Block<'src>)> {
-        self.take_if_eq(Token::If)?;
-        let cond = self.must("condition", |s| s.expr())?;
-        let then = self.must("block", |s| s.block())?;
-        Some((cond, then))
     }
 
     fn r#if(&mut self) -> Option<Stmt<'src>> {
@@ -329,6 +327,40 @@ impl<'parent, 'src> Parser<'parent, 'src> {
             else_ifs,
             r#else,
         }))
+    }
+
+    fn if_stmt_head(&mut self) -> Option<(SpannedExpr<'src>, Block<'src>)> {
+        self.take_if_eq(Token::If)?;
+        let cond = self.must("condition", |s| s.expr())?;
+        let then = self.must("block", |s| s.block())?;
+        Some((cond, then))
+    }
+
+    fn r#match(&mut self) -> Option<Stmt<'src>> {
+        self.take_if_eq(Token::Match)?;
+        let expr = self.must("match value", |s| s.expr())?;
+        let arms = self.must("match body", |s| {
+            s.delimited_by(BRACES, |s| {
+                s.separated_by_default(|s| {
+                    let pattern = s.pattern()?;
+                    let body = s.must("match arm body", |s| s.block())?;
+                    Some(MatchArm { pattern, body })
+                })
+            })
+        })?;
+        Some(Stmt::Match(Match { expr, arms }))
+    }
+
+    fn pattern(&mut self) -> Option<Pattern<'src>> {
+        let name = self.ident()?;
+        Some(Pattern::Variant {
+            name,
+            payload: match self.delimited_by(PARENS, |s| s.must("name", |s| s.ident())) {
+                Some(Some(payload)) => Some(payload),
+                Some(None) => return None, // Error
+                None => None,
+            },
+        })
     }
 
     fn r#for(&mut self) -> Option<Stmt<'src>> {
@@ -394,6 +426,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
             .or_else(|| self.r#enum())
             .or_else(|| self.var_decl())
             .or_else(|| self.r#if())
+            .or_else(|| self.r#match())
             .or_else(|| self.r#for())
             .or_else(|| self.r#while())
             .or_else(|| self.r#loop())
@@ -429,7 +462,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     fn call(&mut self) -> Option<SpannedExpr<'src>> {
         self.atomic_spanned(|s| {
             let name = s.ident()?;
-            let args = s.delimited_by(PARENS, |s| s.separated_by_comma(Parser::expr))?;
+            let args = s.delimited_by(PARENS, |s| s.separated_by_default(Parser::expr))?;
             Some(Expr::Call(Call { name, args }))
         })
     }
@@ -438,7 +471,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     fn list(&mut self) -> Option<SpannedExpr<'src>> {
         self.atomic_spanned(|s| {
             s.delimited_by(BRACKETS, |s| {
-                let elements = s.separated_by_comma(Parser::expr);
+                let elements = s.separated_by_default(Parser::expr);
                 if elements.is_empty()
                     && let Some(element_type) = s.delimited_by(ANGLES, Parser::r#type).flatten()
                 {
@@ -454,7 +487,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     fn map_(&mut self) -> Option<SpannedExpr<'src>> {
         self.atomic_spanned(|s| {
             s.delimited_by(BRACES, |s| {
-                let pairs = s.separated_by_comma(|s| {
+                let pairs = s.separated_by_default(|s| {
                     let key = s.expr()?;
                     let _ = s.take_if_eq(Token::Colon);
                     let value = s.expr()?;
@@ -484,9 +517,9 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     fn struct_literal(&mut self) -> Option<SpannedExpr<'src>> {
         self.atomic_spanned(|s| {
             let name = s.ident()?;
-            s.take_if(|t| t == Token::Colon || t == Token::ColonColon)?;
+            s.take_if_eq(Token::Colon)?;
             let fields = s.delimited_by(BRACES, |s| {
-                s.separated_by_comma(|s| {
+                s.separated_by_default(|s| {
                     let name = s.ident()?;
                     s.take_if_eq(Token::Colon)?;
                     let value = s.expr()?;
@@ -500,7 +533,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     fn variant_literal(&mut self) -> Option<SpannedExpr<'src>> {
         self.atomic_spanned(|s| {
             let enum_name = s.ident()?;
-            s.take_if_eq(Token::ColonColon)?;
+            s.take_if_eq(Token::Colon)?;
             let name = s.ident()?;
             let payload = s.delimited_by(PARENS, Parser::expr).flatten().map(Box::new);
             Some(Expr::VariantLiteral(VariantLiteral {

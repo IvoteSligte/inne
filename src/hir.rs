@@ -53,6 +53,7 @@ pub enum Stmt<'src> {
     Expr(SpannedExpr<'src>),
     Assign(Assign<'src>),
     If(If<'src>),
+    Match(Match<'src>),
     For(For<'src>),
     While(While<'src>),
     Loop(Loop<'src>),
@@ -163,11 +164,32 @@ impl Type {
     }
 
     pub fn is_known(&self) -> bool {
-        *self != Type::UNKNOWN && *self != Type::UnknownGeneric
+        *self != Self::UNKNOWN && *self != Self::UnknownGeneric
     }
 
-    pub fn or<'a>(&'a self, other: &'a Self) -> &'a Type {
+    pub fn or<'a>(&'a self, other: &'a Self) -> &'a Self {
         if self.is_known() { self } else { other }
+    }
+
+    pub fn with_generics(&self, generics: &[Self]) -> Self {
+        use Type::*;
+
+        match self {
+            Nothing | Int | Bool | Char | Range | UnknownGeneric => self.clone(),
+            List(element) => List(Box::new(element.with_generics(generics))),
+            Map { key, value } => Map {
+                key: Box::new(key.with_generics(generics)),
+                value: Box::new(value.with_generics(generics)),
+            },
+            Named { id, generics } => Named {
+                id: *id,
+                generics: generics
+                    .iter()
+                    .map(|r#type| r#type.with_generics(generics))
+                    .collect(),
+            },
+            Generic(generic_id) => generics[generic_id.get()].clone(),
+        }
     }
 }
 
@@ -300,6 +322,24 @@ pub struct If<'a> {
 pub struct Choice<'a> {
     pub cond: SpannedExpr<'a>,
     pub then: Block<'a>,
+}
+
+pub struct Match<'a> {
+    pub expr: SpannedExpr<'a>,
+    pub arms: Vec<MatchArm<'a>>,
+}
+
+pub struct MatchArm<'a> {
+    pub pattern: Pattern<'a>,
+    pub body: Block<'a>,
+}
+
+pub enum Pattern<'a> {
+    Variant {
+        variant_index: usize,
+        name: Name<'a>,
+        payload: Option<(VarId, Name<'a>)>,
+    },
 }
 
 pub struct For<'a> {
@@ -804,6 +844,18 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                         r#else: r#else.as_ref().map(|r#else| self.map_scope(r#else)),
                     }))
                 }
+                ast::Stmt::Match(ast::Match { expr, arms }) => {
+                    let expr = self.map_expr(expr);
+                    let arms = self.in_scope(|_self| {
+                        arms.iter()
+                            .map(|ast::MatchArm { pattern, body }| MatchArm {
+                                pattern: _self.map_pattern(pattern),
+                                body: _self.map_scope(body),
+                            })
+                            .collect()
+                    });
+                    out_stmts.push(Stmt::Match(Match { expr, arms }));
+                }
                 ast::Stmt::For(ast::For { var, iter, body }) => {
                     let var_id = self.vars.add(*var);
                     let iter = self.map_expr(iter);
@@ -858,6 +910,22 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
             var_id,
             name: param.name,
             r#type: self.map_type(&param.r#type),
+        }
+    }
+
+    #[must_use]
+    fn map_pattern(&mut self, pattern: &'ast ast::Pattern<'src>) -> Pattern<'src> {
+        match pattern {
+            ast::Pattern::Variant { name, payload } => Pattern::Variant {
+                // variant_index is determined during type checking.
+                variant_index: usize::MAX,
+                name: *name,
+                payload: payload.map(|name| {
+                    let var_id = self.vars.add(name);
+                    self.scopes.last_mut().unwrap().insert(name.0, var_id);
+                    (var_id, name)
+                }),
+            },
         }
     }
 

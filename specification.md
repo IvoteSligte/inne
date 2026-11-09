@@ -103,11 +103,11 @@ struct Node<T> {
 }
 ```
 
-Structs are instantiated using `Name::{ ... }` syntax.
+Structs are instantiated using `Name:{ ... }` syntax.
 
 Example:
 ```
-Name::{
+Name:{
     name0: value0,
     name1: value1,
 }
@@ -127,11 +127,11 @@ enum Name {
 }
 ```
 
-Enums are instantiated using `Name::Variant` or `Name::Variant(payload)` syntax.
+Enums are instantiated using `Name:Variant` or `Name:Variant(payload)` syntax.
 
-Example: `Name::Unit`
+Example: `Name:Unit`
 
-Example: `Name::WithPayload(5 + 6)`
+Example: `Name:WithPayload(5 + 6)`
 
 Enums may have generics.
 
@@ -144,8 +144,8 @@ enum Result<O, E> {
     Err(E),
 }
 
-Result::Ok(int)      // has type Result<int, ?>
-Result::Err("Error") // has type Result<?, string>
+Result:Ok(int)      // has type Result<int, ?>
+Result:Err("Error") // has type Result<?, string>
 ```
 
 ## Functions
@@ -209,8 +209,6 @@ A variable definition is written as `var name = value`.
 
 Tuples, lists, and maps can be destructured as in Python.
 
-In control-flow statements, `var Enum::Variant(name) = value` can be used as condition as in Rust.
-
 ## Assignments
 
 Variables and indexed lists/maps can be used as assignment target.
@@ -227,15 +225,50 @@ Example: `number += value` or `string += value` or `number /= value`
 
 Braces are mandatory for each kind of control-flow statement, unlike in C.
 
+Conditions are always boolean expressions.
+
 ### If-statements
 
 `if condition { ... }` as in Rust.
 
 `if condition { ... } else { ... }` and `if condition0 { ... } else if condition1 { ... }` are also allowed.
 
+### Match-statements
+
+Enum values, integers, booleans, floats, and strings can be matched in a `match` statement.
+
+`_` is used to indicate "any other value", comparably to an if-statement `else`.
+
+Example:
+```
+var none = Option:None
+match none {
+    Some(value) { print(value) }
+    None { print("None") }
+}
+```
+
+Example:
+```
+match "yes" {
+    "yes" { print("YES!") }
+    "no" { print("NO!!!") }
+    _ { print("unknown") }
+}
+```
+
+Example:
+```
+match n {
+    5 { print("five") }
+    3 { print("three") }
+    _ {}
+}
+```
+
 ### For-loops
 
-`for value in iterator { ... }` as in Rust.
+`for variable in iterator { ... }` as in Rust.
 
 Only ranges, lists, and maps can be used as iterators.
 
@@ -263,9 +296,9 @@ Following this, it looks for a file in a folder with the same name as the curren
 
 Example: `import file`
 
-Submodules can be accessed with `::`
+Submodules can be accessed with `/`
 
-Example: `import file::submodule::subsubmodule`
+Example: `import file/submodule/subsubmodule`
 
 ## Projects
 

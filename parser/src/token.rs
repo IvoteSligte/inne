@@ -9,6 +9,7 @@ pub enum Token<'src> {
     Var,
     If,
     Else,
+    Match,
     For,
     While,
     Loop,
@@ -83,6 +84,7 @@ impl Token<'_> {
             Func | Var
                 | If
                 | Else
+                | Match
                 | For
                 | While
                 | Loop
@@ -143,6 +145,7 @@ impl std::fmt::Display for Token<'_> {
             Var => "var",
             If => "if",
             Else => "else",
+            Match => "match",
             For => "for",
             While => "while",
             Loop => "loop",
@@ -208,7 +211,7 @@ impl std::fmt::Display for Token<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct InneStr<'src>(pub(crate) &'src str);
 
 impl InneStr<'_> {
@@ -236,5 +239,11 @@ impl InneStr<'_> {
 
     pub fn original(&self) -> &str {
         self.0
+    }
+}
+
+impl std::fmt::Debug for InneStr<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
     }
 }

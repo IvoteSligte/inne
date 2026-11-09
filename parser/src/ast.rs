@@ -19,6 +19,7 @@ pub enum Stmt<'a> {
     Expr(SpannedExpr<'a>),
     Assign(Assign<'a>),
     If(If<'a>),
+    Match(Match<'a>),
     For(For<'a>),
     While(While<'a>),
     Loop(Loop<'a>),
@@ -250,6 +251,26 @@ pub struct If<'a> {
     pub then: Block<'a>,
     pub else_ifs: Vec<(SpannedExpr<'a>, Block<'a>)>,
     pub r#else: Option<Block<'a>>,
+}
+
+#[derive(Debug)]
+pub struct Match<'a> {
+    pub expr: SpannedExpr<'a>,
+    pub arms: Vec<MatchArm<'a>>,
+}
+
+#[derive(Debug)]
+pub struct MatchArm<'a> {
+    pub pattern: Pattern<'a>,
+    pub body: Block<'a>,
+}
+
+#[derive(Debug)]
+pub enum Pattern<'a> {
+    Variant {
+        name: Name<'a>,
+        payload: Option<Name<'a>>,
+    },
 }
 
 #[derive(Debug)]

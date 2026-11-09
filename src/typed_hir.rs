@@ -1,10 +1,10 @@
 use std::{collections::HashMap, ops::Deref};
 
 pub use crate::hir::{
-    Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, EmptyList, EmptyMap, Expr, For,
-    FormatString, Func, FuncId, GenericId, Hir, If, Index, List, Loop, Map, Member, Name, Pair,
-    Param, Range, SpannedExpr, Stmt, Struct, StructLiteral, Type, TypeDef, TypeId, Unary, UnaryOp,
-    VarDecl, VarId, VariantLiteral, While,
+    Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, EmptyList, EmptyMap, Enum, Expr, For,
+    FormatString, Func, FuncId, GenericId, Hir, If, Index, List, Loop, Map, Match, MatchArm,
+    Member, Name, Pair, Param, Pattern, Range, SpannedExpr, Stmt, Struct, StructLiteral, Type,
+    TypeDef, TypeId, Unary, UnaryOp, VarDecl, VarId, Variant, VariantLiteral, While,
 };
 
 use crate::{Error, Errors, Span, Spanned, hir, util::write_comma_separated};
@@ -139,7 +139,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 if ambiguous_generics[generic_id.get()] {
                     _self.errors.add(
                         format!(
-                            "Generic type '{}' is ambiguous. Generics in the return type of a function must also be used by a parameter.",
+                            "Generic type '{}' is ambiguous. Generics in the return type of a function must also be used by a parameter",
                             generics[generic_id.get()].0,
                         ),
                         return_type.1,
@@ -149,10 +149,10 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             if name.0 == "main" {
                 if !params.is_empty() {
                     _self.errors
-                        .add("The 'main' function may not have any parameters.", name.1);
+                        .add("The 'main' function may not have any parameters", name.1);
                 } else if not_equal(&return_type.0, &Type::Nothing) {
                     _self.errors
-                        .add("The 'main' function may not return anything.", name.1);
+                        .add("The 'main' function may not return anything", name.1);
                 }
             }
         });
@@ -201,7 +201,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 let (value_type, _) = self.check_expr(value);
                 if !target_is_assignable {
                     self.errors.add(
-                        "The left side of an assignment must be a variable, list or map element, or struct field.",
+                        "The left side of an assignment must be a variable, list or map element, or struct field",
                         target.1,
                     );
                 }
@@ -235,7 +235,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     let (cond_type, _) = self.check_expr(cond);
                     if not_equal(&cond_type, &Type::Bool) {
                         let message = format!(
-                            "If-conditions must be booleans ('bool'). Found '{}'.",
+                            "If-conditions must be booleans ('bool'). Found '{}'",
                             self.display(&cond_type)
                         );
                         self.errors.add(message, cond.1)
@@ -244,6 +244,33 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 }
                 if let Some(r#else) = r#else {
                     self.check_stmts(r#else);
+                }
+            }
+            Stmt::Match(Match { expr, arms }) => {
+                let (expr_type, _) = self.check_expr(expr);
+                let Type::Named { id, generics } = &expr_type else {
+                    self.errors.add(
+                        format!(
+                            "The value used for matching must be of an enum type. Found '{}'",
+                            self.display(&expr_type)
+                        ),
+                        expr.1,
+                    );
+                    return;
+                };
+                let TypeDef::Enum(r#enum) = &self.types[id.get()] else {
+                    self.errors.add(
+                        format!(
+                            "The value used for matching must be of an enum type, not a struct. Found '{}'",
+                            self.display(&expr_type)
+                        ),
+                        expr.1,
+                    );
+                    return;
+                };
+                let mut used_variants = vec![None; r#enum.variants.len()];
+                for arm in arms {
+                    self.check_match_arm(arm, &mut used_variants, generics, r#enum);
                 }
             }
             Stmt::For(For {
@@ -273,7 +300,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 let (cond_type, _) = self.check_expr(cond);
                 if not_equal(&cond_type, &Type::Bool) {
                     let message = format!(
-                        "While-conditions must be booleans ('bool'). Found '{}'.",
+                        "While-conditions must be booleans ('bool'), but found '{}'",
                         self.display(&cond_type)
                     );
                     self.errors.add(message, cond.1)
@@ -307,6 +334,82 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 }
             }
         }
+    }
+
+    fn check_match_arm(
+        &mut self,
+        arm: &mut MatchArm<'src>,
+        used_variants: &mut [Option<Span<'src>>],
+        generics: &Vec<Type>,
+        r#enum: &Enum<'src>,
+    ) {
+        let variants = &r#enum.variants;
+        let MatchArm { pattern, body } = arm;
+        match pattern {
+            Pattern::Variant {
+                variant_index,
+                name,
+                payload,
+            } => {
+                match variants.iter().position(|variant| variant.name.0 == name.0) {
+                    Some(index) => {
+                        *variant_index = index;
+                        if let Some(prev_match_span) = used_variants[index] {
+                            self.errors.add_with_context(
+                                format!("The variant '{}' was already matched", name.0),
+                                name.1,
+                                "Previously matched here:",
+                                prev_match_span,
+                            );
+                        }
+                        used_variants[index] = Some(name.1);
+                        match payload {
+                            // TODO: error if def has payload and the match arm doesn't and the other way around
+                            Some((var_id, payload_name)) => {
+                                self.vars[var_id.get()].r#type = match variants[index]
+                                    .payload
+                                    .as_ref()
+                                    .map(|(r#type, _)| r#type.with_generics(generics))
+                                {
+                                    Some(r#type) => r#type,
+                                    None => {
+                                        self.errors.add(
+                                            format!(
+                                                "The variant '{}' does not have a payload",
+                                                name.0
+                                            ),
+                                            payload_name.1,
+                                        );
+                                        Type::UNKNOWN
+                                    }
+                                }
+                            }
+                            None => {
+                                if variants[index].payload.is_some() {
+                                    self.errors.add(
+                                            format!(
+                                                "The variant '{}' has a payload. Suggestion: use '{}(payload)'",
+                                                name.0, name.0
+                                            ),
+                                            name.1,
+                                        );
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        self.errors.add(
+                            format!(
+                                "The type '{}' does not have a variant named '{}'",
+                                r#enum.name.0, name.0
+                            ),
+                            name.1,
+                        );
+                    }
+                }
+            }
+        }
+        self.check_stmts(body);
     }
 
     fn check_stmts(&mut self, stmts: &mut [Stmt<'src>]) {
@@ -496,7 +599,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         if not_equal(&left_type, &right_type) {
             self.errors.add(
                 format!(
-                    "Both sides must be of the same type. Left is '{}' and right is '{}'.",
+                    "Both sides must be of the same type. Left is '{}' and right is '{}'",
                     self.display(&left_type),
                     self.display(&right_type)
                 ),
@@ -552,7 +655,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 if not_equal(&expr_type, &Type::Int) {
                     self.errors.add(
                         format!(
-                            "Only integers can be negated. Cannot negate '{}'.",
+                            "Only integers can be negated. Cannot negate '{}'",
                             self.display(&expr_type)
                         ),
                         span,
@@ -563,7 +666,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 if not_equal(&expr_type, &Type::Bool) {
                     self.errors.add(
                         format!(
-                            "Only booleans can be inverted. Cannot invert '{}'.",
+                            "Only booleans can be inverted. Cannot invert '{}'",
                             self.display(&expr_type)
                         ),
                         span,
@@ -596,7 +699,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             };
             let extra_needed = params.len() - args.len();
             let message = format!(
-                "This function needs {} more argument{}.",
+                "This function needs {} more argument{}",
                 extra_needed,
                 s_if_not_1(extra_needed)
             );
@@ -610,7 +713,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 ..*last_arg_span
             };
             let message = format!(
-                "This function only takes {} argument{}. {} argument{} passed.",
+                "This function only takes {} argument{}. {} argument{} passed",
                 params.len(),
                 s_if_not_1(params.len()),
                 args.len(),
@@ -729,11 +832,11 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         match &index.expr.0 {
             // TODO: also detect this when index.expr is a variable instead
             Expr::EmptyList(_) => self.errors.add(
-                format!("Getting an element from an empty list always fails."),
+                format!("Getting an element from an empty list always fails"),
                 span,
             ),
             Expr::EmptyMap(_) => self.errors.add(
-                format!("Getting a value from an empty map always fails."),
+                format!("Getting a value from an empty map always fails"),
                 span,
             ),
             _ => {}
@@ -746,7 +849,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     if index_type.is_known() {
                         self.errors.add(
                             format!(
-                                "Only int and range can be used to index into lists and strings, not '{}'.",
+                                "Only int and range can be used to index into lists and strings, not '{}'",
                                 self.display(&index_type)
                             ),
                             index.index.1,
@@ -762,7 +865,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 if not_equal(&index_type, &key_type) {
                     self.errors.add(
                         format!(
-                            "The map's key type is '{}', but '{}' was used to access it.",
+                            "The map's key type is '{}', but '{}' was used to access it",
                             self.display(&key_type),
                             self.display(&index_type)
                         ),
@@ -774,7 +877,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             expr_type => {
                 self.errors.add(
                     format!(
-                        "Only 'string', 'list', and 'map' can be indexed, not '{}'.",
+                        "Only 'string', 'list', and 'map' can be indexed, not '{}'",
                         self.display(&expr_type)
                     ),
                     index.expr.1,
@@ -843,7 +946,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         if generics.len() != def_generics_len {
             self.errors.add(
                 format!(
-                    "The type '{}' has {} generics, but {} were provided.",
+                    "The type '{}' has {} generics, but {} were provided",
                     def.name().0,
                     def_generics_len,
                     generics.len()

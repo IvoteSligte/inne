@@ -108,36 +108,36 @@ impl std::fmt::Display for Stmt<'_> {
                 name: (name, _),
                 value: (value, _),
             }) => {
-                write!(f, "var _{var_id} {name} = {value};")?;
+                write!(f, "var _{var_id} {name} = {value};")
             }
-            Stmt::Expr((expr, _)) => write!(f, "{expr};")?,
+            Stmt::Expr((expr, _)) => write!(f, "{expr};"),
             Stmt::Assign(Assign {
                 op: (op, _),
                 target: (target, _),
                 value: (value, _),
             }) => {
-                write!(f, "{target} {op} {value};")?;
+                write!(f, "{target} {op} {value};")
             }
             Stmt::If(If { choices, r#else }) => {
-                writeln!(f, "if {} {{{INDENT}", choices[0].cond.0)?;
-                for stmt in &choices[0].then {
-                    writeln!(f, "{stmt}")?;
-                }
-                write!(f, "{DEDENT}}}")?;
-                for choice in &choices[1..] {
-                    writeln!(f, " else if {} {{{INDENT}", choice.cond.0)?;
-                    for stmt in &choice.then {
-                        writeln!(f, "{stmt}")?;
-                    }
-                    write!(f, "{DEDENT}}}")?;
+                writeln!(f, "if {} ", choices[0].cond.0)?;
+                write_block(&choices[0].then, f)?;
+                for Choice { cond, then } in &choices[1..] {
+                    write!(f, " else if {} ", cond.0)?;
+                    write_block(then, f)?;
                 }
                 if let Some(r#else) = r#else {
-                    writeln!(f, " else {{{INDENT}")?;
-                    for stmt in r#else {
-                        writeln!(f, "{stmt}")?;
-                    }
-                    write!(f, "{DEDENT}}}")?;
+                    write!(f, " else ")?;
+                    write_block(r#else, f)?;
                 }
+                Ok(())
+            }
+            Stmt::Match(Match { expr, arms }) => {
+                writeln!(f, "match {} {{{INDENT}", expr.0)?;
+                for MatchArm { pattern, body } in arms {
+                    write!(f, "{} ", pattern)?;
+                    write_block(body, f)?;
+                }
+                write!(f, "{DEDENT}}}")
             }
             Stmt::For(For {
                 var_id,
@@ -145,40 +145,30 @@ impl std::fmt::Display for Stmt<'_> {
                 iter: (iter, _),
                 body,
             }) => {
-                writeln!(f, "for _{var_id} {var} in {iter} {{{INDENT}")?;
-                for stmt in body {
-                    writeln!(f, "{stmt}")?;
-                }
-                write!(f, "{DEDENT}}}")?;
+                write!(f, "for _{var_id} {var} in {iter} ")?;
+                write_block(body, f)
             }
             Stmt::While(While {
                 cond: (cond, _),
                 body,
             }) => {
-                writeln!(f, "while {cond} {{{INDENT}")?;
-                for stmt in body {
-                    writeln!(f, "{stmt}")?;
-                }
-                write!(f, "{DEDENT}}}")?;
+                write!(f, "while {cond} ")?;
+                write_block(body, f)
             }
             Stmt::Loop(Loop { body }) => {
-                writeln!(f, "loop {{{INDENT}")?;
-                for stmt in body {
-                    writeln!(f, "{stmt}")?;
-                }
-                write!(f, "{DEDENT}}}")?;
+                write!(f, "loop ")?;
+                write_block(body, f)
             }
-            Stmt::Break(_) => write!(f, "break;")?,
-            Stmt::Continue(_) => write!(f, "continue;")?,
+            Stmt::Break(_) => write!(f, "break;"),
+            Stmt::Continue(_) => write!(f, "continue;"),
             Stmt::Return((value, _)) => {
                 f.write_str("return")?;
                 if let Some((value, _)) = value {
                     write!(f, " {value}")?;
                 }
-                f.write_str(";")?;
+                f.write_str(";")
             }
         }
-        Ok(())
     }
 }
 
@@ -289,4 +279,33 @@ impl std::fmt::Display for FieldLiteral<'_> {
         f.write_str(": ")?;
         self.value.0.fmt(f)
     }
+}
+
+impl std::fmt::Display for Pattern<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Pattern::Variant {
+                variant_index: _,
+                name,
+                payload,
+            } => {
+                name.0.fmt(f)?;
+                if let Some(payload_name) = payload {
+                    f.write_str("(")?;
+                    payload_name.0.fmt(f)?;
+                    f.write_str(")")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+// Cannot implement `std::fmt::Display` for `Block` since it is a type alias of `Vec<Stmt>`.
+fn write_block(block: &Block<'_>, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    writeln!(f, "{{{INDENT}")?;
+    for stmt in block {
+        writeln!(f, "{stmt}")?;
+    }
+    write!(f, "{DEDENT}}}")
 }

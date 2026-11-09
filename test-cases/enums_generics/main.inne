@@ -4,6 +4,6 @@ enum Result<O, E> {
     Err(E)
 }
 
-print(Result::Ok("Hi"))
-print(Result::Err("PANIC!!!!!"))
+print(Result:Ok("Hi"))
+print(Result:Err("PANIC!!!!!"))
 

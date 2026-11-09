@@ -1,0 +1,18 @@
+
+enum Option<T> {
+    Some(T)
+    None
+}
+
+var some = Option:Some("This is Some.")
+var none = Option:None
+
+match some {
+    Some(value) { print(value) }
+    None { print("Unreachable: Some != None") }
+}
+
+match none {
+   Some(value) { print("Unreachable: None != Some") }
+   None { print("This is None.") }
+}

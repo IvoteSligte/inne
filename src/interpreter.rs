@@ -343,6 +343,17 @@ impl<'a> Interpreter<'a> {
                 Value::Struct(ptr) => ptr.borrow().fields[*field_index].clone(),
                 _ => unreachable!(),
             },
+            Op::IsVariant {
+                expr,
+                variant_index,
+            } => match self.get_local(*expr) {
+                Value::Enum(ptr) => Value::Bool(ptr.borrow().variant_index == *variant_index),
+                _ => unreachable!(),
+            },
+            Op::GetPayload(expr) => match self.get_local(*expr) {
+                Value::Enum(ptr) => ptr.borrow().payload.clone().unwrap(),
+                _ => unreachable!(),
+            },
             Op::PointToLocal(local_id) => Value::LocalPointer(*local_id),
             Op::PointToField {
                 r#struct,
@@ -476,7 +487,7 @@ impl<'a> Interpreter<'a> {
                     unreachable!();
                 };
                 debug_assert_eq!(field_names.len(), r#struct.fields.len());
-                write!(f, "{}::{{", name)?;
+                write!(f, "{}:{{", name)?;
                 if !field_names.is_empty() {
                     write!(f, " ")?;
                     for (i, (name, value)) in
@@ -502,7 +513,7 @@ impl<'a> Interpreter<'a> {
                     unreachable!();
                 };
                 debug_assert!(r#enum.variant_index < variant_names.len());
-                write!(f, "{}::{}", name, variant_names[r#enum.variant_index])?;
+                write!(f, "{}:{}", name, variant_names[r#enum.variant_index])?;
                 if let Some(payload) = r#enum.payload.as_ref() {
                     write!(f, "(")?;
                     self.write(f, &payload, true)?;
