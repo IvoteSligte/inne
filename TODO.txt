@@ -4,18 +4,26 @@ language:
 - type aliases                  // low priority
   - make 'string' an alias of 'list<char>'
 - move semantics
+  - pass-by-reference ('ref') or value (default) in functions
 - pattern matching/destructuring
   - if var Enum(x) = expr
   - while var Enum(x) = expr    // low priority
   - var Enum(x) = expr else ... // low priority
   - match                       // low priority
-- format strings
 - allow global code that does not depend on code from other files in the same project (to prevent cycles) // low priority
 - panic, assert                 // low priority
 - builtin list/map functions
   - contains
   - list push
     - this requires changing slicing if `array[0..1].push(item)` should be valid
+- floats
+  - integer-to-float
+  - float-to-integer
+- lex other integer radixes // low priority
+  - hexadecimal, binary, octal
+- formatting specifiers // low priority
+  - float precision
+  - left-pad, right-pad
 
 tooling:
 - autocomplete

@@ -75,7 +75,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         func: impl FnOnce(&mut Parser<'_, 'src>) -> Option<T>,
     ) -> Option<T> {
         let maybe = self.atomic(func);
-        if maybe.is_none() && !self.src.is_empty() {
+        if maybe.is_none() && !self.src.is_empty() && self.errors.is_empty() {
             let span = match self.src.get(self.end) {
                 Some((_, span)) => *span,
                 None => {
@@ -511,6 +511,31 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         })
     }
 
+    fn format_string(&mut self) -> Option<SpannedExpr<'src>> {
+        self.spanned(|s| {
+            let text = s.take_if_map(|token| match token {
+                Token::StringStart(text) => Some(text),
+                _ => None,
+            })?;
+            let expr = s.must("value", |s| s.expr())?;
+            let mut segments = vec![(text, expr)];
+            while let Some(text) = s.take_if_map(|token| match token {
+                Token::StringMiddle(text) => Some(text),
+                _ => None,
+            }) {
+                let expr = s.must("value", |s| s.expr())?;
+                segments.push((text, expr));
+            }
+            let end_text = s.must("format string end", |s| {
+                s.take_if_map(|token| match token {
+                    Token::StringEnd(text) => Some(text),
+                    _ => None,
+                })
+            })?;
+            Some(Expr::FormatString(FormatString { segments, end_text }))
+        })
+    }
+
     fn atom(&mut self) -> Option<SpannedExpr<'src>> {
         self.call()
             .or_else(|| self.list())
@@ -518,6 +543,7 @@ impl<'parent, 'src> Parser<'parent, 'src> {
             .or_else(|| self.struct_literal())
             .or_else(|| self.variant_literal())
             .or_else(|| self.delimited_by(PARENS, Parser::expr).flatten())
+            .or_else(|| self.format_string())
             .or_else(|| {
                 self.take_if_map(|token| {
                     Some(match token {

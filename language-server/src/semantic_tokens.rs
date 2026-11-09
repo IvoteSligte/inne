@@ -20,7 +20,11 @@ pub fn extract_semantic_tokens(file: &File) -> Option<Vec<SemanticToken>> {
         let token_type = match token {
             Token::Ident(_) => tt::VARIABLE, // default for identifiers
             Token::Int(_) | Token::Bool(_) => tt::NUMBER,
-            Token::String(_) | Token::Char(_) => tt::STRING,
+            Token::String(_)
+            | Token::StringStart(_)
+            | Token::StringMiddle(_)
+            | Token::StringEnd(_)
+            | Token::Char(_) => tt::STRING,
             _ if token.is_keyword() => tt::KEYWORD,
             _ if token.is_operator() => tt::OPERATOR,
             _ if token.is_delimiter() => tt::DELIMITER,
@@ -246,6 +250,14 @@ impl<'src> Override<'_, 'src> {
             Expr::Member(Member { expr, member }) => {
                 self.expr(expr);
                 self.set(tt::PROPERTY, member.1);
+            }
+            Expr::FormatString(FormatString {
+                segments,
+                end_text: _,
+            }) => {
+                for (_, expr) in segments {
+                    self.expr(expr);
+                }
             }
         }
     }

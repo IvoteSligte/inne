@@ -262,6 +262,14 @@ impl<'a> std::fmt::Display for Expr<'a> {
             Expr::Member(Member { expr, member, .. }) => {
                 write!(f, "({}).{}", expr.0, member.0)?;
             }
+            Expr::FormatString(FormatString { segments, end_text }) => {
+                f.write_str("\"")?;
+                for (text, expr) in segments {
+                    write!(f, "{}{{{}}}", text.0.original(), expr.0)?;
+                }
+                write!(f, "{}", end_text.0.original())?;
+                f.write_str("\"")?;
+            }
         }
         Ok(())
     }

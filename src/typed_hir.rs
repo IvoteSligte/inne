@@ -1,10 +1,10 @@
 use std::{collections::HashMap, ops::Deref};
 
 pub use crate::hir::{
-    Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, EmptyList, EmptyMap, Expr, For, Func,
-    FuncId, GenericId, Hir, If, Index, List, Loop, Map, Member, Name, Pair, Param, Range,
-    SpannedExpr, Stmt, Struct, StructLiteral, Type, TypeDef, TypeId, Unary, UnaryOp, VarDecl,
-    VarId, VariantLiteral, While,
+    Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, EmptyList, EmptyMap, Expr, For,
+    FormatString, Func, FuncId, GenericId, Hir, If, Index, List, Loop, Map, Member, Name, Pair,
+    Param, Range, SpannedExpr, Stmt, Struct, StructLiteral, Type, TypeDef, TypeId, Unary, UnaryOp,
+    VarDecl, VarId, VariantLiteral, While,
 };
 
 use crate::{Error, Errors, Span, Spanned, hir, util::write_comma_separated};
@@ -473,6 +473,15 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                             &generic_constraints,
                         ),
                     }
+                }
+                Expr::FormatString(FormatString {
+                    segments,
+                    end_text: _,
+                }) => {
+                    for (_, expr) in segments {
+                        let _ = self.check_expr(expr);
+                    }
+                    Type::string()
                 }
             },
             false,

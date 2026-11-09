@@ -1,209 +1,9 @@
-use crate::{Span, Spanned};
+use crate::{InneStr, Span, Spanned, Token};
 
 pub type LexError<'a> = (&'static str, Span<'a>);
 pub type SpannedToken<'src> = Spanned<'src, Token<'src>>;
 
 use Token::*;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Token<'src> {
-    // Keywords
-    Func,
-    Var,
-    If,
-    Else,
-    For,
-    While,
-    Loop,
-    Break,
-    Continue,
-    Return,
-    In,
-    Import,
-    Use,
-    Struct,
-    Enum,
-    Ref,
-    Copy,
-    ShallowCopy,
-    // Tokens with stored data
-    Ident(&'src str),
-    Int(&'src str),
-    Bool(bool),
-    Char(char),
-    String(&'src str),
-    Comment(&'src str),
-    // Unary and Binary Operators
-    Plus,
-    Minus, // Unary+Binary
-    Star,
-    Slash,
-    Percent,
-    LAngleEq,
-    RAngleEq,
-    EqEq,
-    BangEq,
-    Not, // Unary
-    And,
-    Or,
-    // Assignment Operators
-    Eq,
-    PlusEq,
-    MinusEq,
-    StarEq,
-    SlashEq,
-    PercentEq,
-    // Delimiters
-    LBrace,
-    RBrace,
-    LParen,
-    RParen,
-    LBracket,
-    RBracket,
-    LAngle, // Also an operator
-    RAngle, // Also an operator
-    // Punctuation
-    Dot,
-    DotDot,
-    Comma,
-    Arrow,
-    Colon,
-    ColonColon,
-    At,
-    Hashtag,
-    Dollar,
-    // Special
-    Newline,
-}
-
-impl Token<'_> {
-    pub fn is_keyword(self) -> bool {
-        matches!(
-            self,
-            Func | Var
-                | If
-                | Else
-                | For
-                | While
-                | Loop
-                | Break
-                | Continue
-                | Return
-                | In
-                | Import
-                | Use
-                | Struct
-                | Enum
-                | Ref
-                | Copy
-                | ShallowCopy
-                | And
-                | Or
-                | Not
-        )
-    }
-
-    pub fn is_operator(self) -> bool {
-        matches!(
-            self,
-            Plus | Minus
-                | Star
-                | Slash
-                | Percent
-                | LAngleEq
-                | RAngleEq
-                | EqEq
-                | BangEq
-                | Not
-                | And
-                | Or
-                | Eq
-                | PlusEq
-                | MinusEq
-                | StarEq
-                | SlashEq
-                | PercentEq
-                | LAngle
-                | RAngle
-        )
-    }
-
-    pub fn is_delimiter(self) -> bool {
-        matches!(
-            self,
-            LBrace | RBrace | LParen | RParen | LBracket | RBracket | LAngle | RAngle
-        )
-    }
-}
-
-impl std::fmt::Display for Token<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Func => "func",
-            Var => "var",
-            If => "if",
-            Else => "else",
-            For => "for",
-            While => "while",
-            Loop => "loop",
-            Break => "break",
-            Continue => "continue",
-            Return => "return",
-            In => "in",
-            Import => "import",
-            Use => "use",
-            Struct => "struct",
-            Enum => "enum",
-            Ref => "ref",
-            Copy => "copy",
-            ShallowCopy => "shallow_copy",
-            Ident(ident) => ident,
-            Bool(bool) => return write!(f, "{bool}"),
-            Int(int) => int,
-            // NOTE: does this escape backslashes? since the input may contain \n, we should not escape backslashes.
-            Char(char) => return write!(f, "{char:?}"),
-            // NOTE: does this escape backslashes? since the input may contain \n, we should not escape backslashes.
-            String(string) => return write!(f, "{string:?}"),
-            Comment(comment) => return write!(f, "{comment}"),
-            Plus => "+",
-            Minus => "-",
-            Star => "*",
-            Slash => "/",
-            Percent => "%",
-            LAngleEq => "<=",
-            RAngleEq => ">=",
-            EqEq => "==",
-            BangEq => "!=",
-            Not => "!",
-            And => "&&",
-            Or => "||",
-            Eq => "=",
-            PlusEq => "+=",
-            MinusEq => "-=",
-            StarEq => "*=",
-            SlashEq => "/=",
-            PercentEq => "%=",
-            LBrace => "{",
-            RBrace => "}",
-            LParen => "(",
-            RParen => ")",
-            LBracket => "[",
-            RBracket => "]",
-            LAngle => "<",
-            RAngle => ">",
-            Dot => ".",
-            DotDot => "..",
-            Comma => ",",
-            Arrow => "->",
-            Colon => ":",
-            ColonColon => "::",
-            At => "@",
-            Hashtag => "#",
-            Dollar => "$",
-            Newline => "\\n",
-        })
-    }
-}
 
 struct Cursor<'lexer, 'src> {
     lexer: &'lexer mut Lexer<'src>,
@@ -284,7 +84,7 @@ impl<'lexer, 'src> Cursor<'lexer, 'src> {
 
     /// Returns the length of the discovered character escape (if any),
     /// and reports an error if encountered.
-    fn take_escape<'a>(&mut self) -> Option<char> {
+    pub fn take_escape<'a>(&mut self) -> Option<char> {
         let bytes = self.remaining().as_bytes();
         if bytes.is_empty() || bytes[0] != b'\\' {
             return None;
@@ -299,17 +99,9 @@ impl<'lexer, 'src> Cursor<'lexer, 'src> {
             return Some('?');
         };
         match escaped {
-            b'\\' | b'"' | b'\'' | b'n' | b'r' | b't' => {
+            _ if let Some(c) = escaped_byte_to_char(escaped) => {
                 self.skip(2);
-                Some(match escaped {
-                    b'\\' => '\\',
-                    b'"' => '"',
-                    b'\'' => '\'',
-                    b'n' => '\n',
-                    b'r' => '\r',
-                    b't' => '\t',
-                    _ => unreachable!(),
-                })
+                Some(c)
             }
             b'u' => {
                 let mut num_hex_digits = 0;
@@ -347,6 +139,32 @@ impl<'lexer, 'src> Cursor<'lexer, 'src> {
             }
         }
     }
+
+    /// Returns `None` if EOF is reached before a closing delimiter.
+    /// Returns `Some((text_between_delimiters, span, ends_with_quote))` otherwise.
+    #[must_use]
+    fn take_string_suffix(mut self) -> Option<(&'src str, Span<'src>, bool)> {
+        let is_quote = loop {
+            if self.take_escape().is_some() {
+                // OK
+            } else if self.take_if(|c| c == '"') {
+                break true;
+            } else if self.take_if(|c| c == '{') {
+                break false;
+            } else if self.take().is_none() {
+                self.push_error(
+                    "Found an unfinished string, add a quote '\"' to complete it",
+                    self.start,
+                    self.end,
+                );
+                return None;
+            }
+        };
+        let (text, span) = self.commit();
+        // Remove the delimiters from the string's content.
+        let text = &text[1..text.len() - 1];
+        Some((text, span, is_quote))
+    }
 }
 
 macro_rules! rule {
@@ -364,6 +182,7 @@ struct Lexer<'src> {
     tokens: Vec<SpannedToken<'src>>,
     filename: &'src str,
     errors: Vec<LexError<'src>>,
+    in_format_string: bool,
 }
 
 impl<'src> Lexer<'src> {
@@ -496,33 +315,45 @@ impl<'src> Lexer<'src> {
         true
     }
 
+    /// Must be called before `inne_symbol` to lex '}' in format strings correctly.
     fn inne_string(&mut self) -> bool {
+        let in_format_string = self.in_format_string;
         let mut cursor = self.cursor();
+        if in_format_string && cursor.take_if(|c| c == '}') {
+            let pair = match cursor.take_string_suffix() {
+                Some((text, span, true)) => {
+                    self.in_format_string = false;
+                    (Token::StringEnd(InneStr(text)), span)
+                }
+                Some((text, span, false)) => (Token::StringMiddle(InneStr(text)), span),
+                None => return false,
+            };
+            self.tokens.push(pair);
+            return true;
+        }
         if !cursor.take_if(|c| c == '\"') {
             return false;
         }
-        let ends_with_quote = loop {
-            if cursor.take_escape().is_some() {
-                // OK
-            } else if cursor.take_if(|c| c == '"') {
-                break true;
-            } else if cursor.take().is_none() {
-                cursor.push_error(
-                    "Found an unfinished string, add a quote '\"' to complete it",
-                    cursor.start,
-                    cursor.end,
-                );
-                break false;
-            }
-        };
-        let (mut text, span) = cursor.commit();
-        // Remove the opening and closing quotes from the string's content.
-        text = &text[1..];
-        if ends_with_quote {
-            text = &text[..text.len() - 1];
+        if in_format_string {
+            cursor.push_error(
+                "Unclosed format string expression, expected '}' before '\"'",
+                cursor.start,
+                cursor.end,
+            );
+            let (_, span) = cursor.commit();
+            self.tokens.push((Token::StringEnd(InneStr("")), span));
+            self.in_format_string = false;
+            return true;
         }
-        let token = Token::String(text);
-        self.tokens.push((token, span));
+        let pair = match cursor.take_string_suffix() {
+            Some((text, span, true)) => (Token::String(InneStr(text)), span),
+            Some((text, span, false)) => {
+                self.in_format_string = true;
+                (Token::StringStart(InneStr(text)), span)
+            }
+            None => return false,
+        };
+        self.tokens.push(pair);
         true
     }
 
@@ -557,6 +388,7 @@ impl<'src> Lexer<'src> {
         self.inne_whitespace(); // Skip whitespace
         while self.start < self.src.len() {
             if self.inne_newline()
+                || self.inne_string()
                 || self.inne_comment()
                 || self.inne_symbol()
                 || self.inne_operator()
@@ -564,7 +396,6 @@ impl<'src> Lexer<'src> {
                 || self.inne_ident()
                 || self.inne_int()
                 || self.inne_char()
-                || self.inne_string()
             {
                 success = true;
                 break;
@@ -627,6 +458,20 @@ fn filter_newlines<'src>(tokens: &mut Vec<SpannedToken<'src>>) {
     tokens.truncate(dst);
 }
 
+pub fn escaped_byte_to_char(escaped: u8) -> Option<char> {
+    Some(match escaped {
+        b'\\' => '\\',
+        b'"' => '"',
+        b'\'' => '\'',
+        b'n' => '\n',
+        b'r' => '\r',
+        b't' => '\t',
+        b'{' => '{',
+        b'}' => '}',
+        _ => return None,
+    })
+}
+
 /// Note that this will still produce a list of tokens even when errors have been encountered.
 pub fn lex<'src>(
     src: &'src str,
@@ -638,6 +483,7 @@ pub fn lex<'src>(
         tokens: Vec::new(),
         filename,
         errors: Vec::new(),
+        in_format_string: false,
     };
     while lexer.inne_token() {}
     debug_assert_eq!(lexer.start, src.len());

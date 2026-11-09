@@ -4,7 +4,10 @@ use crate::{
     value::{self, Int, create_pointer},
 };
 
-use std::mem::discriminant;
+use std::{
+    io::{Stdout, Write as _, stdout},
+    mem::discriminant,
+};
 
 pub struct Interpreter<'a> {
     types: &'a [TypeInfo<'a>],
@@ -190,14 +193,32 @@ impl<'a> Interpreter<'a> {
                 return; // The value is already on the stack.
             }
             Op::Print { args } => {
+                struct StdoutWriter(Stdout);
+
+                impl std::fmt::Write for StdoutWriter {
+                    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                        self.0.write_all(s.as_bytes()).map_err(|_| std::fmt::Error)
+                    }
+                }
+
+                let mut writer = StdoutWriter(stdout());
                 for (i, arg_id) in args.iter().enumerate() {
                     if i > 0 {
-                        print!(" ");
+                        std::fmt::Write::write_str(&mut writer, " ").unwrap();
                     }
-                    self.print(self.get_local(*arg_id), false);
+                    self.write(&mut writer, self.get_local(*arg_id), false)
+                        .unwrap();
                 }
-                println!();
+                std::fmt::Write::write_str(&mut writer, "\n").unwrap();
                 Value::Nothing
+            }
+            Op::Format { args } => {
+                let mut out = String::new();
+                for local_id in args {
+                    let value = self.get_local(*local_id);
+                    self.write(&mut out, value, false).unwrap();
+                }
+                Value::new_string(out.chars())
             }
             &Op::Range { start, end } => match (self.get_local(start), self.get_local(end)) {
                 (&Value::Int(start), &Value::Int(end)) => Value::Range { start, end },
@@ -390,12 +411,18 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    pub fn print(&self, value: &Value, is_nested: bool) {
+    #[must_use]
+    pub fn write(
+        &self,
+        f: &mut impl std::fmt::Write,
+        value: &Value,
+        is_nested: bool,
+    ) -> std::fmt::Result {
         match value {
-            Value::Nothing => print!("Nothing"),
-            Value::Int(int) => print!("{}", int),
-            Value::Bool(bool) => print!("{}", bool),
-            Value::Char(char) => print!("{char}"),
+            Value::Nothing => write!(f, "Nothing"),
+            Value::Int(int) => write!(f, "{}", int),
+            Value::Bool(bool) => write!(f, "{}", bool),
+            Value::Char(char) => write!(f, "{char}"),
             Value::List {
                 ptr,
                 start,
@@ -405,41 +432,42 @@ impl<'a> Interpreter<'a> {
                 if *is_string {
                     let string = &ptr.borrow()[*start..*end];
                     if is_nested {
-                        print!("\"");
+                        write!(f, "\"")?;
                     }
                     for value in string {
                         let Value::Char(char) = value else {
                             unreachable!();
                         };
-                        print!("{}", char.escape_default());
+                        write!(f, "{char}")?;
                     }
                     if is_nested {
-                        print!("\"");
+                        write!(f, "\"")?;
                     }
+                    Ok(())
                 } else {
                     let list = &ptr.borrow()[*start..*end];
-                    print!("[");
+                    write!(f, "[")?;
                     for (i, elem) in list.iter().enumerate() {
                         if i > 0 {
-                            print!(", ");
+                            write!(f, ", ")?;
                         }
-                        self.print(elem, true);
+                        self.write(f, elem, true)?;
                     }
-                    print!("]");
+                    write!(f, "]")
                 }
             }
             Value::Map(ptr) => {
                 let map = ptr.borrow();
-                print!("{{");
+                write!(f, "{{")?;
                 for (i, (key, value)) in map.iter().enumerate() {
                     if i > 0 {
-                        print!(", ");
+                        write!(f, ", ")?;
                     }
-                    self.print(key, true);
-                    print!(": ");
-                    self.print(value, true);
+                    self.write(f, key, true)?;
+                    write!(f, ": ")?;
+                    self.write(f, value, true)?;
                 }
-                print!("}}");
+                write!(f, "}}")
             }
             Value::Struct(ptr) => {
                 let r#struct = ptr.borrow();
@@ -448,21 +476,21 @@ impl<'a> Interpreter<'a> {
                     unreachable!();
                 };
                 debug_assert_eq!(field_names.len(), r#struct.fields.len());
-                print!("{}::{{", name);
+                write!(f, "{}::{{", name)?;
                 if !field_names.is_empty() {
-                    print!(" ");
+                    write!(f, " ")?;
                     for (i, (name, value)) in
                         std::iter::zip(field_names, &r#struct.fields).enumerate()
                     {
                         if i > 0 {
-                            print!(", ");
+                            write!(f, ", ")?;
                         }
-                        print!("{name}: ");
-                        self.print(value, true);
+                        write!(f, "{name}: ")?;
+                        self.write(f, value, true)?;
                     }
-                    print!(" ");
+                    write!(f, " ")?;
                 }
-                print!("}}");
+                write!(f, "}}")
             }
             Value::Enum(ptr) => {
                 let r#enum = ptr.borrow();
@@ -474,12 +502,13 @@ impl<'a> Interpreter<'a> {
                     unreachable!();
                 };
                 debug_assert!(r#enum.variant_index < variant_names.len());
-                print!("{}::{}", name, variant_names[r#enum.variant_index]);
+                write!(f, "{}::{}", name, variant_names[r#enum.variant_index])?;
                 if let Some(payload) = r#enum.payload.as_ref() {
-                    print!("(");
-                    self.print(&payload, true);
-                    print!(")");
+                    write!(f, "(")?;
+                    self.write(f, &payload, true)?;
+                    write!(f, ")")?;
                 }
+                Ok(())
             }
             // Ranges currently cannot be used as values, only as for-loop iterator and in slicing operations.
             Value::Range { .. } => unreachable!(),

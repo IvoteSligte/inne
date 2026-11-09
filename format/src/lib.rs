@@ -45,7 +45,10 @@ impl Writer<'_> {
 
     fn skip_to(&mut self, token: Token<'_>) -> Result {
         // Some tokens are not guaranteed to appear in the input, so we ignore them.
-        if matches!(token, Token::Comma | Token::Arrow | Token::Colon) {
+        if matches!(
+            token,
+            Token::Comma | Token::Arrow | Token::Colon | Token::Newline
+        ) {
             return Ok(());
         }
         let mid = self
@@ -339,12 +342,13 @@ impl Format for Expr<'_> {
             VariantLiteral,
             Index,
             Member,
-            Range;
+            Range,
+            FormatString;
             Var(var) => f.put(Token::Ident(var)),
             Int(int) => f.put(Token::Int(int)),
             Bool(bool) => f.put(Token::Bool(*bool)),
-            String(string) => f.put(Token::String(string)),
             Char(char) => f.put(Token::Char(*char)),
+            String(string) => f.put(Token::String(*string)),
         )
     }
 }
@@ -578,6 +582,20 @@ impl Format for Range<'_> {
             }
         }
         Ok(())
+    }
+}
+
+impl Format for FormatString<'_> {
+    fn fmt(&self, f: &mut Writer<'_>) -> Result {
+        let ((start_text, expr), middle_segments) = self.segments.split_first().unwrap();
+        f.put(Token::StringStart(start_text.0))?;
+        expr.0.fmt(f)?;
+
+        for (text, expr) in middle_segments {
+            f.put(Token::StringMiddle(text.0))?;
+            expr.0.fmt(f)?;
+        }
+        f.put(Token::StringEnd(self.end_text.0))
     }
 }
 

@@ -10,11 +10,12 @@ use crate::{
     util::write_comma_separated, value::Int,
 };
 
-pub use crate::ast::{AssignOp, BinaryOp, Name, UnaryOp};
+pub use crate::ast::{AssignOp, BinaryOp, Name, SpannedStr, UnaryOp};
 
 pub mod display;
 
 pub(crate) use display::Display;
+use parser::{InneStr, SpannedInneStr};
 
 // TODO: warn if expression used as statement does not have any side-effects
 // TODO: warn for unused expression return value
@@ -193,7 +194,8 @@ pub enum Expr<'a> {
     Int(Int),
     Bool(bool),
     Char(char),
-    String(&'a str),
+    String(InneStr<'a>),
+    FormatString(FormatString<'a>),
 }
 
 pub type SpannedExpr<'a> = Spanned<'a, Expr<'a>>;
@@ -275,6 +277,11 @@ pub struct Member<'a> {
 pub struct Range<'a> {
     pub start: Box<SpannedExpr<'a>>,
     pub end: Box<SpannedExpr<'a>>,
+}
+
+pub struct FormatString<'a> {
+    pub segments: Vec<(SpannedInneStr<'a>, SpannedExpr<'a>)>,
+    pub end_text: SpannedInneStr<'a>,
 }
 
 pub struct Assign<'a> {
@@ -1069,11 +1076,20 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                 ast::Expr::Int(int_str) => Expr::Int(self.parse_int((*int_str, *span))),
                 ast::Expr::Bool(bool) => Expr::Bool(*bool),
                 ast::Expr::Char(char) => Expr::Char(*char),
-                ast::Expr::String(string) => Expr::String(string),
+                ast::Expr::String(string) => Expr::String(*string),
                 ast::Expr::Range(ast::Range { start, end }) => Expr::Range(Range {
                     start: Box::new(self.map_expr(start)),
                     end: Box::new(self.map_expr(end)),
                 }),
+                ast::Expr::FormatString(ast::FormatString { segments, end_text }) => {
+                    Expr::FormatString(FormatString {
+                        segments: segments
+                            .iter()
+                            .map(|(text, expr)| (*text, self.map_expr(expr)))
+                            .collect(),
+                        end_text: *end_text,
+                    })
+                }
             },
             *span,
         )

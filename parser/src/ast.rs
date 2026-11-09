@@ -1,11 +1,13 @@
-use crate::{Span, Spanned, util::write_comma_separated};
+use crate::{InneStr, Span, Spanned, util::write_comma_separated};
 
 #[derive(Debug)]
 pub struct Ast<'a> {
     pub stmts: Vec<Stmt<'a>>,
 }
 
-pub type Name<'a> = Spanned<'a, &'a str>;
+pub type SpannedStr<'a> = Spanned<'a, &'a str>;
+pub type Name<'a> = SpannedStr<'a>;
+pub type SpannedInneStr<'a> = Spanned<'a, InneStr<'a>>;
 
 #[derive(Debug)]
 pub enum Stmt<'a> {
@@ -106,7 +108,8 @@ pub enum Expr<'a> {
     Int(&'a str),
     Bool(bool),
     Char(char),
-    String(&'a str),
+    String(InneStr<'a>),
+    FormatString(FormatString<'a>),
 }
 
 pub type SpannedExpr<'a> = Spanned<'a, Expr<'a>>;
@@ -216,6 +219,12 @@ pub struct Index<'a> {
 pub struct Range<'a> {
     pub start: Box<SpannedExpr<'a>>,
     pub end: Box<SpannedExpr<'a>>,
+}
+
+#[derive(Debug)]
+pub struct FormatString<'a> {
+    pub segments: Vec<(SpannedInneStr<'a>, SpannedExpr<'a>)>,
+    pub end_text: SpannedInneStr<'a>,
 }
 
 #[derive(Debug)]

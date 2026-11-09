@@ -52,6 +52,11 @@ impl Value {
         }
     }
 
+    pub fn new_string(text: impl IntoIterator<Item = char>) -> Self {
+        let elements = text.into_iter().map(Value::Char);
+        Self::new_list(elements, true)
+    }
+
     pub fn new_map(pairs: impl IntoIterator<Item = (Value, Value)>) -> Self {
         Self::Map(create_pointer(pairs.into_iter().collect()))
     }

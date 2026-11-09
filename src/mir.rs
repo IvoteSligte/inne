@@ -133,6 +133,9 @@ pub enum Op {
     Print {
         args: Vec<LocalId>,
     },
+    Format {
+        args: Vec<LocalId>,
+    },
     Range {
         start: LocalId,
         end: LocalId,
@@ -483,9 +486,7 @@ impl<'src> Constructor<'src> {
             thir::Expr::Var(var_id) => builder.get_local(*var_id),
             thir::Expr::Int(int) => builder.push_constant(Value::Int(*int)),
             thir::Expr::Bool(bool) => builder.push_constant(Value::Bool(*bool)),
-            thir::Expr::String(string) => {
-                builder.push_constant(Value::new_list(string.chars().map(Value::Char), true))
-            }
+            thir::Expr::String(string) => builder.push_string(*string),
             thir::Expr::Char(char) => builder.push_constant(Value::Char(*char)),
             thir::Expr::Range(thir::Range { start, end }) => {
                 let start = self.map_expr(&start.0, builder);
@@ -552,12 +553,23 @@ impl<'src> Constructor<'src> {
                 expr,
                 member: _,
             }) => {
-                debug_assert!(*field_index != usize::MAX, "Unset field_index reached MIR");
+                debug_assert_ne!(*field_index, usize::MAX, "Unset field_index reached MIR");
                 let expr_id = self.map_expr(&expr.0, builder);
                 builder.push_op(Op::Member {
                     expr: expr_id,
                     field_index: *field_index,
                 })
+            }
+            thir::Expr::FormatString(thir::FormatString { segments, end_text }) => {
+                let mut args = Vec::with_capacity(2 * segments.len() + 1);
+                for (text, expr) in segments {
+                    args.push(builder.push_string(text.0));
+                    args.push(self.map_expr(&expr.0, builder));
+                }
+                if !end_text.0.is_empty() {
+                    args.push(builder.push_string(end_text.0));
+                }
+                builder.push_op(Op::Format { args })
             }
         }
     }
@@ -620,6 +632,10 @@ impl<'a> FuncBuilder<'a> {
 
     pub fn push_constant(&mut self, value: Value) -> LocalId {
         self.push_op(Op::Constant(value))
+    }
+
+    pub fn push_string(&mut self, text: InneStr<'_>) -> LocalId {
+        self.push_op(Op::Constant(Value::new_string(text.chars())))
     }
 
     /// Creates a new block and returns its ID, but does not enter it.
@@ -737,6 +753,7 @@ impl<'a> FuncBuilder<'a> {
 }
 
 use indentify::*;
+use parser::InneStr;
 
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -908,6 +925,10 @@ impl std::fmt::Display for Stmt {
             }
             Print { args } => {
                 write!(f, "Print")?;
+                write_tuple(args, f)
+            }
+            Format { args } => {
+                write!(f, "Format")?;
                 write_tuple(args, f)
             }
             Assign { target, value } => {

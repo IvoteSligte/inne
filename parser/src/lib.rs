@@ -2,11 +2,13 @@ pub mod ast;
 pub mod diagnosis;
 pub mod lexer;
 pub mod parser;
+pub mod token;
 mod util;
 
 pub use ast::*;
 pub use lexer::*;
 pub use parser::*;
+pub use token::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Span<'src> {

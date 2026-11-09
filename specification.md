@@ -42,13 +42,13 @@ These are essentially Python format strings (f-strings), but without the leading
 
 Example: `Hello, {name}!`
 
-Braces can be escaped through duplication to prevent formatting.
+Braces can be escaped using `\{` to prevent formatting.
 
-Example: `"This is a brace: {{"`
+Example: `"This is a brace: \{"`
 
 ### Characters
 
-UTF-32 characters. The following escape codes are supported: `\" \' \\ \n \r \t`
+UTF-32 characters. The following escape codes are supported: `\" \' \\ \n \r \t \{ \}`
 
 Example: `'d'`
 
