@@ -1,0 +1,15 @@
+enum Number {
+    One
+    Two
+    Three
+    Four
+}
+
+match Number:One {
+    One {}
+    Two {}
+    Two {} // Duplicate
+    Three {}
+    Four {}
+}
+

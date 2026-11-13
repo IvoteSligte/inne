@@ -21,7 +21,7 @@ pub struct TypedHir<'src> {
 
 #[derive(Debug)]
 pub struct VarInfo<'src> {
-    pub span: Span<'src>,
+    pub name: Name<'src>,
     pub r#type: Type,
 }
 
@@ -42,14 +42,31 @@ const NOTHING_RETURN_TYPE: Spanned<Type> = (
     },
 );
 
+#[derive(Clone, Copy)]
+enum Ownership {
+    /// An argument passed by reference.
+    ArgRef,
+    /// An assignable value.
+    Assignable,
+    /// A very cheap copy of a value that is immediately consumed.
+    /// As it is only a shallow copy, it should not be mutated.
+    Immediate,
+    /// A non-reference value or a copy of a value.
+    Owned,
+    /// Anything goes.
+    DontCare,
+}
+
+use Ownership::*;
+
 // TODO: return (Option<TypedHir<'a>>, Vec<Error>) instead because the TypedHir may be recoverable on error
 pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Error<'a>>> {
     let vars = hir
         .vars
         .into_iter()
-        .map(|var| {
+        .map(|name| {
             VarInfo {
-                span: var.span,
+                name,
                 r#type: Type::Nothing, // Default value
             }
         })
@@ -186,25 +203,19 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 name: _,
                 value,
             }) => {
-                let (r#type, _) = self.check_expr(value);
+                let r#type = self.check_expr(value, Owned);
                 self.vars[var_id.get()].r#type = r#type;
             }
             Stmt::Expr(expr) => {
-                self.check_expr(expr);
+                self.check_expr(expr, DontCare);
             }
             Stmt::Assign(Assign {
                 op: (op, op_span),
                 target,
                 value,
             }) => {
-                let (target_type, target_is_assignable) = self.check_expr(target);
-                let (value_type, _) = self.check_expr(value);
-                if !target_is_assignable {
-                    self.errors.add(
-                        "The left side of an assignment must be a variable, list or map element, or struct field",
-                        target.1,
-                    );
-                }
+                let target_type = self.check_expr(target, Assignable);
+                let value_type = self.check_expr(value, Owned);
                 if not_equal(&target_type, &value_type) {
                     self.errors.add(
                         format!(
@@ -232,7 +243,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             }
             Stmt::If(If { choices, r#else }) => {
                 for Choice { cond, then } in choices {
-                    let (cond_type, _) = self.check_expr(cond);
+                    let cond_type = self.check_expr(cond, Immediate);
                     if not_equal(&cond_type, &Type::Bool) {
                         let message = format!(
                             "If-conditions must be booleans ('bool'). Found '{}'",
@@ -247,7 +258,16 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 }
             }
             Stmt::Match(Match { expr, arms }) => {
-                let (expr_type, _) = self.check_expr(expr);
+                // TODO: support matching by ref (payload becomes a ref)
+                // Example:
+                // var option = Option:Some(true)
+                // match option {
+                //     Some(ref value) { value = false }
+                //     None {}
+                // }
+                // print(option) // Option:Some(false)
+
+                let expr_type = self.check_expr(expr, Owned);
                 let Type::Named { id, generics } = &expr_type else {
                     self.errors.add(
                         format!(
@@ -272,6 +292,15 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 for arm in arms {
                     self.check_match_arm(arm, &mut used_variants, generics, r#enum);
                 }
+                if let Some(unused_index) = used_variants.iter().position(|used| used.is_none()) {
+                    self.errors.add(
+                        format!(
+                            "All variants must be matched, but '{}' is missing",
+                            r#enum.variants[unused_index].name.0
+                        ),
+                        expr.1,
+                    );
+                }
             }
             Stmt::For(For {
                 var_id,
@@ -279,7 +308,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 iter,
                 body,
             }) => {
-                let (iter_type, _) = self.check_expr(iter);
+                let iter_type = self.check_expr(iter, Owned);
                 let var_type = match iter_type {
                     Type::Range => Type::Int,
                     Type::List(elem_type) => *elem_type,
@@ -297,7 +326,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 self.check_stmts(body);
             }
             Stmt::While(While { cond, body }) => {
-                let (cond_type, _) = self.check_expr(cond);
+                let cond_type = self.check_expr(cond, Immediate);
                 if not_equal(&cond_type, &Type::Bool) {
                     let message = format!(
                         "While-conditions must be booleans ('bool'), but found '{}'",
@@ -315,7 +344,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             Stmt::Return((value, span)) => {
                 let value_type = value
                     .as_mut()
-                    .map(|value| self.check_expr(value).0)
+                    .map(|value| self.check_expr(value, Owned))
                     .unwrap_or(Type::Nothing);
                 let expected_return_type = self
                     .current_func_signature
@@ -350,64 +379,58 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 variant_index,
                 name,
                 payload,
-            } => {
-                match variants.iter().position(|variant| variant.name.0 == name.0) {
-                    Some(index) => {
-                        *variant_index = index;
-                        if let Some(prev_match_span) = used_variants[index] {
-                            self.errors.add_with_context(
-                                format!("The variant '{}' was already matched", name.0),
-                                name.1,
-                                "Previously matched here:",
-                                prev_match_span,
-                            );
-                        }
-                        used_variants[index] = Some(name.1);
-                        match payload {
-                            // TODO: error if def has payload and the match arm doesn't and the other way around
-                            Some((var_id, payload_name)) => {
-                                self.vars[var_id.get()].r#type = match variants[index]
-                                    .payload
-                                    .as_ref()
-                                    .map(|(r#type, _)| r#type.with_generics(generics))
-                                {
-                                    Some(r#type) => r#type,
-                                    None => {
-                                        self.errors.add(
-                                            format!(
-                                                "The variant '{}' does not have a payload",
-                                                name.0
-                                            ),
-                                            payload_name.1,
-                                        );
-                                        Type::UNKNOWN
-                                    }
+            } => match variants.iter().position(|variant| variant.name.0 == name.0) {
+                Some(index) => {
+                    *variant_index = index;
+                    if let Some(prev_match_span) = used_variants[index] {
+                        self.errors.add_with_context(
+                            format!("The variant '{}' was already matched", name.0),
+                            name.1,
+                            "Previously matched here:",
+                            prev_match_span,
+                        );
+                    }
+                    used_variants[index] = Some(name.1);
+                    match payload {
+                        Some((var_id, payload_name)) => {
+                            self.vars[var_id.get()].r#type = match variants[index]
+                                .payload
+                                .as_ref()
+                                .map(|(r#type, _)| r#type.with_generics(generics))
+                            {
+                                Some(r#type) => r#type,
+                                None => {
+                                    self.errors.add(
+                                        format!("The variant '{}' does not have a payload", name.0),
+                                        payload_name.1,
+                                    );
+                                    Type::UNKNOWN
                                 }
                             }
-                            None => {
-                                if variants[index].payload.is_some() {
-                                    self.errors.add(
+                        }
+                        None => {
+                            if variants[index].payload.is_some() {
+                                self.errors.add(
                                             format!(
                                                 "The variant '{}' has a payload. Suggestion: use '{}(payload)'",
                                                 name.0, name.0
                                             ),
                                             name.1,
                                         );
-                                }
                             }
                         }
                     }
-                    None => {
-                        self.errors.add(
-                            format!(
-                                "The type '{}' does not have a variant named '{}'",
-                                r#enum.name.0, name.0
-                            ),
-                            name.1,
-                        );
-                    }
                 }
-            }
+                None => {
+                    self.errors.add(
+                        format!(
+                            "The type '{}' does not have a variant named '{}'",
+                            r#enum.name.0, name.0
+                        ),
+                        name.1,
+                    );
+                }
+            },
         }
         self.check_stmts(body);
     }
@@ -418,65 +441,88 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         }
     }
 
-    /// Returns the expression's type and whether it can be assigned to.
-    /// Expressions can only be assigned to if they are variables or non-empty lists/maps.
-    fn check_expr(&mut self, (expr, span): &mut SpannedExpr<'src>) -> (Type, bool) {
-        (
-            match expr {
-                Expr::Binary(binary) => self.check_binary((binary, *span)),
-                Expr::Unary(unary) => self.check_unary((unary, *span)),
-                Expr::Call(call) => self.check_call((call, *span)),
-                Expr::EmptyList(EmptyList { element_type }) => {
-                    self.check_type(element_type);
-                    Type::List(Box::new(element_type.0.clone()))
+    /// Returns `Type::UNKNOWN` if `expr`'s type does not match the `required_ownership`.
+    /// May change `expr` to `Expr::Ref` or `Expr::Deref` if its ownership can be coerced.
+    fn check_expr(
+        &mut self,
+        (expr, span): &mut SpannedExpr<'src>,
+        required_ownership: Ownership,
+    ) -> Type {
+        let r#type = match expr {
+            Expr::Binary(binary) => self.check_binary((binary, *span)),
+            Expr::Unary(unary) => self.check_unary((unary, *span)),
+            Expr::Call(call) => self.check_call((call, *span)),
+            Expr::EmptyList(EmptyList { element_type }) => {
+                self.check_type(element_type);
+                Type::List(Box::new(element_type.0.clone()))
+            }
+            Expr::List(list) => self.check_list((list, *span)),
+            Expr::EmptyMap(EmptyMap {
+                key_type,
+                value_type,
+            }) => {
+                self.check_type(key_type);
+                self.check_type(value_type);
+                Type::Map {
+                    key: Box::new(key_type.0.clone()),
+                    value: Box::new(value_type.0.clone()),
                 }
-                Expr::List(list) => self.check_list((list, *span)),
-                Expr::EmptyMap(EmptyMap {
-                    key_type,
-                    value_type,
-                }) => {
-                    self.check_type(key_type);
-                    self.check_type(value_type);
-                    Type::Map {
-                        key: Box::new(key_type.0.clone()),
-                        value: Box::new(value_type.0.clone()),
-                    }
+            }
+            Expr::Map(map) => self.check_map((map, *span)),
+            Expr::Index(index) => self.check_index((index, *span)),
+            Expr::Member(member) => self.check_member((member, *span)),
+            Expr::Var(var_id) => {
+                let r#type = self.vars[var_id.get()].r#type.clone();
+                if !r#type.is_ref() {
+                    *expr = Expr::VarRef(*var_id);
+                    r#type.wrap_ref()
+                } else {
+                    r#type
                 }
-                Expr::Map(map) => self.check_map((map, *span)),
-                Expr::Index(index) => {
-                    let is_assignable =
-                        !matches!(index.expr.0, Expr::EmptyList(_) | Expr::EmptyMap(_));
-                    return (self.check_index((index, *span)), is_assignable);
+            }
+            Expr::Int(_) => Type::Int,
+            Expr::Bool(_) => Type::Bool,
+            Expr::String(_) => Type::string(),
+            Expr::Char(_) => Type::Char,
+            Expr::Range(Range { start, end }) => {
+                let start_type = self.check_expr(start, Immediate);
+                let end_type = self.check_expr(end, Immediate);
+                if not_equal(&start_type, &Type::Int) {
+                    self.errors.add(
+                        format!(
+                            "The start of a range must be an 'int', but found '{}'",
+                            self.display(&start_type)
+                        ),
+                        start.1,
+                    );
                 }
-                Expr::Member(member) => {
-                    return (self.check_member((member, *span)), true);
+                if not_equal(&end_type, &Type::Int) {
+                    self.errors.add(
+                        format!(
+                            "The end of a range must be an 'int', but found '{}'",
+                            self.display(&start_type)
+                        ),
+                        start.1,
+                    );
                 }
-                Expr::Var(var_id) => return (self.vars[var_id.get()].r#type.clone(), true),
-                Expr::Int(_) => Type::Int,
-                Expr::Bool(_) => Type::Bool,
-                Expr::String(_) => Type::string(),
-                Expr::Char(_) => Type::Char,
-                Expr::Range(Range { start, end }) => {
-                    self.check_expr(start);
-                    self.check_expr(end);
-                    Type::Range
-                }
-                Expr::StructLiteral(StructLiteral {
-                    type_id,
-                    name: _,
-                    fields,
-                }) => {
-                    let TypeDef::Struct(r#struct) = &self.types[type_id.get()] else {
-                        unreachable!();
-                    };
-                    let generics = &r#struct.generics;
-                    let mut generic_constraints = HashMap::new();
-                    // NOTE: this assumes that the field and struct field have been matched in HIR
-                    //       (which may not be true if error recovery is used)
-                    for (field, struct_field) in std::iter::zip(fields, &r#struct.fields) {
-                        let (field_type, _) = self.check_expr(&mut field.value);
-                        if does_not_conform_to(&field_type, &struct_field.r#type.0) {
-                            self.errors.add(
+                Type::Range
+            }
+            Expr::StructLiteral(StructLiteral {
+                type_id,
+                name: _,
+                fields,
+            }) => {
+                let TypeDef::Struct(r#struct) = &self.types[type_id.get()] else {
+                    unreachable!();
+                };
+                let generics = &r#struct.generics;
+                let mut generic_constraints = HashMap::new();
+                // NOTE: this assumes that the field and struct field have been matched in HIR
+                //       (which may not be true if error recovery is used)
+                for (field, struct_field) in std::iter::zip(fields, &r#struct.fields) {
+                    let field_type = self.check_expr(&mut field.value, Owned);
+                    if does_not_conform_to(&field_type, &struct_field.r#type.0) {
+                        self.errors.add(
                                 format!(
                                     "The field '{}' has type '{}', but the provided value has type '{}'",
                                     struct_field.name.0,
@@ -485,115 +531,141 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                                 ),
                                 field.value.1,
                             );
+                    } else if !generics.is_empty() {
+                        extract_generic_constraints(
+                            &field_type,
+                            field.value.1,
+                            &struct_field.r#type.0,
+                            struct_field.name.1,
+                            &mut generic_constraints,
+                        );
+                    }
+                }
+                self.verify_generic_constraints(
+                    &generic_constraints,
+                    generics,
+                    r#struct.name,
+                    "field",
+                    "struct",
+                );
+                Type::Named {
+                    id: *type_id,
+                    generics: generic_values_from_constraints(generics.len(), &generic_constraints),
+                }
+            }
+            Expr::VariantLiteral(VariantLiteral {
+                type_id,
+                variant_index,
+                enum_name: _,
+                name: _,
+                payload,
+            }) => {
+                let TypeDef::Enum(r#enum) = &self.types[type_id.get()] else {
+                    unreachable!();
+                };
+                let expected_payload_type = r#enum.variants[*variant_index].payload.as_ref();
+                let payload_type = payload
+                    .as_mut()
+                    .map(|payload| (self.check_expr(payload, Owned), payload.1));
+                let generics = &r#enum.generics;
+                let mut generic_constraints = HashMap::new();
+                match (expected_payload_type, payload_type) {
+                    (Some((expected, expected_span)), Some((found, found_span))) => {
+                        if does_not_conform_to(&found, expected) {
+                            self.errors.add(
+                                format!(
+                                    "Expected '{}' as payload type, but found '{}'",
+                                    self.display_with_generics(&expected, &r#enum.generics),
+                                    self.display(&found)
+                                ),
+                                found_span,
+                            );
                         } else if !generics.is_empty() {
                             extract_generic_constraints(
-                                &field_type,
-                                field.value.1,
-                                &struct_field.r#type.0,
-                                struct_field.name.1,
+                                &found,
+                                found_span,
+                                expected,
+                                *expected_span,
                                 &mut generic_constraints,
                             );
                         }
                     }
-                    self.verify_generic_constraints(
-                        &generic_constraints,
-                        generics,
-                        r#struct.name,
-                        "field",
-                        "struct",
-                    );
-                    Type::Named {
-                        id: *type_id,
-                        generics: generic_values_from_constraints(
-                            generics.len(),
-                            &generic_constraints,
-                        ),
+                    (Some((expected, _)), None) => {
+                        self.errors.add(
+                            format!(
+                                "This enum variant requires a payload of type '{}'",
+                                self.display_with_generics(&expected, &r#enum.generics)
+                            ),
+                            *span,
+                        );
                     }
+                    (None, Some((_, payload_span))) => {
+                        self.errors
+                            .add("This enum variant does not expect a payload", payload_span);
+                    }
+                    (None, None) => {} // OK
                 }
-                Expr::VariantLiteral(VariantLiteral {
-                    type_id,
-                    variant_index,
-                    enum_name: _,
-                    name: _,
-                    payload,
-                }) => {
-                    let TypeDef::Enum(r#enum) = &self.types[type_id.get()] else {
-                        unreachable!();
-                    };
-                    let expected_payload_type = r#enum.variants[*variant_index].payload.as_ref();
-                    let payload_type = payload
-                        .as_mut()
-                        .map(|payload| (self.check_expr(payload).0, payload.1));
-                    let generics = &r#enum.generics;
-                    let mut generic_constraints = HashMap::new();
-                    match (expected_payload_type, payload_type) {
-                        (Some((expected, expected_span)), Some((found, found_span))) => {
-                            if does_not_conform_to(&found, expected) {
-                                self.errors.add(
-                                    format!(
-                                        "Expected '{}' as payload type, but found '{}'",
-                                        self.display_with_generics(&expected, &r#enum.generics),
-                                        self.display(&found)
-                                    ),
-                                    found_span,
-                                );
-                            } else if !generics.is_empty() {
-                                extract_generic_constraints(
-                                    &found,
-                                    found_span,
-                                    expected,
-                                    *expected_span,
-                                    &mut generic_constraints,
-                                );
-                            }
-                        }
-                        (Some((expected, _)), None) => {
-                            self.errors.add(
-                                format!(
-                                    "This enum variant requires a payload of type '{}'",
-                                    self.display_with_generics(&expected, &r#enum.generics)
-                                ),
-                                *span,
-                            );
-                        }
-                        (None, Some((_, payload_span))) => {
-                            self.errors
-                                .add("This enum variant does not expect a payload", payload_span);
-                        }
-                        (None, None) => {} // OK
-                    }
-                    self.verify_generic_constraints(
-                        &generic_constraints,
-                        generics,
-                        r#enum.name,
-                        "value",
-                        "enum",
-                    );
-                    Type::Named {
-                        id: *type_id,
-                        generics: generic_values_from_constraints(
-                            generics.len(),
-                            &generic_constraints,
-                        ),
-                    }
+                self.verify_generic_constraints(
+                    &generic_constraints,
+                    generics,
+                    r#enum.name,
+                    "value",
+                    "enum",
+                );
+                Type::Named {
+                    id: *type_id,
+                    generics: generic_values_from_constraints(generics.len(), &generic_constraints),
                 }
-                Expr::FormatString(FormatString {
-                    segments,
-                    end_text: _,
-                }) => {
-                    for (_, expr) in segments {
-                        let _ = self.check_expr(expr);
-                    }
-                    Type::string()
+            }
+            Expr::FormatString(FormatString {
+                segments,
+                end_text: _,
+            }) => {
+                for (_, expr) in segments {
+                    let _ = self.check_expr(expr, DontCare);
                 }
-            },
-            false,
-        )
+                Type::string()
+            }
+            Expr::VarRef(_) | Expr::Deref(_) | Expr::Copy(_) => {
+                unreachable!(
+                    "VarRef, Deref, and Copy are only created during type checking and thus cannot be analysed during it."
+                )
+            }
+        };
+        match (required_ownership, r#type) {
+            (ArgRef, r#type @ Type::Ref(_)) => r#type,
+            (Assignable, Type::Ref(r#type)) => *r#type,
+            (ArgRef, r#type) => {
+                self.errors.add(
+                    "Expected a reference as argument, but this cannot be converted into one. Declare it as a separate variable to fix this.",
+                    *span,
+                );
+                Type::Ref(Box::new(r#type))
+            }
+            (Assignable, _) => {
+                self.errors.add(
+                    "The left side of an assignment must be a variable, list or map element, or struct field",
+                    *span,
+                );
+                Type::UNKNOWN
+            }
+            (Owned, Type::Ref(referenced_type)) => {
+                expr.wrap_in_place(Expr::Copy);
+                *referenced_type
+            }
+            (Owned, r#type) => r#type,
+            (Immediate, Type::Ref(referenced_type)) => {
+                expr.wrap_in_place(Expr::Deref);
+                *referenced_type
+            }
+            (Immediate, r#type) => r#type,
+            (DontCare, r#type) => r#type,
+        }
     }
 
     fn check_binary(&mut self, (binary, span): Spanned<'src, &mut Binary<'src>>) -> Type {
-        let (left_type, _) = self.check_expr(&mut binary.left);
-        let (right_type, _) = self.check_expr(&mut binary.right);
+        let left_type = self.check_expr(&mut binary.left, Immediate);
+        let right_type = self.check_expr(&mut binary.right, Immediate);
         let or_type = left_type.or(&right_type); // Known if either one is known
 
         if not_equal(&left_type, &right_type) {
@@ -649,7 +721,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
     }
 
     fn check_unary(&mut self, (unary, span): Spanned<'src, &mut Unary<'src>>) -> Type {
-        let (expr_type, _) = self.check_expr(&mut unary.expr);
+        let expr_type = self.check_expr(&mut unary.expr, Immediate);
         match unary.op.0 {
             UnaryOp::Neg => {
                 if not_equal(&expr_type, &Type::Int) {
@@ -679,10 +751,10 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
 
     fn check_call(&mut self, (call, span): Spanned<'src, &mut Call<'src>>) -> Type {
         if call.func_id == FuncId::PRINT {
-            for arg in &mut call.args {
-                self.check_expr(arg);
-            }
             // print(...) accepts any number of arguments of any type.
+            for arg in &mut call.args {
+                self.check_expr(arg, DontCare);
+            }
             return Type::Nothing;
         }
         let &FuncSignature {
@@ -723,15 +795,21 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         }
         let mut generic_constraints = HashMap::new();
         for (arg, param) in std::iter::zip(args, params) {
-            let (arg_type, _) = self.check_expr(arg);
+            let ownership = match param.r#type.0.is_ref() {
+                true => ArgRef,
+                false => Owned,
+            };
+            let arg_type = self.check_expr(arg, ownership);
             let (param_type, _) = &param.r#type;
             if not_equal(&arg_type, param_type) {
-                let message = format!(
-                    "Expected a value of type '{}' but found a value of type '{}'",
-                    self.display(&arg_type),
-                    self.display(&param_type)
+                self.errors.add(
+                    format!(
+                        "Expected a value of type '{}' but found a value of type '{}'",
+                        self.display(&arg_type),
+                        self.display(&param_type)
+                    ),
+                    arg.1,
                 );
-                self.errors.add(message, arg.1);
             } else if !generics.is_empty() {
                 extract_generic_constraints(
                     &arg_type,
@@ -760,10 +838,10 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             );
             return Type::UNKNOWN;
         }
-        let (first_element_type, _) = self.check_expr(&mut list.elements[0]);
+        let first_element_type = self.check_expr(&mut list.elements[0], Owned);
         let first_element_span = list.elements[0].1;
         for element in &mut list.elements[1..] {
-            let (element_type, _) = self.check_expr(element);
+            let element_type = self.check_expr(element, Owned);
             if not_equal(&first_element_type, &element_type) {
                 self.errors.add_with_context(
                     format!(
@@ -790,14 +868,14 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 value: Box::new(Type::UNKNOWN),
             };
         }
-        let (first_key_type, _) = self.check_expr(&mut map.pairs[0].key);
-        let (first_value_type, _) = self.check_expr(&mut map.pairs[0].value);
+        let first_key_type = self.check_expr(&mut map.pairs[0].key, Owned);
+        let first_value_type = self.check_expr(&mut map.pairs[0].value, Owned);
         let first_key_span = map.pairs[0].key.1;
         let first_value_span = map.pairs[0].value.1;
         for Pair { key, value } in &mut map.pairs[1..] {
             macro_rules! check {
                 ($first_type:expr, $first_span:expr, $var:ident, $str:literal) => {{
-                    let (r#type, _) = self.check_expr($var);
+                    let r#type = self.check_expr($var, Owned);
                     if not_equal($first_type, &r#type) {
                         self.errors.add_with_context(
                             format!(
@@ -827,8 +905,8 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
     }
 
     fn check_index(&mut self, (index, span): Spanned<'src, &mut Index<'src>>) -> Type {
-        let (expr_type, _) = self.check_expr(&mut index.expr);
-        let (index_type, _) = self.check_expr(&mut index.index);
+        let expr_type = self.check_expr(&mut index.expr, Immediate);
+        let index_type = self.check_expr(&mut index.index, Immediate);
         match &index.expr.0 {
             // TODO: also detect this when index.expr is a variable instead
             Expr::EmptyList(_) => self.errors.add(
@@ -849,7 +927,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     if index_type.is_known() {
                         self.errors.add(
                             format!(
-                                "Only int and range can be used to index into lists and strings, not '{}'",
+                                "Only 'int' and 'range' can be used to index into lists and strings, not '{}'",
                                 self.display(&index_type)
                             ),
                             index.index.1,
@@ -884,13 +962,13 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 );
                 Type::UNKNOWN
             }
-        }
+        }.wrap_ref()
     }
 
     fn check_member(&mut self, (member, _): Spanned<&mut Member<'src>>) -> Type {
-        let (expr_type, _) = self.check_expr(&mut member.expr);
+        let expr_type = self.check_expr(&mut member.expr, Immediate);
         if !expr_type.is_known() {
-            return Type::UNKNOWN;
+            return Type::UNKNOWN.wrap_ref();
         }
         let Type::Named { id, generics: _ } = expr_type else {
             self.errors.add(
@@ -900,7 +978,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 ),
                 member.expr.1,
             );
-            return Type::UNKNOWN;
+            return Type::UNKNOWN.wrap_ref();
         };
         member.type_id = id;
         let TypeDef::Struct(r#struct) = &self.types[id.get()] else {
@@ -911,7 +989,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 ),
                 member.expr.1,
             );
-            return Type::UNKNOWN;
+            return Type::UNKNOWN.wrap_ref();
         };
         match r#struct
             .fields
@@ -920,7 +998,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         {
             Some(field_index) => {
                 member.field_index = field_index;
-                r#struct.fields[field_index].r#type.0.clone()
+                r#struct.fields[field_index].r#type.0.clone().wrap_ref()
             }
             None => {
                 self.errors.add(
@@ -930,7 +1008,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                     ),
                     member.member.1,
                 );
-                Type::UNKNOWN
+                Type::UNKNOWN.wrap_ref()
             }
         }
     }
@@ -1057,6 +1135,7 @@ fn s_if_not_1(n: usize) -> &'static str {
 }
 
 /// Returns `true` if the types are definitively not equal.
+/// References are ignored.
 ///
 /// This function also returns `false` if either type is unknown.
 fn not_equal(left: &Type, right: &Type) -> bool {
@@ -1173,6 +1252,7 @@ impl std::fmt::Display for Display<'_, '_, &'_ Type> {
             Type::Nothing | Type::Int | Type::Bool | Type::Char | Type::Range => {
                 hir::Display(*r#type).fmt(f)
             }
+            Type::Ref(value) => write!(f, "ref {}", self.with(value)),
             Type::List(element) => {
                 if **element == Type::Char {
                     f.write_str("string")

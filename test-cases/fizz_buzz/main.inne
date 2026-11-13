@@ -1,5 +1,5 @@
 
-for i in 0..100 {
+for i in 0 to 100 {
     var fizz = i % 3 == 0
     var buzz = i % 5 == 0
     if fizz and buzz {

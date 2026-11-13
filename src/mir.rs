@@ -15,6 +15,8 @@ use crate::{
 // TODO: format strings
 // TODO: print(...) without trailing newline
 
+// TODO: optimization where Copy is replaced by a Move when a value is not otherwise used
+
 pub struct Mir<'a> {
     pub types: Vec<TypeInfo<'a>>,
     pub funcs: Vec<Func<'a>>,
@@ -90,7 +92,8 @@ pub enum Op {
         r#struct: LocalId,
         field_index: usize,
     },
-    /// Takes a pointer and makes a copy of the underlying object.
+    Deref(LocalId),
+    /// Takes a pointer and makes a deep copy of the underlying object.
     Copy(LocalId),
     Add(Binary),
     Sub(Binary),
@@ -262,36 +265,7 @@ impl<'src> Constructor<'src> {
                     self.map_expr(&expr.0, builder);
                 }
                 thir::Stmt::Assign(thir::Assign { op, target, value }) => {
-                    // FIXME: just use a pointer to the assignment target
-
-                    let target_id = match &target.0 {
-                        thir::Expr::Var(var_id) => {
-                            let target = builder.get_local(*var_id);
-                            builder.push_op(Op::PointToLocal(target))
-                        }
-                        thir::Expr::Index(thir::Index { expr, index }) => {
-                            let expr_id = self.map_expr(&expr.0, builder);
-                            let index_id = self.map_expr(&index.0, builder);
-                            builder.push_op(Op::PointToIndex {
-                                collection: expr_id,
-                                index: index_id,
-                            })
-                        }
-                        thir::Expr::Member(thir::Member {
-                            expr, field_index, ..
-                        }) => {
-                            debug_assert!(
-                                *field_index != usize::MAX,
-                                "Unset field_index reached MIR"
-                            );
-                            let expr_id = self.map_expr(&expr.0, builder);
-                            builder.push_op(Op::PointToField {
-                                r#struct: expr_id,
-                                field_index: *field_index,
-                            })
-                        }
-                        _ => unreachable!(),
-                    };
+                    let target_id = self.map_expr(&target.0, builder);
                     let mut value_id = self.map_expr(&value.0, builder);
 
                     use thir::AssignOp::*;
@@ -525,6 +499,8 @@ impl<'src> Constructor<'src> {
                     .collect();
                 if *func_id == FuncId::PRINT {
                     builder.push_op(Op::Print { args: arg_ids })
+                } else if *func_id == FuncId::PRINT {
+                    builder.push_op(Op::Copy(arg_ids[0]))
                 } else {
                     builder.push_op(Op::Call {
                         func_id: *func_id,
@@ -533,6 +509,10 @@ impl<'src> Constructor<'src> {
                 }
             }
             thir::Expr::Var(var_id) => builder.get_local(*var_id),
+            thir::Expr::VarRef(var_id) => {
+                let local_id = builder.get_local(*var_id);
+                builder.push_op(Op::PointToLocal(local_id))
+            }
             thir::Expr::Int(int) => builder.push_constant(Value::Int(*int)),
             thir::Expr::Bool(bool) => builder.push_constant(Value::Bool(*bool)),
             thir::Expr::String(string) => builder.push_string(*string),
@@ -620,10 +600,19 @@ impl<'src> Constructor<'src> {
                 }
                 builder.push_op(Op::Format { args })
             }
+            thir::Expr::Deref(expr) => {
+                let expr_id = self.map_expr(expr, builder);
+                builder.push_op(Op::Deref(expr_id))
+            }
+            thir::Expr::Copy(expr) => {
+                let expr_id = self.map_expr(expr, builder);
+                builder.push_op(Op::Copy(expr_id))
+            }
         }
     }
 }
 
+// TODO: merge with Constructor
 struct FuncBuilder<'a> {
     /// Function name.
     name: &'a str,
@@ -811,15 +800,10 @@ impl std::fmt::Display for Value {
             Value::Int(int) => write!(f, "{int}"),
             Value::Bool(bool) => write!(f, "{bool}"),
             Value::Char(char) => write!(f, "{char:?}"),
-            Value::List {
-                ptr,
-                start,
-                end,
-                is_string,
-            } => {
+            Value::List { ptr, is_string } => {
                 if *is_string {
                     f.write_str("\"")?;
-                    ptr.borrow()[*start..*end]
+                    ptr.borrow()
                         .iter()
                         .map(|value| {
                             let Value::Char(char) = value else {
@@ -830,9 +814,8 @@ impl std::fmt::Display for Value {
                         .collect::<std::fmt::Result>()?;
                     f.write_str("\"")
                 } else {
-                    let list = &ptr.borrow()[*start..*end];
                     f.write_str("[")?;
-                    write_comma_separated(f, list.iter())?;
+                    write_comma_separated(f, ptr.borrow().iter())?;
                     f.write_str("]")
                 }
             }
@@ -873,13 +856,6 @@ impl std::fmt::Display for Value {
                 }
                 Ok(())
             }
-            // Pointers are currently not used as constants so they should be unreachable.
-            Value::LocalPointer(_)
-            | Value::FieldPointer { .. }
-            | Value::ListIndexPointer { .. }
-            | Value::MapValuePointer { .. } => unimplemented!(),
-            // Iterators are not used as constants so they should be unreachable.
-            Value::MapIter(_) => unimplemented!(),
         }
     }
 }
@@ -1042,6 +1018,7 @@ impl std::fmt::Display for Stmt {
                 variant_index,
             } => write!(f, "IsVariant(_{expr}, variant {variant_index})"),
             GetPayload(expr) => write!(f, "GetPayload(_{expr})"),
+            Deref(expr) => write!(f, "Deref(_{expr})"),
         }
     }
 }

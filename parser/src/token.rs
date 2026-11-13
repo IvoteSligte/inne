@@ -22,8 +22,7 @@ pub enum Token<'src> {
     Struct,
     Enum,
     Ref,
-    Copy,
-    ShallowCopy,
+    To,
     // Tokens with stored data
     Ident(&'src str),
     Int(&'src str),
@@ -65,7 +64,6 @@ pub enum Token<'src> {
     RAngle, // Also an operator
     // Punctuation
     Dot,
-    DotDot,
     Comma,
     Arrow,
     Colon,
@@ -97,11 +95,10 @@ impl Token<'_> {
                 | Struct
                 | Enum
                 | Ref
-                | Copy
-                | ShallowCopy
                 | And
                 | Or
                 | Not
+                | To
         )
     }
 
@@ -158,8 +155,7 @@ impl std::fmt::Display for Token<'_> {
             Struct => "struct",
             Enum => "enum",
             Ref => "ref",
-            Copy => "copy",
-            ShallowCopy => "shallow_copy",
+            To => "to",
             Ident(ident) => ident,
             Bool(bool) => return write!(f, "{bool}"),
             Int(int) => int,
@@ -198,7 +194,6 @@ impl std::fmt::Display for Token<'_> {
             LAngle => "<",
             RAngle => ">",
             Dot => ".",
-            DotDot => "..",
             Comma => ",",
             Arrow => "->",
             Colon => ":",

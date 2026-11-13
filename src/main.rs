@@ -63,7 +63,7 @@ fn main() {
             todo!();
         }
         let mir = mir_from_typed_hir(&typed_hir)?;
-        if args.emit == Some(Ir::Hir) {
+        if args.emit == Some(Ir::Mir) {
             println!("{}", mir);
             return Some(());
         }

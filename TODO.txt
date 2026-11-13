@@ -3,8 +3,6 @@ language:
 - library imports
 - type aliases                  // low priority
   - make 'string' an alias of 'list<char>'
-- move semantics
-  - pass-by-reference ('ref') or value (default) in functions
 - pattern matching/destructuring
   - if var Enum(x) = expr       // low priority
   - while var Enum(x) = expr    // low priority
@@ -14,24 +12,28 @@ language:
   - match guards                // low priority
 - allow global code that does not depend on code from other files in the same project (to prevent cycles) // low priority
 - panic, assert                 // low priority
-- builtin list/map functions
-  - contains
+- runtime out-of-bounds/overflow checks
+- builtin functions
+  - map contains
   - list push
-    - this requires changing slicing if `array[0..1].push(item)` should be valid
+  - list/map len
 - floats
-  - integer-to-float
-  - float-to-integer
+  - integer-to-float: int(value)
+  - float-to-integer: float(value)
 - lex other integer radixes // low priority
   - hexadecimal, binary, octal
-- formatting specifiers // low priority
-  - float precision
-  - left-pad, right-pad
 
 tooling:
 - autocomplete
 - docstrings
   - LSP: show docs on hover
 - standard library
+  - string parsing functions
+  - value-to-string functions
+    - float precision
+  - string-to-string functions
+    - left-pad, right-pad
 - improve tests by adding expected output
 - formatter consistency tests
 - define comment syntax in LSP (if possible, otherwise in editor extensions)
+- lsp go-to-definition, find references, textDocument/documentHighlight

@@ -213,8 +213,13 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     fn param(&mut self) -> Option<Param<'src>> {
         let name = self.ident()?;
         let _ = self.take_if_eq(Token::Colon);
+        let reference = self.take_if_eq(Token::Ref).map(|(_, span)| span);
         let r#type = self.must("parameter type", |s| s.r#type())?;
-        Some(Param { name, r#type })
+        Some(Param {
+            name,
+            reference,
+            r#type,
+        })
     }
 
     fn field(&mut self) -> Option<Field<'src>> {
@@ -367,9 +372,9 @@ impl<'parent, 'src> Parser<'parent, 'src> {
         self.take_if_eq(Token::For)?;
         let var = self.must("variable name", |s| s.ident())?;
         self.must_token(Token::In)?;
-        let iter = self.must("iterator", |s| {
+        let iter = self.must("iterable", |s| {
             let expr = s.expr()?;
-            Some(if s.take_if_eq(Token::DotDot).is_some() {
+            Some(if s.take_if_eq(Token::To).is_some() {
                 let start = expr;
                 let end = s.must("range end value", |s| s.expr())?;
                 let span = start.1.union(end.1);
@@ -594,24 +599,9 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     fn index_or_member_or_atom(&mut self) -> Option<SpannedExpr<'src>> {
         let mut left = self.atom()?;
         loop {
-            if let Some((index, _)) = self.atomic_spanned(|s| {
-                s.delimited_by(BRACKETS, |s| {
-                    let expr = s.expr()?;
-                    if s.take_if_eq(Token::DotDot).is_none() {
-                        return Some(expr);
-                    }
-                    let end = s.must("range end value", |s| s.expr())?;
-                    let span = expr.1.union(end.1);
-                    Some((
-                        Expr::Range(Range {
-                            start: Box::new(expr),
-                            end: Box::new(end),
-                        }),
-                        span,
-                    ))
-                })
-                .flatten()
-            }) {
+            if let Some((index, _)) =
+                self.atomic_spanned(|s| s.delimited_by(BRACKETS, |s| s.expr()).flatten())
+            {
                 let span = left.1.union(index.1);
                 left = (
                     Expr::Index(Index {
@@ -688,12 +678,56 @@ impl<'parent, 'src> Parser<'parent, 'src> {
     }
 }
 
+/// Assumes that the input does not contain comments.
+fn filter_newlines<'src>(tokens: &mut Vec<SpannedToken<'src>>) {
+    use Token::*;
+
+    let mut dst = 0;
+    let mut maybe_prev = None; // The previous retained token, if any.
+    for src in 0..tokens.len() {
+        let (token, _) = tokens[src];
+        debug_assert!(!matches!(token, Comment(_)));
+        if token != Token::Newline {
+            tokens[dst] = tokens[src];
+            maybe_prev = Some(tokens[src].0);
+            dst += 1;
+            continue;
+        }
+        if let Some(prev) = maybe_prev
+            && matches!(
+                prev,
+                RBrace
+                    | RParen
+                    | RBracket
+                    | Return
+                    | Continue
+                    | Break
+                    | Ident(_)
+                    | Int(_)
+                    | Bool(_)
+                    | String(_)
+                    | Char(_)
+            )
+            && !tokens.get(src + 1).is_some_and(|(token, _)| {
+                token.is_operator() || matches!(token, RParen | RBracket | RBrace)
+            })
+        {
+            tokens[dst] = tokens[src];
+            maybe_prev = Some(tokens[src].0);
+            dst += 1;
+            continue;
+        }
+    }
+    tokens.truncate(dst);
+}
+
 pub fn parse<'src>(source: &[SpannedToken<'src>]) -> (Ast<'src>, Vec<ParseError<'src>>) {
-    let source = source
+    let mut source = source
         .iter()
         .copied()
         .filter(|(token, _)| !matches!(token, Token::Comment(_)))
         .collect::<Vec<_>>();
+    filter_newlines(&mut source);
     let mut errors = Vec::new();
     let mut parser = Parser {
         src: &source,

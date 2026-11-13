@@ -1,4 +1,4 @@
 // Integer ranges have an exclusive end.
-for i in 0..4 {
+for i in 0 to 4 {
     print(i)
 }

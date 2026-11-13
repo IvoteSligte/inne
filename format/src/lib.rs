@@ -148,7 +148,6 @@ macro_rules! delegate {
 
 impl Format for Ast<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
-        f.put_newline()?;
         for stmt in &self.stmts {
             stmt.fmt(f)?;
             f.put_newline()?;
@@ -252,7 +251,14 @@ impl Format for Func<'_> {
 
 impl Format for Param<'_> {
     fn fmt(&self, f: &mut Writer<'_>) -> Result {
-        write_key_value(f, self.name, &self.r#type)
+        self.name.fmt(f)?;
+        f.put(Token::Colon)?;
+        f.put_space()?;
+        if self.reference.is_some() {
+            f.put_keyword(Token::Ref)?;
+        }
+        self.r#type.fmt(f)?;
+        Ok(())
     }
 }
 
@@ -571,7 +577,9 @@ impl Format for Range<'_> {
                 f.put(Token::RParen)?;
             }
         }
-        f.put(Token::DotDot)?;
+        f.put_space()?;
+        f.put(Token::To)?;
+        f.put_space()?;
         {
             if end_needs_parens {
                 f.put(Token::LParen)?;

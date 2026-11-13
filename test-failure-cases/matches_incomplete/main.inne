@@ -1,0 +1,13 @@
+
+enum Number {
+    One
+    Two
+    Three
+    Four
+}
+
+match Number:One {
+    One { }
+    Two { }
+    // Missing Three and Four
+}

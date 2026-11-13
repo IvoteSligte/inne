@@ -35,14 +35,9 @@ impl FuncId {
     pub const PRINT: Self = Self(usize::MAX - 1);
 }
 
-pub struct VarInfo<'src> {
-    pub name: &'src str,
-    pub span: Span<'src>,
-}
-
 pub struct Hir<'src> {
     /// Essentially `HashMap<DefId, DefInfo>`, but all [DefId]`s are consecutive.
-    pub vars: Vec<VarInfo<'src>>,
+    pub vars: Vec<Name<'src>>,
     pub funcs: Vec<Func<'src>>,
     pub types: Vec<TypeDef<'src>>,
     pub stmts: Vec<Stmt<'src>>,
@@ -139,6 +134,7 @@ pub enum Type {
     Bool,
     Char,
     Range,
+    Ref(Box<Self>),
     List(Box<Self>),
     Map {
         key: Box<Self>,
@@ -163,8 +159,16 @@ impl Type {
         Self::List(Box::new(Self::Char))
     }
 
+    pub fn wrap_ref(self) -> Self {
+        Self::Ref(Box::new(self))
+    }
+
     pub fn is_known(&self) -> bool {
         *self != Self::UNKNOWN && *self != Self::UnknownGeneric
+    }
+
+    pub fn is_ref(&self) -> bool {
+        matches!(self, Self::Ref(_))
     }
 
     pub fn or<'a>(&'a self, other: &'a Self) -> &'a Self {
@@ -176,6 +180,7 @@ impl Type {
 
         match self {
             Nothing | Int | Bool | Char | Range | UnknownGeneric => self.clone(),
+            Ref(value) => Ref(Box::new(value.with_generics(generics))),
             List(element) => List(Box::new(element.with_generics(generics))),
             Map { key, value } => Map {
                 key: Box::new(key.with_generics(generics)),
@@ -213,11 +218,24 @@ pub enum Expr<'a> {
     Member(Member<'a>),
     Range(Range<'a>),
     Var(VarId),
+    /// Only for Typed-HIR
+    VarRef(VarId),
     Int(Int),
     Bool(bool),
     Char(char),
     String(InneStr<'a>),
     FormatString(FormatString<'a>),
+    /// Only for Typed-HIR
+    Deref(Box<Self>),
+    /// Only for Typed-HIR
+    Copy(Box<Self>),
+}
+
+impl Expr<'_> {
+    pub(crate) fn wrap_in_place(&mut self, wrap: impl FnOnce(Box<Self>) -> Self) {
+        const TEMP: Expr = Expr::Bool(false);
+        *self = wrap(Box::new(std::mem::replace(self, TEMP)));
+    }
 }
 
 pub type SpannedExpr<'a> = Spanned<'a, Expr<'a>>;
@@ -373,16 +391,16 @@ pub fn hir_from_ast_modules<'ast, 'src: 'ast>(
 
 /// Using a separate type instead of having the fields and methods directly on [Constructor]
 /// to prevent lifetime issues.
-struct VarList<'a>(Vec<VarInfo<'a>>);
+struct VarList<'a>(Vec<Name<'a>>);
 
 impl<'a> VarList<'a> {
-    pub fn add(&mut self, (name, span): Name<'a>) -> VarId {
+    pub fn add(&mut self, name: Name<'a>) -> VarId {
         let id = VarId(self.0.len());
-        self.0.push(VarInfo { name, span });
+        self.0.push(name);
         id
     }
 
-    fn get(&self, id: VarId) -> &VarInfo<'a> {
+    fn get(&self, id: VarId) -> &Name<'a> {
         debug_assert_ne!(id, VarId::UNKNOWN);
         &self.0[id.get()]
     }
@@ -903,13 +921,17 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                 ),
                 param.name.1,
                 format!("Previously defined here:"),
-                self.vars.get(prev_param_var_id).span,
+                self.vars.get(prev_param_var_id).1,
             );
         }
+        let (r#type, type_span) = self.map_type(&param.r#type);
         Param {
             var_id,
             name: param.name,
-            r#type: self.map_type(&param.r#type),
+            r#type: match param.reference {
+                Some(ref_span) => (Type::Ref(Box::new(r#type)), ref_span.union(type_span)),
+                None => (r#type, type_span),
+            },
         }
     }
 
@@ -957,7 +979,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                     Expr::Call(Call {
                         name: *name,
                         func_id,
-                        args: self.map_exprs(args),
+                        args: args.iter().map(|elem| self.map_expr(elem)).collect(),
                     })
                 }
                 ast::Expr::EmptyList(ast::EmptyList { element_type }) => {
@@ -966,7 +988,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                     })
                 }
                 ast::Expr::List(ast::List { elements }) => Expr::List(List {
-                    elements: self.map_exprs(elements),
+                    elements: elements.iter().map(|elem| self.map_expr(elem)).collect(),
                 }),
                 ast::Expr::EmptyMap(ast::EmptyMap {
                     key_type,
@@ -1161,11 +1183,6 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
             },
             *span,
         )
-    }
-
-    #[must_use]
-    fn map_exprs(&mut self, exprs: &'ast [ast::SpannedExpr<'src>]) -> Vec<SpannedExpr<'src>> {
-        exprs.iter().map(|elem| self.map_expr(elem)).collect()
     }
 
     #[must_use]

@@ -1,52 +1,26 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-use crate::{hir::TypeId, mir::LocalId};
+use crate::hir::TypeId;
 
 pub type Int = i64;
 
-// TODO: make string and list slicing cheap
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Value {
     Nothing,
     Int(Int),
     Bool(bool),
     Char(char),
-    List {
-        ptr: Ptr<List>,
-        start: usize,
-        end: usize,
-        is_string: bool,
-    },
+    List { ptr: Ptr<List>, is_string: bool },
     Map(Ptr<Map>),
-    Range {
-        start: Int,
-        end: Int,
-    },
+    Range { start: Int, end: Int },
     Struct(Ptr<Struct>),
     Enum(Ptr<Enum>),
-    /// Pointer to a local value. Only valid for the duration of the current function.
-    LocalPointer(LocalId),
-    FieldPointer {
-        ptr: Ptr<Struct>,
-        field_index: usize,
-    },
-    ListIndexPointer {
-        ptr: Ptr<List>,
-        index: usize,
-    },
-    MapValuePointer {
-        ptr: Ptr<Map>,
-        key: Box<Value>,
-    },
-    MapIter(MapIter),
 }
 
 impl Value {
     pub fn new_list(elements: impl IntoIterator<Item = Value>, is_string: bool) -> Self {
         let elements = elements.into_iter().collect::<List>();
         Self::List {
-            start: 0,
-            end: elements.len(),
             ptr: create_pointer(elements),
             is_string,
         }
@@ -86,6 +60,40 @@ pub struct Enum {
     pub type_id: TypeId,
     pub variant_index: usize,
     pub payload: Option<Value>,
+}
+
+pub enum ValueOrPtr {
+    Value(Value),
+    /// Pointer to a value on the stack.
+    /// Only valid for the duration of the current function.
+    Ptr(usize),
+    FieldPtr {
+        ptr: Ptr<Struct>,
+        field_index: usize,
+    },
+    ListIndexPtr {
+        ptr: Ptr<List>,
+        index: usize,
+    },
+    MapValuePtr {
+        ptr: Ptr<Map>,
+        key: Value,
+    },
+    ListIter {
+        ptr: Ptr<List>,
+        index: usize,
+    },
+    MapIter(MapIter),
+}
+
+impl ValueOrPtr {
+    pub const NOTHING: Self = Self::Value(Value::Nothing);
+}
+
+impl From<Value> for ValueOrPtr {
+    fn from(value: Value) -> Self {
+        Self::Value(value)
+    }
 }
 
 /// Wrapper around a [BTreeMap] iterator that implements traits that all [Value]s must have.

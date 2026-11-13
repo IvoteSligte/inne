@@ -56,6 +56,7 @@ pub struct Func<'a> {
 #[derive(Debug)]
 pub struct Param<'a> {
     pub name: Name<'a>,
+    pub reference: Option<Span<'a>>,
     pub r#type: SpannedType<'a>,
 }
 

@@ -54,10 +54,6 @@ Example: `'d'`
 
 Example: `'\n'`
 
-### Ranges
-
-A range has the syntax `start..end`. `start` and `end` are integers. The end is exclusive.
-
 ### Lists
 
 Empty list: `[<type>]`
@@ -270,9 +266,18 @@ match n {
 
 `for variable in iterator { ... }` as in Rust.
 
-Only ranges, lists, and maps can be used as iterators.
+Only ranges (`start to end`), lists, and maps can be used as iterators.
 
 Using a range as iterator yields integers, using a list yields its elements, and using a map yields its keys.
+
+Ranges are a special construct that can only be used in a for-loop. Their `end` is exclusive.
+
+Example:
+```
+for i in 0 to 10 {
+    print(i)
+}
+```
 
 ### While-loops
 

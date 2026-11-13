@@ -255,8 +255,7 @@ impl<'src> Lexer<'src> {
             || self.keyword("true", Bool(true))
             || self.keyword("false", Bool(false))
             || self.keyword("ref", Ref)
-            || self.keyword("copy", Copy)
-            || self.keyword("shallow_copy", ShallowCopy)
+            || self.keyword("to", To)
     }
 
     fn inne_symbol(&mut self) -> bool {
@@ -266,7 +265,6 @@ impl<'src> Lexer<'src> {
             || self.symbol(")", RParen)
             || self.symbol("[", LBracket)
             || self.symbol("]", RBracket)
-            || self.symbol("..", DotDot)
             || self.symbol(".", Dot)
             || self.symbol(",", Comma)
             || self.symbol("->", Arrow)
@@ -420,45 +418,6 @@ impl<'src> Lexer<'src> {
     }
 }
 
-fn filter_newlines<'src>(tokens: &mut Vec<SpannedToken<'src>>) {
-    let mut dst = 0;
-    let mut maybe_prev = None; // The previous retained token, if any.
-    for src in 0..tokens.len() {
-        let (token, _) = tokens[src];
-        if token != Token::Newline {
-            tokens[dst] = tokens[src];
-            maybe_prev = Some(tokens[src].0);
-            dst += 1;
-            continue;
-        }
-        if let Some(prev) = maybe_prev
-            && matches!(
-                prev,
-                RBrace
-                    | RParen
-                    | RBracket
-                    | Return
-                    | Continue
-                    | Break
-                    | Ident(_)
-                    | Int(_)
-                    | Bool(_)
-                    | String(_)
-                    | Char(_)
-            )
-            && !tokens.get(src + 1).is_some_and(|(token, _)| {
-                token.is_operator() || matches!(token, RParen | RBracket | RBrace)
-            })
-        {
-            tokens[dst] = tokens[src];
-            maybe_prev = Some(tokens[src].0);
-            dst += 1;
-            continue;
-        }
-    }
-    tokens.truncate(dst);
-}
-
 pub fn escaped_byte_to_char(escaped: u8) -> Option<char> {
     Some(match escaped {
         b'\\' => '\\',
@@ -488,6 +447,5 @@ pub fn lex<'src>(
     };
     while lexer.inne_token() {}
     debug_assert_eq!(lexer.start, src.len());
-    filter_newlines(&mut lexer.tokens);
     (lexer.tokens, lexer.errors)
 }

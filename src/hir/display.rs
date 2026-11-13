@@ -14,6 +14,7 @@ impl std::fmt::Display for Display<&Type> {
             Type::Bool => "bool",
             Type::Char => "char",
             Type::Range => "range",
+            Type::Ref(value) => return write!(f, "ref {}", Display(value.as_ref())),
             Type::List(element) if **element == Type::Char => "string",
             Type::List(element) => return write!(f, "List<{}>", Display(element.as_ref())),
             Type::Map { key, value } => {
@@ -45,7 +46,7 @@ impl std::fmt::Display for Hir<'_> {
         let f: &mut dyn std::fmt::Write = &mut IndentWriter::new("    ", f);
         writeln!(f, "HIR:")?;
         writeln!(f, "vars: {{{INDENT}")?;
-        for (i, VarInfo { name, span }) in self.vars.iter().enumerate() {
+        for (i, (name, span)) in self.vars.iter().enumerate() {
             writeln!(f, "_{i}: var {name} at {span};")?;
         }
         writeln!(f, "{DEDENT}}}")?;
@@ -259,6 +260,9 @@ impl<'a> std::fmt::Display for Expr<'a> {
                 }
                 write!(f, "{}", end_text.0.original())?;
                 f.write_str("\"")?;
+            }
+            Expr::VarRef(_) | Expr::Deref(_) | Expr::Copy(_) => {
+                unreachable!("VarRef, Deref, and Copy are only generated in the Typed-HIR stage.")
             }
         }
         Ok(())
