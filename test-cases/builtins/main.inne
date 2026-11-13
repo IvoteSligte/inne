@@ -1,0 +1,16 @@
+
+var list = [5, 6, 7, 8]
+print(len(list)) // 4
+
+var map = {"alpha": 123, "beta": 999}
+print(len(map)) // 2
+
+print(contains(list, 7), contains(list, -10)) // true false
+print(contains(map, "beta"), contains(map, "gamma")) // true false
+
+push(list, -10)
+push(list, 900)
+push(list, -321)
+print(list) // [5, 6, 7, 8, -10, 900, -321]
+print(contains(list, -10)) // true
+

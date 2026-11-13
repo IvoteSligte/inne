@@ -47,6 +47,7 @@ impl Value {
 type Ptr<T> = Rc<RefCell<T>>;
 
 pub type List = Vec<Value>;
+// TODO: have Map preserve insertion order (and just use a hashmap internally)
 pub type Map = BTreeMap<Value, Value>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

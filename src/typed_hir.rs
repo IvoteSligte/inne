@@ -214,7 +214,7 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 target,
                 value,
             }) => {
-                let target_type = self.check_expr(target, Assignable);
+                let target_type = self.check_expr(target, Assignable).unref();
                 let value_type = self.check_expr(value, Owned);
                 if not_equal(&target_type, &value_type) {
                     self.errors.add(
@@ -634,7 +634,6 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
         };
         match (required_ownership, r#type) {
             (ArgRef, r#type @ Type::Ref(_)) => r#type,
-            (Assignable, Type::Ref(r#type)) => *r#type,
             (ArgRef, r#type) => {
                 self.errors.add(
                     "Expected a reference as argument, but this cannot be converted into one. Declare it as a separate variable to fix this.",
@@ -642,12 +641,13 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 );
                 Type::Ref(Box::new(r#type))
             }
+            (Assignable, r#type @ Type::Ref(_)) => r#type,
             (Assignable, _) => {
                 self.errors.add(
                     "The left side of an assignment must be a variable, list or map element, or struct field",
                     *span,
                 );
-                Type::UNKNOWN
+                Type::UNKNOWN.wrap_ref()
             }
             (Owned, Type::Ref(referenced_type)) => {
                 expr.wrap_in_place(Expr::Copy);
@@ -754,6 +754,139 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
             // print(...) accepts any number of arguments of any type.
             for arg in &mut call.args {
                 self.check_expr(arg, DontCare);
+            }
+            return Type::Nothing;
+        } else if call.func_id == FuncId::LEN {
+            // len(list/map) accepts 1 argument that is either a list or map type.
+            let maybe_collection = call
+                .args
+                .first_mut()
+                .map(|arg| self.check_expr(arg, ArgRef).unref());
+            if call.args.len() > 1 {
+                for arg in &mut call.args[1..] {
+                    self.check_expr(arg, DontCare);
+                }
+                self.errors
+                    .add("'len' only takes one argument", call.args[1].1);
+            }
+            match maybe_collection {
+                Some(collection) => {
+                    if !matches!(collection, Type::Map { .. } | Type::List(_)) {
+                        self.errors.add(
+                            format!(
+                                "'len' takes a list or map as argument, not '{}'",
+                                self.display(&collection)
+                            ),
+                            span,
+                        );
+                    }
+                }
+                None => {
+                    self.errors
+                        .add("'len' takes one argument, either a list or a map", span);
+                }
+            }
+            return Type::Int;
+        } else if call.func_id == FuncId::CONTAINS {
+            // contains(list/map, value) accepts 2 arguments, where the first is either
+            // a list or map type and the second is its element or key type.
+            let first = call
+                .args
+                .get_mut(0)
+                .map(|arg| (self.check_expr(arg, ArgRef).unref(), arg.1));
+            let second = call
+                .args
+                .get_mut(1)
+                .map(|arg| (self.check_expr(arg, Immediate), arg.1));
+            match first.zip(second) {
+                Some(((collection, collection_span), (contains_key, contains_key_span))) => {
+                    for arg in &mut call.args[2..] {
+                        self.check_expr(arg, DontCare);
+                    }
+                    match collection {
+                        Type::Map { key, value: _ } => {
+                            if not_equal(&contains_key, &key) {
+                                self.errors.add(
+                                    format!(
+                                        "The second argument of 'contains' must be '{}', the key type of the map, not '{}'",
+                                        self.display(&key),
+                                        self.display(&contains_key),
+                                    ),
+                                    contains_key_span,
+                                );
+                            }
+                        }
+                        Type::List(element) => {
+                            if not_equal(&contains_key, &element) {
+                                self.errors.add(
+                                    format!(
+                                        "The second argument of 'contains' must be '{}', the element type of the list, not '{}'",
+                                        self.display(&element),
+                                        self.display(&contains_key),
+                                    ),
+                                    contains_key_span,
+                                );
+                            }
+                        }
+                        _ => self.errors.add(
+                            format!(
+                                "The first argument of 'contains' must be a list or map, not '{}'",
+                                self.display(&collection)
+                            ),
+                            collection_span,
+                        ),
+                    }
+                }
+                None => {
+                    self.errors.add(
+                        "'contains' takes two arguments, a list or map, and a value",
+                        span,
+                    );
+                }
+            }
+            return Type::Bool;
+        } else if call.func_id == FuncId::PUSH {
+            // push(list, value) accepts 2 arguments, where the first
+            // is a list type and the second is its element type.
+            let first = call
+                .args
+                .get_mut(0)
+                .map(|arg| (self.check_expr(arg, ArgRef).unref(), arg.1));
+            let second = call
+                .args
+                .get_mut(1)
+                .map(|arg| (self.check_expr(arg, Owned), arg.1));
+            match first.zip(second) {
+                Some(((list, list_span), (push_element, push_element_span))) => {
+                    for arg in &mut call.args[2..] {
+                        self.check_expr(arg, DontCare);
+                    }
+                    match list {
+                        Type::List(element) => {
+                            if not_equal(&push_element, &element) {
+                                self.errors.add(
+                                    format!(
+                                        "The second argument of 'push' must be '{}', the element type of the list, not '{}'",
+                                        self.display(&element),
+                                        self.display(&push_element),
+                                    ),
+                                    push_element_span,
+                                );
+                            }
+                        }
+                        _ => self.errors.add(
+                            format!(
+                                "The first argument of 'push' must be a list, not '{}'",
+                                self.display(&list)
+                            ),
+                            list_span,
+                        ),
+                    }
+                }
+                None => {
+                    self.errors
+                        .add("'push' takes two arguments: a list and a value", span);
+                }
             }
             return Type::Nothing;
         }

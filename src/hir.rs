@@ -33,6 +33,9 @@ impl VarId {
 impl FuncId {
     pub const UNKNOWN: Self = Self(usize::MAX);
     pub const PRINT: Self = Self(usize::MAX - 1);
+    pub const LEN: Self = Self(usize::MAX - 2);
+    pub const CONTAINS: Self = Self(usize::MAX - 3);
+    pub const PUSH: Self = Self(usize::MAX - 4);
 }
 
 pub struct Hir<'src> {
@@ -169,6 +172,14 @@ impl Type {
 
     pub fn is_ref(&self) -> bool {
         matches!(self, Self::Ref(_))
+    }
+
+    /// Assumes `self` is a [Type::Ref].
+    pub fn unref(self) -> Type {
+        match self {
+            Self::Ref(r#type) => *r#type,
+            _ => unreachable!(),
+        }
     }
 
     pub fn or<'a>(&'a self, other: &'a Self) -> &'a Self {
@@ -968,6 +979,9 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                     let func_id = match self.func_map.get(name.0) {
                         Some(&(func_id, _)) => func_id,
                         None if name.0 == "print" => FuncId::PRINT,
+                        None if name.0 == "len" => FuncId::LEN,
+                        None if name.0 == "contains" => FuncId::CONTAINS,
+                        None if name.0 == "push" => FuncId::PUSH,
                         None => {
                             // TODO: add context if function is defined as variable
                             // TODO: add similarly named functions as context

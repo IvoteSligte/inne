@@ -142,6 +142,15 @@ pub enum Op {
     Print {
         args: Vec<LocalId>,
     },
+    Len(LocalId),
+    Contains {
+        collection: LocalId,
+        key: LocalId,
+    },
+    Push {
+        list: LocalId,
+        value: LocalId,
+    },
     Format {
         args: Vec<LocalId>,
     },
@@ -497,16 +506,22 @@ impl<'src> Constructor<'src> {
                     .iter()
                     .map(|arg| self.map_expr(&arg.0, builder))
                     .collect();
-                if *func_id == FuncId::PRINT {
-                    builder.push_op(Op::Print { args: arg_ids })
-                } else if *func_id == FuncId::PRINT {
-                    builder.push_op(Op::Copy(arg_ids[0]))
-                } else {
-                    builder.push_op(Op::Call {
+                builder.push_op(match () {
+                    _ if *func_id == FuncId::PRINT => Op::Print { args: arg_ids },
+                    _ if *func_id == FuncId::LEN => Op::Len(arg_ids[0]),
+                    _ if *func_id == FuncId::CONTAINS => Op::Contains {
+                        collection: arg_ids[0],
+                        key: arg_ids[1],
+                    },
+                    _ if *func_id == FuncId::PUSH => Op::Push {
+                        list: arg_ids[0],
+                        value: arg_ids[1],
+                    },
+                    _ => Op::Call {
                         func_id: *func_id,
                         args: arg_ids,
-                    })
-                }
+                    },
+                })
             }
             thir::Expr::Var(var_id) => builder.get_local(*var_id),
             thir::Expr::VarRef(var_id) => {
@@ -946,18 +961,24 @@ impl std::fmt::Display for Stmt {
                 f.write_str(")")
             }
             Index { expr, index } => {
-                write!(f, "Index(_{}, _{})", expr, index)
+                write!(f, "Index(_{expr}, _{index})")
             }
             Print { args } => {
                 write!(f, "Print")?;
                 write_tuple(args, f)
             }
+            Len(local_id) => write!(f, "Len(_{local_id})"),
+            Contains {
+                collection: map,
+                key,
+            } => write!(f, "Contains(_{map}, _{key})"),
+            Push { list, value } => write!(f, "Push(_{list}, _{value})"),
             Format { args } => {
                 write!(f, "Format")?;
                 write_tuple(args, f)
             }
             Assign { target, value } => {
-                write!(f, "Assign(_{}, _{})", target, value)
+                write!(f, "Assign(_{target}, _{value})")
             }
             Add(binary) | Sub(binary) | Mul(binary) | Div(binary) | Mod(binary) | Eq(binary)
             | Neq(binary) | Lt(binary) | Leq(binary) | Gt(binary) | Geq(binary) | And(binary)

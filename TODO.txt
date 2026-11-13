@@ -14,9 +14,9 @@ language:
 - panic, assert                 // low priority
 - runtime out-of-bounds/overflow checks
 - builtin functions
-  - map contains
-  - list push
-  - list/map len
+  - list pop
+  - list remove
+  - list append/push_all (does not necessarily need to be a builtin)
 - floats
   - integer-to-float: int(value)
   - float-to-integer: float(value)

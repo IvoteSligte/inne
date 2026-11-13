@@ -200,6 +200,33 @@ impl<'a> Interpreter<'a> {
                 std::fmt::Write::write_str(&mut writer, "\n").unwrap();
                 NOTHING
             }
+            Op::Len(collection) => Value::Int(
+                match self.deref_ptr(*collection) {
+                    Value::List { ptr, is_string: _ } => ptr.borrow().len(),
+                    Value::Map(ptr) => ptr.borrow().len(),
+                    _ => unreachable!(),
+                }
+                .try_into()
+                .unwrap(),
+            )
+            .into(),
+            Op::Contains { collection, key } => {
+                let key = self.get_local(*key);
+                Value::Bool(match self.deref_ptr(*collection) {
+                    Value::List { ptr, is_string: _ } => ptr.borrow().contains(key),
+                    Value::Map(ptr) => ptr.borrow().contains_key(key),
+                    _ => unreachable!(),
+                })
+                .into()
+            }
+            Op::Push { list, value } => {
+                let value = self.get_local(*value).clone();
+                match self.deref_ptr(*list) {
+                    Value::List { ptr, is_string: _ } => ptr.borrow_mut().push(value),
+                    _ => unreachable!(),
+                }
+                NOTHING
+            }
             Op::Format { args } => {
                 let mut out = String::new();
                 for local_id in args {
@@ -351,9 +378,7 @@ impl<'a> Interpreter<'a> {
             Op::Copy(local_id) => self
                 .deepcopy_value_or_ptr(self.get_local_or_ptr(*local_id))
                 .into(),
-            Op::Deref(local_id) => self
-                .apply_to_value(self.get_local_or_ptr(*local_id), Value::clone)
-                .into(),
+            Op::Deref(local_id) => self.deref_ptr(*local_id).into(),
         };
         self.set_local(stmt.local_id, value_or_ptr);
     }
@@ -559,5 +584,11 @@ impl<'a> Interpreter<'a> {
             slice.iter().map(|element| self.deepcopy_value(element)),
             is_string,
         )
+    }
+
+    fn deref_ptr(&self, local_id: LocalId) -> Value {
+        let value_or_ptr = self.get_local_or_ptr(local_id);
+        debug_assert!(!matches!(value_or_ptr, ValueOrPtr::Value(_)));
+        self.apply_to_value(value_or_ptr, Value::clone)
     }
 }
