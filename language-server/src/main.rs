@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Instant;
 
 use diagnostics::extract_diagnostics;
@@ -133,6 +134,7 @@ impl LanguageServer for Backend {
                 ),
                 document_formatting_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -410,14 +412,7 @@ impl LanguageServer for Backend {
             );
             return Ok(Some(highlights));
         };
-        let mut ids = Vec::new();
-        search::stmts_find(&hir.stmts, &mut |span, id| ids.push((span, id)));
-        hir.funcs
-            .iter()
-            .for_each(|func| search::func_find(func, &mut |span, id| ids.push((span, id))));
-        hir.types
-            .iter()
-            .for_each(|r#type| search::type_def_find(r#type, &mut |span, id| ids.push((span, id))));
+        let ids = search::extract_ids(&hir);
         if let Some((_, id)) = ids.iter().find(|(id_span, _)| *id_span == span) {
             for (other_span, other_id) in &ids {
                 if *id == *other_id && other_span.filename == span.filename {
@@ -433,11 +428,58 @@ impl LanguageServer for Backend {
         Ok(Some(highlights))
     }
 
-    // TODO: async fn symbol()
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        eprintln!("Requested references");
 
-    // TODO: go-to-definition
+        let include_declaration = params.context.include_declaration;
+        let params = params.text_document_position;
+        let uri = params.text_document.uri;
+        let position = params.position;
+        let projects = self.projects.read().await;
+        let project = projects
+            .iter()
+            .find(|project| project.get_file(&uri).is_some())
+            .unwrap();
+        let file = get_file(&projects, &uri).unwrap();
+        let Some(offset) = offset_at_position(&file.source, position) else {
+            eprintln!("References: Invalid position {:?}", position);
+            // TODO: error
+            return Ok(None);
+        };
+        let (Some(hir), _) = project.compile_to_hir() else {
+            eprintln!("References: Failed to compile file '{}' to HIR", file.name);
+            // TODO: error
+            return Ok(None);
+        };
+        let ids = search::extract_ids(&hir);
+        let Some(&(_, id_under_cursor)) = ids
+            .iter()
+            .find(|(id_span, _)| id_span.filename == file.name && id_span.contains(offset))
+        else {
+            eprintln!("References: No searchable identifier found under cursor");
+            return Ok(None);
+        };
+        let filename_to_file = project
+            .files
+            .iter()
+            .map(|file| (file.name.as_str(), file))
+            .collect::<HashMap<_, _>>();
+        let mut references = Vec::new();
+        for (span, id) in ids {
+            if id == id_under_cursor {
+                let file = filename_to_file[span.filename];
+                references.push(Location {
+                    uri: file.uri.clone(),
+                    range: span_to_ls_range(&file.source, span),
+                });
+            }
+        }
+        Ok(Some(references))
+    }
 
-    // TODO: inlay hint? probably not
+    // TODO: textDocument/symbol
+    // TODO: textDocument/documentSymbol (required to make textDocument/references work in emacs)
+    // TODO: textDocument/definition
 }
 
 impl Backend {

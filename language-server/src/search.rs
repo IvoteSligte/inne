@@ -12,6 +12,18 @@ pub fn tokens_find<'src>(
     None
 }
 
+pub fn extract_ids<'src>(hir: &Hir<'src>) -> Vec<(Span<'src>, Id)> {
+    let mut ids = Vec::new();
+    stmts_find(&hir.stmts, &mut |span, id| ids.push((span, id)));
+    hir.funcs
+        .iter()
+        .for_each(|func| func_find(func, &mut |span, id| ids.push((span, id))));
+    hir.types
+        .iter()
+        .for_each(|r#type| type_def_find(r#type, &mut |span, id| ids.push((span, id))));
+    ids
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Id {
     Var(VarId),
