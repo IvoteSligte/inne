@@ -36,4 +36,4 @@ tooling:
 - improve tests by adding expected output
 - formatter consistency tests
 - define comment syntax in LSP (if possible, otherwise in editor extensions)
-- lsp go-to-definition, find references, textDocument/documentHighlight
+- lsp go-to-definition
