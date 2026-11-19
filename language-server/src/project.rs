@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use inne::{Error, ModuleId};
+use inne::{Error, Hir, ModuleId};
 use tower_lsp_server::ls_types::*;
 
 pub struct Project {
@@ -45,6 +45,26 @@ impl Project {
 
     pub fn analyze(&self) -> Vec<Error<'_>> {
         let mut all_errors = Vec::new();
+        let (maybe_hir, errors) = self.compile_to_hir();
+        all_errors.extend(errors);
+        let Some(hir) = maybe_hir else {
+            return all_errors;
+        };
+        eprintln!("Converting HIR to Typed HIR");
+        let _typed_hir = match inne::typed_hir_from_hir(hir) {
+            Ok(typed_hir) => typed_hir,
+            Err(errors) => {
+                all_errors.extend(errors);
+                return all_errors;
+            }
+        };
+        eprintln!("Analyzing project yielded {} errors", all_errors.len());
+        // NOTE: THIR -> MIR currently does not produce diagnostics, so it is skipped
+        all_errors
+    }
+
+    pub fn compile_to_hir(&self) -> (Option<Hir<'_>>, Vec<Error<'_>>) {
+        let mut all_errors = Vec::new();
         let mut asts = Vec::new();
         for file in &self.files {
             eprintln!("Lexing file '{}'", file.name);
@@ -62,7 +82,7 @@ impl Project {
             asts.push((file, ast));
         }
         if !all_errors.is_empty() {
-            return all_errors;
+            return (None, all_errors);
         }
         eprintln!("Converting ASTs to HIR");
         let asts = asts
@@ -72,20 +92,10 @@ impl Project {
             Ok(hir) => hir,
             Err(errors) => {
                 all_errors.extend(errors);
-                return all_errors;
+                return (None, all_errors);
             }
         };
-        eprintln!("Converting HIR to Typed HIR");
-        let _typed_hir = match inne::typed_hir_from_hir(hir) {
-            Ok(typed_hir) => typed_hir,
-            Err(errors) => {
-                all_errors.extend(errors);
-                return all_errors;
-            }
-        };
-        eprintln!("Analyzing project yielded {} errors", all_errors.len());
-        // NOTE: THIR -> MIR currently does not produce diagnostics, so it is skipped
-        all_errors
+        (Some(hir), all_errors)
     }
 }
 

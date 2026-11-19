@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use diagnostics::extract_diagnostics;
-use inne::ModuleId;
+use inne::{ModuleId, Span, Token};
 use semantic_tokens::extract_semantic_tokens;
 use tokio::sync::RwLock;
 use tower_lsp_server::jsonrpc::{self, Result};
@@ -10,6 +10,7 @@ use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
 mod diagnostics;
 mod project;
+pub mod search;
 mod semantic_tokens;
 
 use project::{File, Project, find_root, get_file, uri_to_path};
@@ -80,6 +81,14 @@ pub fn offset_at_position(source: &str, position: Position) -> Option<usize> {
     None
 }
 
+pub fn span_to_ls_range(source: &str, span: Span<'_>) -> Range {
+    let mut line = 0;
+    let mut character = 0;
+    let start = position_at_end(&source[..span.start], &mut line, &mut character);
+    let end = position_at_end(&source[span.start..span.end], &mut line, &mut character);
+    Range { start, end }
+}
+
 struct Backend {
     client: Client,
     projects: RwLock<Vec<Project>>,
@@ -123,6 +132,7 @@ impl LanguageServer for Backend {
                     ),
                 ),
                 document_formatting_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -352,6 +362,69 @@ impl LanguageServer for Backend {
                 Ok(None)
             }
         }
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        eprintln!("Requested document highlight");
+
+        let params = params.text_document_position_params;
+        let uri = params.text_document.uri;
+        let position = params.position;
+        let projects = self.projects.read().await;
+        let project = projects
+            .iter()
+            .find(|project| project.get_file(&uri).is_some())
+            .unwrap();
+        let file = get_file(&projects, &uri).unwrap();
+        let Some(offset) = offset_at_position(&file.source, position) else {
+            eprintln!("Document highlight: Invalid position {:?}", position);
+            return Ok(None);
+        };
+        let (Some(tokens), _) = inne::lex(&file.source, &file.name) else {
+            eprintln!("Document highlight: Failed to lex file '{}'", file.name);
+            return Ok(None);
+        };
+        let Some((token, span)) = search::tokens_find(&tokens, offset) else {
+            // Valid, just no token under cursor.
+            return Ok(None);
+        };
+        let mut highlights = vec![DocumentHighlight {
+            range: span_to_ls_range(&file.source, span),
+            kind: None,
+        }];
+        match token {
+            Token::Ident(_) => {}
+            _ if token.is_keyword() => {
+                return Ok(Some(highlights));
+            }
+            // Valid, but currently only identifiers and keywords are highlighted.
+            _ => return Ok(None),
+        }
+        let (Some(hir), _) = project.compile_to_hir() else {
+            eprintln!(
+                "Document highlight: Failed to compile file '{}' to HIR",
+                file.name
+            );
+            return Ok(Some(highlights));
+        };
+        match search::stmts_find(&hir.stmts, span)
+            .or_else(|| {
+                hir.funcs
+                    .iter()
+                    .find_map(|func| search::func_find(func, span))
+            })
+            .or_else(|| {
+                hir.types
+                    .iter()
+                    .find_map(|r#type| search::type_def_find(r#type, span))
+            }) {
+            Some(id) => {}
+            None => eprintln!("Could not determine nature of selected identifier"),
+        }
+        Ok(Some(highlights))
     }
 
     // TODO: async fn symbol()

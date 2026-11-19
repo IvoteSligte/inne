@@ -116,9 +116,9 @@ pub struct Enum<'src> {
     pub variants: Vec<Variant<'src>>,
 }
 
-pub struct Variant<'a> {
-    pub name: Name<'a>,
-    pub payload: Option<Spanned<'a, Type>>,
+pub struct Variant<'src> {
+    pub name: Name<'src>,
+    pub payload: Option<Spanned<'src, Type>>,
 }
 
 usize_newtype!(TypeId);
