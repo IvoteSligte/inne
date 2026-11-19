@@ -410,19 +410,25 @@ impl LanguageServer for Backend {
             );
             return Ok(Some(highlights));
         };
-        match search::stmts_find(&hir.stmts, span)
-            .or_else(|| {
-                hir.funcs
-                    .iter()
-                    .find_map(|func| search::func_find(func, span))
-            })
-            .or_else(|| {
-                hir.types
-                    .iter()
-                    .find_map(|r#type| search::type_def_find(r#type, span))
-            }) {
-            Some(id) => {}
-            None => eprintln!("Could not determine nature of selected identifier"),
+        let mut ids = Vec::new();
+        search::stmts_find(&hir.stmts, &mut |span, id| ids.push((span, id)));
+        hir.funcs
+            .iter()
+            .for_each(|func| search::func_find(func, &mut |span, id| ids.push((span, id))));
+        hir.types
+            .iter()
+            .for_each(|r#type| search::type_def_find(r#type, &mut |span, id| ids.push((span, id))));
+        if let Some((_, id)) = ids.iter().find(|(id_span, _)| *id_span == span) {
+            for (other_span, other_id) in &ids {
+                if *id == *other_id && other_span.filename == span.filename {
+                    // NOTE: computing span from scratch every time is inefficient for large files,
+                    //       but that is not relevant for the current state of the project
+                    highlights.push(DocumentHighlight {
+                        range: span_to_ls_range(&file.source, *other_span),
+                        kind: None,
+                    });
+                }
+            }
         }
         Ok(Some(highlights))
     }
