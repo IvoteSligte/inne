@@ -889,6 +889,50 @@ impl<'src, 'hir> TypeChecker<'src, 'hir> {
                 }
             }
             return Type::Nothing;
+        } else if call.func_id == FuncId::REMOVE_AT {
+            // remove_at(list, index) accepts 2 arguments, where the first
+            // is a list type and the second is Int.
+            let first = call
+                .args
+                .get_mut(0)
+                .map(|arg| (self.check_expr(arg, ArgRef).unref(), arg.1));
+            let second = call
+                .args
+                .get_mut(1)
+                .map(|arg| (self.check_expr(arg, Owned), arg.1));
+            match first.zip(second) {
+                Some(((list, list_span), (index, index_span))) => {
+                    for arg in &mut call.args[2..] {
+                        self.check_expr(arg, DontCare);
+                    }
+                    match list {
+                        Type::List(element) => {
+                            if not_equal(&index, &Type::Int) {
+                                self.errors.add(
+                                    format!(
+                                        "The second argument of 'remove_at' must be an 'Int' index, not '{}'",
+                                        self.display(&index),
+                                    ),
+                                    index_span,
+                                );
+                            }
+                            return *element;
+                        }
+                        _ => self.errors.add(
+                            format!(
+                                "The first argument of 'push' must be a list, not '{}'",
+                                self.display(&list)
+                            ),
+                            list_span,
+                        ),
+                    }
+                }
+                None => {
+                    self.errors
+                        .add("'push' takes two arguments: a list and a value", span);
+                }
+            }
+            return Type::UNKNOWN;
         }
         let &FuncSignature {
             name: func_name,

@@ -14,9 +14,7 @@ language:
 - panic, assert                 // low priority
 - runtime out-of-bounds/overflow checks
 - builtin functions
-  - list pop
-  - list remove
-  - list append/push_all (does not necessarily need to be a builtin)
+  - pop<T>(list<T>) -> Option<T>
 - floats
   - integer-to-float: int(value)
   - float-to-integer: float(value)

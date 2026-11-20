@@ -151,6 +151,10 @@ pub enum Op {
         list: LocalId,
         value: LocalId,
     },
+    RemoveAt {
+        list: LocalId,
+        index: LocalId,
+    },
     Format {
         args: Vec<LocalId>,
     },
@@ -516,6 +520,10 @@ impl<'src> Constructor<'src> {
                     _ if *func_id == FuncId::PUSH => Op::Push {
                         list: arg_ids[0],
                         value: arg_ids[1],
+                    },
+                    _ if *func_id == FuncId::REMOVE_AT => Op::RemoveAt {
+                        list: arg_ids[0],
+                        index: arg_ids[1],
                     },
                     _ => Op::Call {
                         func_id: *func_id,
@@ -973,6 +981,7 @@ impl std::fmt::Display for Stmt {
                 key,
             } => write!(f, "Contains(_{map}, _{key})"),
             Push { list, value } => write!(f, "Push(_{list}, _{value})"),
+            RemoveAt { list, index } => write!(f, "RemoveAt(_{list}, _{index})"),
             Format { args } => {
                 write!(f, "Format")?;
                 write_tuple(args, f)

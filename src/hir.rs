@@ -36,6 +36,7 @@ impl FuncId {
     pub const LEN: Self = Self(usize::MAX - 2);
     pub const CONTAINS: Self = Self(usize::MAX - 3);
     pub const PUSH: Self = Self(usize::MAX - 4);
+    pub const REMOVE_AT: Self = Self(usize::MAX - 6);
 }
 
 pub struct Hir<'src> {
@@ -982,6 +983,7 @@ impl<'ast, 'src> Constructor<'ast, 'src> {
                         None if name.0 == "len" => FuncId::LEN,
                         None if name.0 == "contains" => FuncId::CONTAINS,
                         None if name.0 == "push" => FuncId::PUSH,
+                        None if name.0 == "remove_at" => FuncId::REMOVE_AT,
                         None => {
                             // TODO: add context if function is defined as variable
                             // TODO: add similarly named functions as context

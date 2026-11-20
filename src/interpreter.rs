@@ -227,6 +227,22 @@ impl<'a> Interpreter<'a> {
                 }
                 NOTHING
             }
+            Op::RemoveAt { list, index } => {
+                let index = match self.get_local(*index).clone() {
+                    Value::Int(int) => int,
+                    _ => unreachable!(),
+                };
+                match self.deref_ptr(*list) {
+                    Value::List { ptr, is_string: _ } => {
+                        let mut list = ptr.borrow_mut();
+                        if index < 0 || index > list.len() as i64 {
+                            todo!("overflow check")
+                        }
+                        list.remove(index as _).into()
+                    }
+                    _ => unreachable!(),
+                }
+            }
             Op::Format { args } => {
                 let mut out = String::new();
                 for local_id in args {
