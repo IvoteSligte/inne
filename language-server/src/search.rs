@@ -12,15 +12,18 @@ pub fn tokens_find<'src>(
     None
 }
 
-pub fn extract_ids<'src>(hir: &Hir<'src>) -> Vec<(Span<'src>, Id)> {
+/// Returns a list of identifiers with their span, kind, and whether it is a definition or instance.
+pub fn extract_ids<'src>(hir: &Hir<'src>) -> Vec<(Span<'src>, Id, bool)> {
     let mut ids = Vec::new();
-    stmts_find(&hir.stmts, &mut |span, id| ids.push((span, id)));
+    stmts_find(&hir.stmts, &mut |span, id, is_def| {
+        ids.push((span, id, is_def))
+    });
     hir.funcs
         .iter()
-        .for_each(|func| func_find(func, &mut |span, id| ids.push((span, id))));
-    hir.types
-        .iter()
-        .for_each(|r#type| type_def_find(r#type, &mut |span, id| ids.push((span, id))));
+        .for_each(|func| func_find(func, &mut |span, id, is_def| ids.push((span, id, is_def))));
+    hir.types.iter().for_each(|r#type| {
+        type_def_find(r#type, &mut |span, id, is_def| ids.push((span, id, is_def)))
+    });
     ids
 }
 
@@ -42,7 +45,7 @@ pub enum Id {
     Unresolved,
 }
 
-pub fn func_find<'src>(func: &Func<'src>, f: &mut impl FnMut(Span<'src>, Id)) {
+pub fn func_find<'src>(func: &Func<'src>, f: &mut impl FnMut(Span<'src>, Id, bool)) {
     let Func {
         id,
         name,
@@ -51,7 +54,7 @@ pub fn func_find<'src>(func: &Func<'src>, f: &mut impl FnMut(Span<'src>, Id)) {
         return_type,
         body,
     } = func;
-    f(name.1, Id::Func(*id));
+    f(name.1, Id::Func(*id), true);
     generics_find(generics, f);
     params.iter().for_each(
         |Param {
@@ -59,7 +62,7 @@ pub fn func_find<'src>(func: &Func<'src>, f: &mut impl FnMut(Span<'src>, Id)) {
              name,
              r#type,
          }| {
-            f(name.1, Id::Var(*var_id));
+            f(name.1, Id::Var(*var_id), true);
             type_find(r#type, f);
         },
     );
@@ -67,7 +70,7 @@ pub fn func_find<'src>(func: &Func<'src>, f: &mut impl FnMut(Span<'src>, Id)) {
     stmts_find(body, f);
 }
 
-pub fn type_def_find<'src>(type_def: &TypeDef<'src>, f: &mut impl FnMut(Span<'src>, Id)) {
+pub fn type_def_find<'src>(type_def: &TypeDef<'src>, f: &mut impl FnMut(Span<'src>, Id, bool)) {
     match type_def {
         TypeDef::Struct(Struct {
             type_id,
@@ -75,13 +78,13 @@ pub fn type_def_find<'src>(type_def: &TypeDef<'src>, f: &mut impl FnMut(Span<'sr
             generics,
             fields,
         }) => {
-            f(name.1, Id::TypeDef(*type_id));
+            f(name.1, Id::TypeDef(*type_id), true);
             generics_find(generics, f);
             fields
                 .iter()
                 .enumerate()
                 .for_each(|(index, Field { name, r#type })| {
-                    f(name.1, Id::Field(index));
+                    f(name.1, Id::Field(index), true);
                     type_find(r#type, f);
                 });
         }
@@ -91,34 +94,37 @@ pub fn type_def_find<'src>(type_def: &TypeDef<'src>, f: &mut impl FnMut(Span<'sr
             generics,
             variants,
         }) => {
-            f(name.1, Id::TypeDef(*type_id));
+            f(name.1, Id::TypeDef(*type_id), true);
             generics_find(generics, f);
             variants
                 .iter()
                 .enumerate()
                 .for_each(|(index, Variant { name, payload })| {
-                    f(name.1, Id::Variant(index));
+                    f(name.1, Id::Variant(index), true);
                     payload.as_ref().inspect(|payload| type_find(payload, f));
                 });
         }
     }
 }
 
-pub fn type_find<'src>((r#type, span): &Spanned<'src, Type>, f: &mut impl FnMut(Span<'src>, Id)) {
+pub fn type_find<'src>(
+    (r#type, span): &Spanned<'src, Type>,
+    f: &mut impl FnMut(Span<'src>, Id, bool),
+) {
     type_find_inner((r#type, *span), f)
 }
 
 // TODO: accurately determine and match list element, map key/value and named type generic spans
 pub fn type_find_inner<'src>(
     (r#type, span): Spanned<'src, &Type>,
-    f: &mut impl FnMut(Span<'src>, Id),
+    f: &mut impl FnMut(Span<'src>, Id, bool),
 ) {
     match r#type {
-        Type::Nothing => f(span, Id::Nothing),
-        Type::Int => f(span, Id::Int),
-        Type::Bool => f(span, Id::Bool),
-        Type::Char => f(span, Id::Char),
-        Type::UnknownGeneric => f(span, Id::UnknownGeneric),
+        Type::Nothing => f(span, Id::Nothing, false),
+        Type::Int => f(span, Id::Int, false),
+        Type::Bool => f(span, Id::Bool, false),
+        Type::Char => f(span, Id::Char, false),
+        Type::UnknownGeneric => f(span, Id::UnknownGeneric, false),
         Type::Range | Type::Ref(_) => unreachable!(),
         Type::List(_) => {
             // The component spans cannot be determined.
@@ -128,28 +134,29 @@ pub fn type_find_inner<'src>(
         }
         Type::Named { id, generics } => {
             if generics.is_empty() {
-                f(span, Id::TypeDef(*id))
+                f(span, Id::TypeDef(*id), false)
             }
             // The spans of generics cannot be determined.
         }
-        Type::Generic(generic_id) => f(span, Id::Generic(generic_id.get())),
+        Type::Generic(generic_id) => f(span, Id::Generic(generic_id.get()), false),
     }
 }
 
-pub fn generics_find<'src>(generics: &[Name<'src>], f: &mut impl FnMut(Span<'src>, Id)) {
+/// Takes a list of generics definitions.
+pub fn generics_find<'src>(generics: &[Name<'src>], f: &mut impl FnMut(Span<'src>, Id, bool)) {
     generics
         .iter()
         .enumerate()
-        .for_each(|(index, generic)| f(generic.1, Id::Generic(index)))
+        .for_each(|(index, generic)| f(generic.1, Id::Generic(index), true))
 }
 
-pub fn stmts_find<'src>(stmts: &[Stmt<'src>], f: &mut impl FnMut(Span<'src>, Id)) {
+pub fn stmts_find<'src>(stmts: &[Stmt<'src>], f: &mut impl FnMut(Span<'src>, Id, bool)) {
     stmts.iter().for_each(|stmt| stmt_find(stmt, f))
 }
 
-pub fn stmt_find<'src>(stmt: &Stmt<'src>, f: &mut impl FnMut(Span<'src>, Id)) {
+pub fn stmt_find<'src>(stmt: &Stmt<'src>, f: &mut impl FnMut(Span<'src>, Id, bool)) {
     match stmt {
-        Stmt::VarDecl(var_decl) => f(var_decl.name.1, Id::Var(var_decl.var_id)),
+        Stmt::VarDecl(var_decl) => f(var_decl.name.1, Id::Var(var_decl.var_id), true),
         Stmt::Expr(expr) => expr_find(expr, f),
         Stmt::Assign(Assign {
             op: _,
@@ -179,7 +186,7 @@ pub fn stmt_find<'src>(stmt: &Stmt<'src>, f: &mut impl FnMut(Span<'src>, Id)) {
             iter,
             body,
         }) => {
-            f(var.1, Id::Var(*var_id));
+            f(var.1, Id::Var(*var_id), true);
             expr_find(iter, f);
             stmts_find(&body, f);
         }
@@ -195,13 +202,13 @@ pub fn stmt_find<'src>(stmt: &Stmt<'src>, f: &mut impl FnMut(Span<'src>, Id)) {
     }
 }
 
-pub fn expr_find<'src>((expr, span): &SpannedExpr<'src>, f: &mut impl FnMut(Span<'src>, Id)) {
+pub fn expr_find<'src>((expr, span): &SpannedExpr<'src>, f: &mut impl FnMut(Span<'src>, Id, bool)) {
     expr_find_inner((expr, *span), f)
 }
 
 pub fn expr_find_inner<'src>(
     (expr, span): Spanned<'src, &Expr<'src>>,
-    f: &mut impl FnMut(Span<'src>, Id),
+    f: &mut impl FnMut(Span<'src>, Id, bool),
 ) {
     match expr {
         Expr::Binary(Binary { op: _, left, right }) => {
@@ -214,7 +221,7 @@ pub fn expr_find_inner<'src>(
             func_id,
             args,
         }) => {
-            f(name.1, Id::Func(*func_id));
+            f(name.1, Id::Func(*func_id), false);
             args.iter().for_each(|arg| expr_find(arg, f));
         }
         Expr::EmptyList(EmptyList { element_type }) => type_find(element_type, f),
@@ -235,12 +242,12 @@ pub fn expr_find_inner<'src>(
             name,
             fields,
         }) => {
-            f(name.1, Id::TypeDef(*type_id));
+            f(name.1, Id::TypeDef(*type_id), false);
             fields
                 .iter()
                 .enumerate()
                 .for_each(|(index, FieldLiteral { name, value })| {
-                    (name.1, Id::Field(index));
+                    f(name.1, Id::Field(index), false);
                     expr_find(value, f);
                 });
         }
@@ -251,8 +258,8 @@ pub fn expr_find_inner<'src>(
             name,
             payload,
         }) => {
-            (enum_name.1, Id::TypeDef(*type_id));
-            (name.1, Id::Variant(*variant_index));
+            f(enum_name.1, Id::TypeDef(*type_id), false);
+            f(name.1, Id::Variant(*variant_index), false);
             payload.as_ref().inspect(|payload| expr_find(payload, f));
         }
         Expr::Index(Index { expr, index }) => {
@@ -266,14 +273,14 @@ pub fn expr_find_inner<'src>(
             member,
         }) => {
             expr_find(expr, f);
-            f(member.1, Id::Unresolved)
+            f(member.1, Id::Unresolved, false)
         }
         Expr::Range(Range { start, end }) => {
             expr_find(start, f);
             expr_find(end, f)
         }
-        Expr::Var(var_id) => f(span, Id::Var(*var_id)),
-        Expr::VarRef(var_id) => f(span, Id::Var(*var_id)),
+        Expr::Var(var_id) => f(span, Id::Var(*var_id), false),
+        Expr::VarRef(var_id) => f(span, Id::Var(*var_id), false),
         Expr::Int(_) | Expr::Bool(_) | Expr::Char(_) | Expr::String(_) => {}
         Expr::FormatString(FormatString {
             segments,
@@ -284,15 +291,15 @@ pub fn expr_find_inner<'src>(
     }
 }
 
-pub fn pattern_find<'src>(pattern: &Pattern<'src>, f: &mut impl FnMut(Span<'src>, Id)) {
+pub fn pattern_find<'src>(pattern: &Pattern<'src>, f: &mut impl FnMut(Span<'src>, Id, bool)) {
     match pattern {
         Pattern::Variant {
             variant_index: _,
             name,
             payload,
         } => {
-            (name.1, Id::Unresolved);
-            payload.inspect(|(_, payload)| f(payload.1, Id::Unresolved));
+            f(name.1, Id::Unresolved, false);
+            payload.inspect(|(_, payload)| f(payload.1, Id::Unresolved, true));
         }
     }
 }

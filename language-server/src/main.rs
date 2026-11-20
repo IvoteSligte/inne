@@ -413,8 +413,8 @@ impl LanguageServer for Backend {
             return Ok(Some(highlights));
         };
         let ids = search::extract_ids(&hir);
-        if let Some((_, id)) = ids.iter().find(|(id_span, _)| *id_span == span) {
-            for (other_span, other_id) in &ids {
+        if let Some((_, id, _)) = ids.iter().find(|(id_span, _, _)| *id_span == span) {
+            for (other_span, other_id, _) in &ids {
                 if *id == *other_id && other_span.filename == span.filename {
                     // NOTE: computing span from scratch every time is inefficient for large files,
                     //       but that is not relevant for the current state of the project
@@ -452,9 +452,9 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let ids = search::extract_ids(&hir);
-        let Some(&(_, id_under_cursor)) = ids
+        let Some(&(_, id_under_cursor, _)) = ids
             .iter()
-            .find(|(id_span, _)| id_span.filename == file.name && id_span.contains(offset))
+            .find(|(id_span, _, _)| id_span.filename == file.name && id_span.contains(offset))
         else {
             eprintln!("References: No searchable identifier found under cursor");
             return Ok(None);
@@ -465,8 +465,8 @@ impl LanguageServer for Backend {
             .map(|file| (file.name.as_str(), file))
             .collect::<HashMap<_, _>>();
         let mut references = Vec::new();
-        for (span, id) in ids {
-            if id == id_under_cursor {
+        for (span, id, is_def) in ids {
+            if id == id_under_cursor && (!is_def || include_declaration) {
                 let file = filename_to_file[span.filename];
                 references.push(Location {
                     uri: file.uri.clone(),
