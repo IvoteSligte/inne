@@ -78,6 +78,49 @@ pub struct Param<'src> {
     pub r#type: Spanned<'src, Type>,
 }
 
+const NOTHING_RETURN_TYPE: Spanned<Type> = (
+    Type::Nothing,
+    Span {
+        start: 0,
+        end: 0,
+        filename: "<filename>",
+        source: "<source>",
+    },
+);
+
+impl<'src> Func<'src> {
+    pub fn into_parts(&self) -> (FuncSignature<'_, 'src>, &Block<'src>) {
+        (
+            FuncSignature {
+                name: self.name,
+                generics: self.generics.as_slice(),
+                params: self.params.as_slice(),
+                return_type: self.return_type.as_ref().unwrap_or(&NOTHING_RETURN_TYPE),
+            },
+            &self.body,
+        )
+    }
+
+    pub fn into_parts_mut(&mut self) -> (FuncSignature<'_, 'src>, &mut Block<'src>) {
+        (
+            FuncSignature {
+                name: self.name,
+                generics: self.generics.as_slice(),
+                params: self.params.as_slice(),
+                return_type: self.return_type.as_ref().unwrap_or(&NOTHING_RETURN_TYPE),
+            },
+            &mut self.body,
+        )
+    }
+}
+
+pub struct FuncSignature<'hir, 'src> {
+    pub name: Name<'src>,
+    pub generics: &'hir [Name<'src>],
+    pub params: &'hir [Param<'src>],
+    pub return_type: &'hir Spanned<'src, Type>,
+}
+
 pub enum TypeDef<'src> {
     Struct(Struct<'src>),
     Enum(Enum<'src>),
@@ -416,6 +459,12 @@ impl<'a> VarList<'a> {
         debug_assert_ne!(id, VarId::UNKNOWN);
         &self.0[id.get()]
     }
+}
+
+struct Library<'src> {
+    name: String,
+    func_map: HashMap<String, (FuncId, Func<'src>)>,
+    type_map: HashMap<String, (TypeId, TypeDef<'src>)>,
 }
 
 struct Module<'ast, 'src> {

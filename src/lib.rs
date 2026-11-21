@@ -68,3 +68,19 @@ pub fn compile_and_run(root_path: Option<PathBuf>) -> bool {
     })()
     .is_some()
 }
+
+mod library {
+    use std::collections::HashMap;
+
+    use crate::{hir, mir};
+
+    pub struct Library<'hir, 'src> {
+        name: &'src str,
+        modules: Vec<LibraryModule<'hir, 'src>>,
+    }
+
+    pub struct LibraryModule<'hir, 'src> {
+        func_map: HashMap<&'src str, (hir::FuncSignature<'hir, 'src>, mir::Func<'src>)>,
+        type_map: HashMap<&'src str, hir::TypeDef<'src>>,
+    }
+}

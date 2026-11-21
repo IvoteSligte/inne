@@ -2,9 +2,9 @@ use std::{collections::HashMap, ops::Deref};
 
 pub use crate::hir::{
     Assign, AssignOp, Binary, BinaryOp, Block, Call, Choice, EmptyList, EmptyMap, Enum, Expr, For,
-    FormatString, Func, FuncId, GenericId, Hir, If, Index, List, Loop, Map, Match, MatchArm,
-    Member, Name, Pair, Param, Pattern, Range, SpannedExpr, Stmt, Struct, StructLiteral, Type,
-    TypeDef, TypeId, Unary, UnaryOp, VarDecl, VarId, Variant, VariantLiteral, While,
+    FormatString, Func, FuncId, FuncSignature, GenericId, Hir, If, Index, List, Loop, Map, Match,
+    MatchArm, Member, Name, Pair, Param, Pattern, Range, SpannedExpr, Stmt, Struct, StructLiteral,
+    Type, TypeDef, TypeId, Unary, UnaryOp, VarDecl, VarId, Variant, VariantLiteral, While,
 };
 
 use crate::{Error, Errors, Span, Spanned, hir, util::write_comma_separated};
@@ -24,23 +24,6 @@ pub struct VarInfo<'src> {
     pub name: Name<'src>,
     pub r#type: Type,
 }
-
-struct FuncSignature<'hir, 'src> {
-    name: Name<'src>,
-    generics: &'hir [Name<'src>],
-    params: &'hir [Param<'src>],
-    return_type: &'hir Spanned<'src, Type>,
-}
-
-const NOTHING_RETURN_TYPE: Spanned<Type> = (
-    Type::Nothing,
-    Span {
-        start: 0,
-        end: 0,
-        filename: "<filename>",
-        source: "<source>",
-    },
-);
 
 #[derive(Clone, Copy)]
 enum Ownership {
@@ -77,17 +60,7 @@ pub fn typed_hir_from_hir<'a>(mut hir: Hir<'a>) -> Result<TypedHir<'a>, Vec<Erro
         let (func_signatures, func_bodies) = hir
             .funcs
             .iter_mut()
-            .map(|func| {
-                (
-                    FuncSignature {
-                        name: func.name,
-                        generics: func.generics.as_slice(),
-                        params: func.params.as_slice(),
-                        return_type: func.return_type.as_ref().unwrap_or(&NOTHING_RETURN_TYPE),
-                    },
-                    &mut func.body,
-                )
-            })
+            .map(|func| func.into_parts_mut())
             .unzip::<_, _, Vec<_>, Vec<_>>();
         let mut checker = TypeChecker {
             errors: Errors::new(),
